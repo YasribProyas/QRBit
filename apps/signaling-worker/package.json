@@ -1,0 +1,21 @@
+{
+  "name": "@qrdrop/signaling-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist .wrangler"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260910.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0",
+    "wrangler": "^4.131.0"
+  }
+}

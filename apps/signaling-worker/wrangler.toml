@@ -1,0 +1,23 @@
+name = "qrdrop-signaling"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+SESSION_TTL_SECONDS = "300"
+TURN_TTL_SECONDS = "3600"
+
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SessionDurableObject"]
+
+# Rate limiting store (PLAN.md §13)
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Secrets (never commit):
+#   wrangler secret put TURN_SECRET

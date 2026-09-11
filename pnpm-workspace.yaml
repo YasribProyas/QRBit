@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+
+# Native postinstall scripts we explicitly trust.
+#   esbuild -> Vite's transform/bundle engine
+#   workerd -> Cloudflare's local runtime, required by `wrangler dev`
+allowBuilds:
+  esbuild: true
+  workerd: true
