@@ -72,6 +72,62 @@ function isNonNullObject(value: unknown): value is object {
 }
 
 /**
+ * Whether a signaling message is the worker's "a peer has joined" cue.
+ *
+ * PLAN.md §13 defines no explicit peer-joined frame. `pubkey` is that cue: the
+ * Durable Object sends it to an arriving participant whose peer has already
+ * attached, and it is the only frame that means "the other role is now here". In
+ * Phase 2 it will carry the peer's real P-256 public key, so reading it as the join
+ * signal stays semantically correct.
+ */
+export function isPeerJoinedCue(message: SignalingMessage): boolean {
+  return message.type === 'pubkey'
+}
+
+/**
+ * Whether the host may open the SDP exchange in response to a message.
+ *
+ * This is load-bearing. The Durable Object relays SDP only while both roles are
+ * connected and rejects an offer sent before the peer has joined with
+ * `peer-not-connected`, which ends the session — so the host must not offer until the
+ * `pubkey` cue arrives. Guests never offer, and `offerSent` is the once-only guard:
+ * the DO can deliver `pubkey` twice (a direct send plus a flushed buffered copy) and a
+ * duplicate offer would be relayed after pairing and rejected as `session-done`.
+ */
+export function shouldHostSendOffer(
+  message: SignalingMessage,
+  role: SessionRole | null,
+  offerSent: boolean,
+): boolean {
+  return role === 'host' && !offerSent && isPeerJoinedCue(message)
+}
+
+/**
+ * Whether a peer-joined cue means the other device *re-joined* a code this host
+ * has already offered into.
+ *
+ * Pre-pairing, the Durable Object releases a disconnected role's slot but keeps the
+ * code joinable until its TTL (ORCHESTRATION.md D1). A guest that drops out and taps
+ * "Try again" therefore re-joins the same code, and the DO sends this host a second
+ * cue — but `offerSent` is latched, so no second offer can ever be sent and the
+ * handshake can never complete. PLAN.md §19 decision 10 makes sessions single-use and
+ * rules out reconnect logic, so the only remaining option is to fail fast (D4)
+ * instead of leaving both UIs on "Connecting…" until the 300s TTL closes the sockets.
+ *
+ * Known trade-off: the DO can also hand the side that joined second a duplicate copy of
+ * one join cue, so a host in that position sees a second cue here too. Phase 1 cannot
+ * tell that copy apart from a real re-join — both carry an empty `publicKey` — so D4's
+ * policy applies to both: end explicitly rather than resume.
+ */
+export function isPeerRejoinedCue(
+  message: SignalingMessage,
+  role: SessionRole | null,
+  offerSent: boolean,
+): boolean {
+  return role === 'host' && offerSent && isPeerJoinedCue(message)
+}
+
+/**
  * Validates an unknown value as a `SignalingMessage`.
  *
  * Frames arrive from the network, so the client treats every inbound payload as

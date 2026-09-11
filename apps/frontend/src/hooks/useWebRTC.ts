@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PeerConnection } from '../lib/webrtc'
 import type { HelloMessage, PeerConnectionOptions } from '../lib/webrtc'
+import { useSessionStore } from '../store/sessionStore'
 
 export interface UseWebRTCHandlers {
   /** A local ICE candidate to relay to the peer over signaling. */
@@ -35,6 +36,12 @@ export interface UseWebRTCResult {
 
 export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
   const [connectionState, setConnectionState] = useState<RTCPeerConnectionState>('new')
+
+  // PLAN.md §9 puts `connectionState` on the session store, and Phase 3 reads it from
+  // there, so every peer state must be recorded in the store as well as in the local
+  // copy the hook returns. Without this the store's value stays at 'new' forever.
+  // The action reference is stable, so depending on it cannot rebuild the peer.
+  const setStoreConnectionState = useSessionStore((state) => state.setConnectionState)
 
   const peerRef = useRef<PeerConnection | null>(null)
   const unsubscribersRef = useRef<readonly (() => void)[]>([])
@@ -73,9 +80,10 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
       }),
       peer.onStateChange((state) => {
         setConnectionState(state)
+        setStoreConnectionState(state)
       }),
     ]
-  }, [])
+  }, [setStoreConnectionState])
 
   const close = useCallback((): void => {
     for (const unsubscribe of unsubscribersRef.current) {
@@ -88,7 +96,8 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
     peer?.close()
 
     setConnectionState('closed')
-  }, [])
+    setStoreConnectionState('closed')
+  }, [setStoreConnectionState])
 
   const initAsHost = useCallback(async (): Promise<RTCSessionDescriptionInit> => {
     return await requirePeer().initAsHost()

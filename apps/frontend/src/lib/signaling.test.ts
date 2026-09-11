@@ -6,7 +6,13 @@
  * seam exists; production callers never pass it.
  */
 
-import { SignalingClient, isSignalingMessage } from './signaling'
+import {
+  SignalingClient,
+  isPeerJoinedCue,
+  isPeerRejoinedCue,
+  isSignalingMessage,
+  shouldHostSendOffer,
+} from './signaling'
 import type { SignalingMessage, SessionRole } from './signaling'
 
 class FakeWebSocket {
@@ -340,5 +346,81 @@ describe('isSignalingMessage', () => {
     expect(isSignalingMessage({ type: 'ice', candidate: null })).toBe(false)
     expect(isSignalingMessage({ type: 'error' })).toBe(false)
     expect(isSignalingMessage({ type: 'pubkey', publicKey: null })).toBe(false)
+  })
+})
+
+/**
+ * The host's "peer joined" cue is implicit in the wire protocol: PLAN.md §13 has no
+ * explicit peer-joined frame, so `pubkey` doubles as it. These tests pin that
+ * contract, because an offer sent before the cue is rejected by the Durable Object as
+ * `peer-not-connected` and ends the session.
+ */
+describe('peer-joined cue', () => {
+  const ALL_MESSAGE_TYPES: SignalingMessage[] = [
+    { type: 'join', role: 'host', publicKey: 'k' },
+    { type: 'pubkey', publicKey: 'k' },
+    { type: 'offer', sdp: 'v=0' },
+    { type: 'answer', sdp: 'v=0' },
+    { type: 'ice', candidate: { candidate: 'candidate:1' } },
+    { type: 'paired' },
+    { type: 'error', message: 'nope' },
+  ]
+
+  it('treats pubkey as the only peer-joined cue', () => {
+    for (const message of ALL_MESSAGE_TYPES) {
+      expect(isPeerJoinedCue(message)).toBe(message.type === 'pubkey')
+    }
+  })
+
+  it('sends the host offer once the pubkey cue arrives', () => {
+    expect(shouldHostSendOffer({ type: 'pubkey', publicKey: '' }, 'host', false)).toBe(true)
+  })
+
+  it('never sends the host offer before the cue', () => {
+    for (const message of ALL_MESSAGE_TYPES) {
+      if (message.type === 'pubkey') continue
+      expect(shouldHostSendOffer(message, 'host', false)).toBe(false)
+    }
+  })
+
+  it('never sends an offer from the guest role, even on the cue', () => {
+    expect(shouldHostSendOffer({ type: 'pubkey', publicKey: '' }, 'guest', false)).toBe(false)
+    expect(shouldHostSendOffer({ type: 'pubkey', publicKey: '' }, null, false)).toBe(false)
+  })
+
+  it('sends at most one offer per host attempt', () => {
+    expect(shouldHostSendOffer({ type: 'pubkey', publicKey: '' }, 'host', true)).toBe(false)
+  })
+
+  /**
+   * ORCHESTRATION.md D4. A pre-pairing disconnect releases the role's slot but leaves
+   * the code joinable (D1), so a guest that drops out and re-joins the same code makes
+   * the Durable Object send the host a second cue. The host has already latched its one
+   * offer, so the session ends rather than hanging on "Connecting…" until the TTL.
+   */
+  describe('isPeerRejoinedCue', () => {
+    const CUE: SignalingMessage = { type: 'pubkey', publicKey: '' }
+
+    it('is true only when a host that has already offered sees the cue', () => {
+      expect(isPeerRejoinedCue(CUE, 'host', true)).toBe(true)
+      expect(isPeerRejoinedCue(CUE, 'host', false)).toBe(false)
+      expect(isPeerRejoinedCue(CUE, 'guest', true)).toBe(false)
+      expect(isPeerRejoinedCue(CUE, null, true)).toBe(false)
+    })
+
+    it('is false for every message that is not the peer-joined cue', () => {
+      for (const message of ALL_MESSAGE_TYPES) {
+        if (message.type === 'pubkey') continue
+        expect(isPeerRejoinedCue(message, 'host', true)).toBe(false)
+      }
+    })
+
+    it('leaves the first cue to shouldHostSendOffer', () => {
+      // The two predicates are exact complements on the cue: only the latch separates
+      // "a peer joined" from "the peer re-joined", which is why the first cue still
+      // produces the offer instead of ending the session.
+      expect(isPeerRejoinedCue(CUE, 'host', false)).toBe(false)
+      expect(shouldHostSendOffer(CUE, 'host', false)).toBe(true)
+    })
   })
 })

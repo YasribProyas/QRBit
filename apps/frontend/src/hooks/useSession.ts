@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { buildNewSessionUrl, SIGNALING_WS_URL } from '../config'
-import { SignalingClient } from '../lib/signaling'
+import { SignalingClient, isPeerRejoinedCue, shouldHostSendOffer } from '../lib/signaling'
 import type { SessionRole, SignalingMessage } from '../lib/signaling'
 import type { HelloMessage, PeerConnectionOptions } from '../lib/webrtc'
 import { useSessionStore } from '../store/sessionStore'
@@ -90,6 +90,17 @@ export function describeError(error: unknown): string {
   }
   return 'Something went wrong starting the session'
 }
+
+/**
+ * The user-facing reason a session ends when the other device re-joins the code
+ * after the host has already offered (ORCHESTRATION.md D4).
+ *
+ * A replaced peer cannot be served: PLAN.md §19 decision 10 makes sessions
+ * single-use and `shouldHostSendOffer` latches at one offer per host attempt, so
+ * there is no handshake left to resume. Reporting this explicitly is better UX than
+ * the silent spinner the Durable Object's 300s TTL would otherwise produce.
+ */
+export const PEER_REJOINED_REASON = 'The other device reconnected — start a new session'
 
 /**
  * Maps session state onto the status bar required by PLAN.md §8 Phase 1:
@@ -214,19 +225,17 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     /*
      * Sends the host offer exactly once, and only after the peer has attached.
      *
-     * The Durable Object relays SDP only while both roles are connected: it enters
-     * EXCHANGING when the second role joins (PLAN.md §13) and rejects an offer
-     * relayed before that with a `peer-not-connected` error, which would end the
-     * session. `pubkey` is the worker's signal that a peer has joined, so it is the
-     * cue to open the SDP exchange.
-     *
-     * The `offerSent` guard is load-bearing: the worker can deliver `pubkey` more
-     * than once (a direct send to the joiner plus a flushed buffered message), and a
-     * duplicate offer would be relayed after pairing and rejected as `session-done`.
+     * The only cue that a peer has joined is the `pubkey` message: PLAN.md §13 has no
+     * explicit peer-joined frame. Should the host offer before that cue, the Durable
+     * Object rejects the relay with `peer-not-connected` and the session ends, so the
+     * cue check in `shouldHostSendOffer` is load-bearing. The `offerSent` guard is
+     * equally so: the worker can deliver `pubkey` more than once (a direct send to the
+     * joiner plus a flushed buffered message), and a duplicate offer would be relayed
+     * after pairing and rejected as `session-done`.
      */
     let offerSent = false
-    const sendHostOffer = async (client: SignalingClient): Promise<void> => {
-      if (offerSent) return
+    const sendHostOffer = async (client: SignalingClient, cue: SignalingMessage): Promise<void> => {
+      if (!shouldHostSendOffer(cue, roleRef.current, offerSent)) return
       offerSent = true
 
       const offer = await initAsHost()
@@ -268,11 +277,19 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
             return
           }
           case 'pubkey': {
-            // PHASE 2 SEAM: this carries the peer's P-256 public key, used for ECDH
-            // key agreement. It also announces that a peer has joined, which is when
-            // the host may open the SDP exchange (see sendHostOffer).
-            if (roleRef.current !== 'host') return
-            await sendHostOffer(client)
+            // 'pubkey' means 'peer joined' — it is the cue that this host may open the
+            // SDP exchange (see sendHostOffer and shouldHostSendOffer).
+            // PHASE 2 SEAM: this will also carry the peer's P-256 public key, used for
+            // ECDH key agreement, which is when the join cue becomes a real key.
+            if (isPeerRejoinedCue(message, roleRef.current, offerSent)) {
+              // The other device re-joined a code this host has already offered into,
+              // so there is no second offer to send and no handshake to resume. Fail
+              // fast rather than sitting on the cue until the TTL closes the sockets
+              // (ORCHESTRATION.md D4, PLAN.md §19 decision 10).
+              endSession(PEER_REJOINED_REASON)
+              return
+            }
+            await sendHostOffer(client, message)
             return
           }
           case 'error': {

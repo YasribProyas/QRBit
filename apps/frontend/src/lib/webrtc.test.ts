@@ -436,6 +436,24 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     expect(opened).toEqual(['open'])
   })
 
+  it('keeps a throwing replay subscriber from escaping as an uncaught error', async () => {
+    // Every live emit path routes through invokeSafely. If the pre-subscription
+    // replay does not, the throw surfaces as an uncaught microtask exception, which
+    // vitest reports as an unhandled error and fails this file.
+    const { connection, channel } = await hostWithChannel()
+    channel.open()
+
+    let replayed = false
+    connection.onDataChannelOpen(() => {
+      replayed = true
+      throw new Error('replay subscriber blew up')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // The replay really ran, so this cannot pass merely because nothing happened.
+    expect(replayed).toBe(true)
+  })
+
   it('stops delivering onDataChannelOpen after unsubscribe', async () => {
     const { connection, channel } = await hostWithChannel()
     const opened: string[] = []

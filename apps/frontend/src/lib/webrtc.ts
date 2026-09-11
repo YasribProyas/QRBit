@@ -231,7 +231,10 @@ export class PeerConnection {
     if (this.channelOpen) {
       let cancelled = false
       queueMicrotask(() => {
-        if (!cancelled && !this.closed) handler()
+        if (cancelled || this.closed) return
+        // Same guard as every live emit path: a throwing subscriber must not
+        // surface as an uncaught microtask exception.
+        this.invokeSafely(handler)
       })
       return () => {
         cancelled = true

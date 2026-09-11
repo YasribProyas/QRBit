@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   applyJoin,
+  applyRelease,
   applyRelay,
   createInitialState,
   isExpired,
+  shouldDestroyAfterSocketClose,
   type SessionState,
 } from './sessionState'
 import { parseSignalingMessage, type SessionRole, type SignalingMessage } from './types'
@@ -161,6 +163,122 @@ describe('applyJoin', () => {
   })
 })
 
+describe('applyRelease', () => {
+  it('frees the role slot when a participant disconnects before pairing', () => {
+    const hostOnly = joinOrThrow(createInitialState(CREATED_AT), 'host', HOST_KEY)
+    const released = applyRelease(hostOnly, 'host')
+
+    expect(released.hostJoined).toBe(false)
+    expect(released.hostPublicKey).toBeNull()
+    expect(released.phase).toBe('CREATED')
+  })
+
+  it('keeps the other participant attached when one side disconnects', () => {
+    const released = applyRelease(stateWithBoth(), 'host')
+
+    expect(released.hostJoined).toBe(false)
+    expect(released.guestJoined).toBe(true)
+    expect(released.guestPublicKey).toBe(GUEST_KEY)
+    expect(released.phase).toBe('GUEST_CONNECTED')
+  })
+
+  it('lets the released role join again before the code expires (PLAN.md §17)', () => {
+    const hostOnly = joinOrThrow(createInitialState(CREATED_AT), 'host', HOST_KEY)
+    const released = applyRelease(hostOnly, 'host')
+
+    const result = applyJoin(released, 'host', 'second-host-key', NOW, TTL_SECONDS)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.hostPublicKey).toBe('second-host-key')
+    expect(result.state.phase).toBe('HOST_CONNECTED')
+  })
+
+  it('reaches EXCHANGING when the released role is taken while the peer stays', () => {
+    const released = applyRelease(stateWithBoth(), 'guest')
+
+    const result = applyJoin(released, 'guest', 'second-guest-key', NOW, TTL_SECONDS)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.phase).toBe('EXCHANGING')
+  })
+
+  it('still refuses a second concurrent host after a release', () => {
+    const released = applyRelease(joinOrThrow(createInitialState(CREATED_AT), 'host', HOST_KEY), 'host')
+    const rejoin = applyJoin(released, 'host', 'second-host-key', NOW, TTL_SECONDS)
+    if (!rejoin.ok) throw new Error(`expected re-join to succeed, got ${rejoin.reason}`)
+
+    const imposter = applyJoin(rejoin.state, 'host', 'imposter', NOW, TTL_SECONDS)
+
+    expect(imposter.ok).toBe(false)
+    if (imposter.ok) return
+    expect(imposter.reason).toBe('role-taken')
+  })
+
+  it('does not reissue a slot once pairing is complete', () => {
+    const paired = relayOrThrow(relayOrThrow(stateWithBoth(), 'host', OFFER).state, 'guest', ANSWER)
+
+    const released = applyRelease(paired.state, 'host')
+
+    expect(released).toEqual(paired.state)
+    expect(released.phase).toBe('DONE')
+  })
+
+  it('restarts the SDP handshake so a stale answer cannot declare pairing', () => {
+    const afterOffer = relayOrThrow(stateWithBoth(), 'host', OFFER)
+    const released = applyRelease(afterOffer.state, 'host')
+
+    expect(released.offerRelayed).toBe(false)
+    expect(released.answerRelayed).toBe(false)
+
+    // The survivor's answer is refused against the missing peer, so pairing cannot
+    // complete until the replacement peer has offered.
+    const staleAnswer = applyRelay(released, 'guest', ANSWER, NOW, TTL_SECONDS)
+    expect(staleAnswer.ok).toBe(false)
+    if (staleAnswer.ok) return
+    expect(staleAnswer.reason).toBe('peer-not-connected')
+  })
+
+  it('does not mutate the state it was given', () => {
+    const original = stateWithBoth()
+    const snapshot = structuredClone(original)
+
+    applyRelease(original, 'host')
+
+    expect(original).toEqual(snapshot)
+  })
+})
+
+describe('shouldDestroyAfterSocketClose', () => {
+  it('does not destroy an unpaired session when its last socket closes', () => {
+    expect(shouldDestroyAfterSocketClose(createInitialState(CREATED_AT), 0)).toBe(false)
+    expect(shouldDestroyAfterSocketClose(joinOrThrow(createInitialState(CREATED_AT), 'host', HOST_KEY), 0)).toBe(
+      false,
+    )
+    expect(shouldDestroyAfterSocketClose(stateWithBoth(), 0)).toBe(false)
+  })
+
+  it('destroys a paired session once both sockets are closed', () => {
+    const paired = relayOrThrow(relayOrThrow(stateWithBoth(), 'host', OFFER).state, 'guest', ANSWER)
+
+    expect(shouldDestroyAfterSocketClose(paired.state, 1)).toBe(false)
+    expect(shouldDestroyAfterSocketClose(paired.state, 0)).toBe(true)
+  })
+
+  it('leaves a never-paired session to the TTL alarm, not a socket close', () => {
+    const hostOnly = joinOrThrow(createInitialState(CREATED_AT), 'host', HOST_KEY)
+
+    // The pre-pairing close releases the slot and keeps the DO alive...
+    const released = applyRelease(hostOnly, 'host')
+    expect(shouldDestroyAfterSocketClose(released, 0)).toBe(false)
+
+    // ...and the 300s window from creation is what ends it (PLAN.md §17).
+    expect(isExpired(released, CREATED_AT + TTL_SECONDS * 1000 - 1, TTL_SECONDS)).toBe(false)
+    expect(isExpired(released, CREATED_AT + TTL_SECONDS * 1000, TTL_SECONDS)).toBe(true)
+  })
+})
+
 describe('applyRelay', () => {
   it('rejects a sender that never joined', () => {
     const result = applyRelay(createInitialState(CREATED_AT), 'host', OFFER, NOW, TTL_SECONDS)
@@ -201,12 +319,53 @@ describe('applyRelay', () => {
     expect(afterAnswer.state.phase).toBe('DONE')
   })
 
-  it('completes pairing regardless of which side offers', () => {
-    const afterOffer = relayOrThrow(stateWithBoth(), 'guest', OFFER)
-    const afterAnswer = relayOrThrow(afterOffer.state, 'host', ANSWER)
+  it('completes pairing on the legitimate host-offer/guest-answer sequence', () => {
+    const afterOffer = relayOrThrow(stateWithBoth(), 'host', OFFER)
+    expect(afterOffer.deliver).toBe(true)
+    expect(afterOffer.paired).toBe(false)
+
+    const afterAnswer = relayOrThrow(afterOffer.state, 'guest', ANSWER)
 
     expect(afterAnswer.paired).toBe(true)
     expect(afterAnswer.state.phase).toBe('DONE')
+  })
+
+  it('rejects an offer that did not come from the host', () => {
+    const result = applyRelay(stateWithBoth(), 'guest', OFFER, NOW, TTL_SECONDS)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('sender-role-mismatch')
+  })
+
+  it('rejects an answer that did not come from the guest', () => {
+    const result = applyRelay(stateWithBoth(), 'host', ANSWER, NOW, TTL_SECONDS)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('sender-role-mismatch')
+  })
+
+  it('refuses a single participant relaying both SDP legs, in either order', () => {
+    // In Phase 2 `paired` gates the safety-phrase overlay, so a peer must not be able
+    // to complete the exchange on its own.
+    const guestAnswer = relayOrThrow(stateWithBoth(), 'guest', ANSWER)
+    const guestOffer = applyRelay(guestAnswer.state, 'guest', OFFER, NOW, TTL_SECONDS)
+    expect(guestOffer.ok).toBe(false)
+    if (guestOffer.ok) return
+    expect(guestOffer.reason).toBe('sender-role-mismatch')
+    expect(guestAnswer.state.phase).toBe('EXCHANGING')
+
+    const hostOffer = relayOrThrow(stateWithBoth(), 'host', OFFER)
+    const hostAnswer = applyRelay(hostOffer.state, 'host', ANSWER, NOW, TTL_SECONDS)
+    expect(hostAnswer.ok).toBe(false)
+    if (hostAnswer.ok) return
+    expect(hostAnswer.reason).toBe('sender-role-mismatch')
+
+    // Still EXCHANGING and half-relayed: the spoofed leg never advanced the session.
+    expect(hostOffer.state.phase).toBe('EXCHANGING')
+    expect(hostOffer.state.offerRelayed).toBe(true)
+    expect(hostOffer.state.answerRelayed).toBe(false)
   })
 
   it('discards the public keys on pairing (PLAN.md §17 destroys all state)', () => {

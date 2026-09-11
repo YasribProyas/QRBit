@@ -3,8 +3,10 @@ import { DurableObject } from 'cloudflare:workers'
 import { isValidSessionCode } from './codes'
 import {
   applyJoin,
+  applyRelease,
   applyRelay,
   createInitialState,
+  shouldDestroyAfterSocketClose,
   type SessionState,
 } from './sessionState'
 import {
@@ -301,13 +303,27 @@ export class SessionDurableObject extends DurableObject<Env> {
       this.roles.delete(socket)
       if (this.sockets.get(role) === socket) {
         this.sockets.delete(role)
+        this.releaseRole(role)
       }
     }
     this.unjoined.delete(socket)
 
-    if (this.sockets.size === 0 && this.unjoined.size === 0) {
+    // A close before pairing leaves the session alive and joinable: PLAN.md §17 makes
+    // the TTL the expiry mechanism for a code, not the first socket close. Only a
+    // completed pairing ends the DO from here; the TTL alarm handles the rest.
+    if (shouldDestroyAfterSocketClose(this.state, this.sockets.size + this.unjoined.size)) {
       void this.destroy()
     }
+  }
+
+  /**
+   * Frees a role whose socket closed before pairing, so a fresh connection can take
+   * the slot again. Messages queued for the departed role are dropped with it: they
+   * were addressed to a peer that no longer exists.
+   */
+  private releaseRole(role: SessionRole): void {
+    this.state = applyRelease(this.state, role)
+    this.buffered.delete(role)
   }
 
   /** Releases every socket and every stored byte. Idempotent. */

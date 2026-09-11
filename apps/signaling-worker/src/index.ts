@@ -111,6 +111,14 @@ async function openSignalingSocket(
  *
  * The expirationTtl is reapplied on every write because KV drops a key's expiry when
  * it is overwritten without one.
+ *
+ * A KV failure degrades to "rate limiting disabled" (false) rather than propagating.
+ * That is a DELIBERATE fail-open choice for availability: the only cost is a missing
+ * limit, while a thrown KV error would escape the fetch handler and 500 every
+ * /session/:code/ws upgrade — including the ones the rate limiter is meant to protect.
+ *
+ * This is live-reachable: wrangler.toml currently ships a placeholder namespace id,
+ * so the binding can be present but unable to serve a request.
  */
 async function isRateLimited(request: Request, env: Env): Promise<boolean> {
   const kv = rateLimitBinding(env)
@@ -119,14 +127,20 @@ async function isRateLimited(request: Request, env: Env): Promise<boolean> {
   const clientIp = request.headers.get('CF-Connecting-IP') ?? 'unknown'
   const key = `join:${clientIp}`
 
-  const stored = await kv.get(key)
-  const previous = stored === null ? 0 : Number(stored)
-  const attempts = (Number.isFinite(previous) ? previous : 0) + 1
+  try {
+    const stored = await kv.get(key)
+    const previous = stored === null ? 0 : Number(stored)
+    const attempts = (Number.isFinite(previous) ? previous : 0) + 1
 
-  if (attempts > RATE_LIMIT_MAX_JOIN_ATTEMPTS) return true
+    if (attempts > RATE_LIMIT_MAX_JOIN_ATTEMPTS) return true
 
-  await kv.put(key, String(attempts), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS })
-  return false
+    await kv.put(key, String(attempts), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS })
+    return false
+  } catch {
+    // Fail open, per the policy documented above. Nothing about the failure is
+    // logged: PLAN.md §17 keeps the worker's logs free of request detail.
+    return false
+  }
 }
 
 /**

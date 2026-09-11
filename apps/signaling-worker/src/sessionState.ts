@@ -84,11 +84,77 @@ export function applyJoin(
   return { ok: true, state: next }
 }
 
+/**
+ * Releases the slot held by a participant whose socket closed before pairing.
+ *
+ * The session code stays usable, so a fresh connection may take the released role
+ * again. PLAN.md §17 makes the 5-minute TTL the expiry mechanism for a code, not the
+ * first socket close, so the server keeps an unpaired code joinable instead of
+ * burning it.
+ *
+ * That is a server-side duty only — it does NOT mean the client resumes. PLAN.md §19
+ * decision 10 makes sessions single-use, and per ORCHESTRATION.md D4 the host ends the
+ * session when a peer re-joins a code it has already offered into. A re-join therefore
+ * reaches this server and is failed fast by the peer's client; the claim that releasing
+ * the slot "lets a mobile network blip recover in production" was only half true.
+ *
+ * The earlier React StrictMode justification is also obsolete: useSession defers
+ * connect with setTimeout(…, 0) plus a `cancelled` flag, so the throwaway StrictMode
+ * mount never opens a socket at all.
+ *
+ * Both relay flags reset because the partial SDP handshake belonged to the departed
+ * peer: keeping `offerRelayed` set could let a stale `answer` from the surviving peer
+ * declare pairing before its replacement had ever sent an offer.
+ */
+export function applyRelease(state: SessionState, role: SessionRole): SessionState {
+  // Pairing is terminal: once both sockets have exchanged SDP the session is over and
+  // a released slot must never be reissued (PLAN.md §17, §19 decision 10).
+  if (state.phase === 'DONE') return state
+
+  const hostJoined = role === 'host' ? false : state.hostJoined
+  const guestJoined = role === 'guest' ? false : state.guestJoined
+
+  const next: SessionState = {
+    ...state,
+    hostJoined,
+    guestJoined,
+    hostPublicKey: role === 'host' ? null : state.hostPublicKey,
+    guestPublicKey: role === 'guest' ? null : state.guestPublicKey,
+    offerRelayed: false,
+    answerRelayed: false,
+  }
+
+  if (hostJoined && guestJoined) {
+    next.phase = 'EXCHANGING'
+  } else if (hostJoined) {
+    next.phase = 'HOST_CONNECTED'
+  } else if (guestJoined) {
+    next.phase = 'GUEST_CONNECTED'
+  } else {
+    next.phase = 'CREATED'
+  }
+
+  return next
+}
+
+/**
+ * Whether a socket close should tear the Durable Object down.
+ *
+ * A close before pairing only releases that role's slot and leaves the code
+ * joinable; the DO is destroyed here only once pairing has completed (phase DONE) and
+ * every socket is gone. An unpaired DO is instead destroyed by its TTL alarm, which
+ * `restore()` sets to createdAt + SESSION_TTL_SECONDS (PLAN.md §17).
+ */
+export function shouldDestroyAfterSocketClose(state: SessionState, openSockets: number): boolean {
+  return state.phase === 'DONE' && openSockets === 0
+}
+
 export type RelayRejectionReason =
   | 'expired'
   | 'session-done'
   | 'sender-not-joined'
   | 'peer-not-connected'
+  | 'sender-role-mismatch'
 
 export type RelayResult =
   | {
@@ -104,10 +170,16 @@ export type RelayResult =
 /**
  * Applies a relayed message from one participant to the other.
  *
- * Pairing is declared complete on the SDP round trip — once one side has relayed an
- * `offer` and the other an `answer`. A pubkey-only exchange deliberately does NOT
+ * Pairing is declared complete on the SDP round trip — once the host has relayed an
+ * `offer` and the guest an `answer`. A pubkey-only exchange deliberately does NOT
  * complete pairing, because public keys are exchanged before the SDP handshake and
  * the peers are not yet able to connect.
+ *
+ * The SDP legs are role-checked: an `offer` may only come from the host and an
+ * `answer` only from the guest. Otherwise one joined participant could relay both
+ * legs and declare its own pairing, which is a self-inflicted DoS in Phase 1 and —
+ * because Phase 2 gates the safety-phrase overlay on `paired` — a security hole once
+ * keys are involved.
  */
 export function applyRelay(
   state: SessionState,
@@ -131,6 +203,16 @@ export function applyRelay(
 
   const receiverJoined = sender === 'host' ? state.guestJoined : state.hostJoined
   if (!receiverJoined) return { ok: false, reason: 'peer-not-connected' }
+
+  // Role/type coherence. Only the host may offer and only the guest may answer, so a
+  // single participant cannot relay both legs to drive this session to DONE. Its own
+  // reason: 'sender-not-joined' would misreport a sender that is in fact joined.
+  if (message.type === 'offer' && sender !== 'host') {
+    return { ok: false, reason: 'sender-role-mismatch' }
+  }
+  if (message.type === 'answer' && sender !== 'guest') {
+    return { ok: false, reason: 'sender-role-mismatch' }
+  }
 
   const next: SessionState = { ...state }
   if (message.type === 'offer') next.offerRelayed = true
