@@ -30,6 +30,26 @@ Items the agent cannot complete autonomously. Per AGENTS.md, work continues past
 
 ## Deferred design questions
 
+- [ ] **No server-side registry of issued session codes** (Phase 8). `createSession`
+      writes no record; identity is pure `idFromName(code)`. So PLAN.md §17's
+      "expired codes return 404" only holds while the DO instance is alive — after
+      eviction, `restore()` finds no `createdAt`, stamps a fresh one plus a fresh
+      300s alarm, and the same code becomes joinable again. Not exploitable today
+      (a client only joins the code it just minted, so there is no victim), but a
+      paired/burned code is not *durably* burned. Needs a KV/D1 "issued" marker
+      checked in `/session/:code/ws`. Belongs with Phase 8 server-side validation.
+- [ ] **No DO-level integration test** (would need `@cloudflare/vitest-pool-workers`).
+      `session.test.ts` covers the extracted pure state machine only, because
+      `session.ts` imports `cloudflare:workers` which does not resolve under plain
+      vitest. So `openSocket`'s 404/409, `handleSocketClosed` → `releaseRole`,
+      `restore()`/`setAlarm` and `destroy()` — the exact code implementing D1 —
+      are verified by source review and a live `workerd` run, not by the suite.
+      153 green tests do not prove D1 end-to-end. Adding the pool-workers harness is
+      a parent-owned config + dependency change; worth doing before Phase 7 hardening.
+- [ ] **`/session/new` is unmetered.** The 10/min limiter guards only joins, so DO
+      allocation (one storage write + one alarm each) is unbounded per IP. §13 only
+      specified join limiting and Phase 7 covers broader rate limiting.
+
 - [ ] `react-router-dom` was added (not in PLAN.md §4 tech table) because
       PLAN.md §8 derives session role from URL params. Confirm acceptable.
 - [ ] PLAN.md §12 ICE config lists `turns:turn.cloudflare.com:5349` with a

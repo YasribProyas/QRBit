@@ -73,6 +73,87 @@ phases (AGENTS.md) mean wide fan-out is only useful *within* a phase.
   for a live check in the report instead. One lane burned a 180s timeout and spawned
   two orphaned servers learning this.
 
+## Child-context policy — the most expensive lesson tonight
+
+**Always pass `context: "fresh"` to every lane.** The builtin `worker` agent
+defaults to `context: fork`, which injects the *entire parent transcript* into
+the child.
+
+What that caused: the Phase 1 integration lane inherited my own narration
+(including the literal sentence "Waiting on integration → fresh-context review…
+I'll independently run `pnpm -r typecheck`"), then **continued writing as me**
+instead of executing. It ran zero build commands, produced no acceptance report,
+and failed with "Structured acceptance report not found" — after 26s, having done
+nothing but kill stray processes and edit this file.
+
+Why the three writer lanes survived fork anyway: their prompts were long and
+highly specific, which dominated the inherited context. The integration prompt
+was *meta* ("three lanes just wrote…"), which invited role confusion. So the
+failure is prompt-shape-dependent and will recur unpredictably. Don't gamble on it.
+
+Corollaries:
+- Fresh children lose nothing here: every prompt tells them to read AGENTS.md,
+  PLAN.md and this file from disk. That is better grounding than my transcript.
+- **Do not put an `acceptance` gate on a lane whose work the parent verifies
+  anyway.** I re-run `pnpm -r typecheck && pnpm -r test && pnpm -r build` myself
+  after every phase; that is stronger evidence than a self-attested JSON fence,
+  and the gate adds a way to fail that has nothing to do with code quality.
+- `runs.run()` **REJECTS** (throws) on acceptance failure and on model exclusion;
+  it does not resolve with `ok:false`. A fallback chain written as `.then()` only
+  will never reach its fallback and will kill the whole workflow. Always handle
+  both fulfillment and rejection (see `runOpts` in `.pi/workflows/phase1-finish.js`).
+
+## Orchestrator decisions log
+
+### D1 — session code lifecycle on pre-pairing disconnect (Phase 1)
+A socket closing **before** pairing must release that role's slot and keep the
+Durable Object alive and joinable. It must NOT set `phase='DONE'` or `destroy()`.
+The DO is destroyed only when (a) pairing completed and both sockets closed, or
+(b) the 300s TTL alarm fires.
+
+Reason: PLAN.md §17 defines expiry as "5 min from creation", so the TTL is the
+expiry mechanism, not a disconnect. §19 decision 10 ("no reconnect") governs the
+*client*, not the server's duty to keep an unused code joinable.
+
+**Correction after review (see D4).** The original StrictMode justification is
+*obsolete*: Lane C defers connect via `setTimeout(…, 0)` + a `cancelled` flag
+(`useSession.ts:369`), so the throwaway StrictMode mount never opens a socket at
+all. D1 therefore rests only on §17's TTL semantics — which is still correct, but
+the claim that slot release "lets a mobile blip recover" was **half-true**: the
+server kept the code joinable while the client could not complete a re-join,
+producing a 5-minute hang. D1 stays as written (server-side); D4 fixes the client.
+Do not re-justify D1 with StrictMode.
+
+### D4 — no client-side re-offer; fail fast (Phase 1)
+The host latches `offerSent` for the lifetime of its effect. Under D1 a guest that
+disconnects and taps "Try again" re-joins the same code; the DO accepts and re-sends
+the `pubkey` cue, but the host refuses to re-offer, so guest #2 never receives an
+offer. Both UIs then sit on "Connecting…" until the 300s TTL alarm closes them.
+
+**Decision: fail fast, do NOT re-offer.** When the host sees a peer-joined cue after
+it has already offered, it ends the session with an explicit message ("the other
+device reconnected — start a new session") surfaced through the store's
+`errorMessage` and rendered in the Session status bar.
+
+Rationale: PLAN.md §19 decision 10 is explicit — "sessions are single-use. If the
+connection drops, start a new session. Reconnect logic adds complexity that isn't
+worth it for a quick transfer tool." Rebuilding the `PeerConnection` and re-offering
+*is* reconnect logic, and it risks interleaving ICE candidates from the discarded
+peer. A clear immediate failure is both plan-aligned and better UX than a silent
+five-minute spinner.
+
+### D2 — `pubkey` doubles as the "peer joined" cue (Phase 1 → 2)
+The host sends its SDP offer only on receiving `pubkey`, because the worker
+rejects a premature offer as `peer-not-connected`. PLAN.md §13 has no explicit
+`peer-joined` frame. Keeping this: in Phase 2 `pubkey` carries a real key, so the
+cue becomes semantically correct. Pinned with a comment + test rather than
+changing the wire protocol mid-phase.
+
+### D3 — `send()` stays `void` in Phase 2
+PLAN.md §12 specifies `send(msg): void`, but AES-256-GCM encryption is async.
+Resolution for Phase 2: keep the public `void` signature and serialise through an
+internal promise queue inside the `encodeFrame` seam. Do not broaden the signature.
+
 ## Concurrency contract for parallel lanes
 Phases are strictly sequential (AGENTS.md). Within a phase, lanes run in the
 **shared cwd** with **disjoint file ownership** — each lane may only create or
