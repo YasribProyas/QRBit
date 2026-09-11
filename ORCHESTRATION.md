@@ -8,17 +8,31 @@ Source of truth for model routing is `AGENTS.md` → "If you're the orchestrator
 | Role | Model | Status |
 |---|---|---|
 | Parent / orchestrator | `qwen-token-plan-individual/qwen3.8-max` (session default) | ✅ working |
-| **All sub-agents (primary)** | `omnirouter/agy/gemini-3.8-flash-high` | ✅ verified — tools + bash OK |
-| **Sub-agent fallback** | `agentrouter/deepseek-v4-flash` | ✅ verified — tools + bash OK |
+| **Sub-agent primary** | `agentrouter/deepseek-v4-flash` | ✅ verified — tools + bash OK |
+| **Sub-agent secondary** | `omnirouter/agy/gemini-3.8-flash-high` | ⚠️ EXCLUDED until 2026-09-12T20:56:32Z |
+| **Sub-agent last resort** | *(omit `model:`)* → inherits `qwen3.8-max` | ✅ always available |
+
+### 2026-09-12 incident — read this
+AGENTS.md prefers gemini-3.8-flash-high (rule 1) then deepseek-v4-flash (rule 2).
+The omnirouter gemini route failed twice with `Connection error.` and Pi then
+**hard-excluded it for ~18 hours** with the message "cannot be replaced by a
+fallback". A workflow pinned to it lost all 3 lanes + integration at 0s each.
+
+Consequences baked into `.pi/workflows/*.js`:
+- Every lane goes through the `runOpts()` helper, which walks `MODEL_CHAIN`
+  `[deepseek-v4-flash, gemini-3.8-flash-high, null]` and retries the next entry
+  when a child returns `ok:false`. `null` means omit `model:` so the child
+  inherits the parent session model — that entry can never be quota-excluded,
+  so **a lane can never dead-end on a provider outage**.
+- Retries use a distinct workflow key suffix (`-fb1`, `-fb2`) to keep identity
+  unambiguous.
+- Do NOT pin a single `model:` on a lane again. Always use the chain.
 
 Rules:
-- Every `runs.run` / `runs.all` child gets an explicit `model:` — primary first.
-- If a child fails with a provider/connection/402 error, retry that lane on
-  `agentrouter/deepseek-v4-flash`. deepseek has a WAF/content filter but plain
-  coding tasks pass fine.
-- `agentrouter/deepseek-v4-flash` self-reports as "qwen3.8-max" when asked its
-  identity. That is a known artifact of the inherited session env, NOT a routing
-  failure. Judge by `ok` + actual tool output, never by self-report.
+- Judge a child by `ok` + actual tool output, never by its self-reported identity.
+  `agentrouter/deepseek-v4-flash` claims to be "qwen3.8-max" when asked — an
+  artifact of the inherited session env, not a routing failure.
+- deepseek has a WAF/content filter; plain coding tasks pass fine (AGENTS.md rule 2).
 
 ### Models confirmed DEAD — do not use, do not retry
 - `agentrouter/claude-opus-5` → 402 budget pool exhausted
@@ -44,6 +58,20 @@ phases (AGENTS.md) mean wide fan-out is only useful *within* a phase.
   zustand 5, @msgpack/msgpack 3.1.3, idb 8, wrangler 4.131, vitest 5.
 - `react-router-dom` is an addition not listed in PLAN.md §4 — required because
   PLAN.md §8 drives session role off URL params (`/session?code=...`).
+
+## Parent-side operational gotchas
+- NEVER run `pkill -f <pattern>` when the pattern also appears in your own command
+  line — `pkill -f` matches full command lines, including the shell running it, so it
+  kills your own session mid-run and silently truncates the output. Use
+  `pkill -x <exact-process-name>` instead (e.g. `pkill -x workerd`).
+- Lanes that verify with a live `wrangler dev` leave orphaned `workerd` processes
+  holding port 8787 and `.wrangler` state locks. After any phase where a lane ran a
+  dev server, confirm with `ss -ltn | grep 8787` and `pkill -x workerd` before the
+  parent runs its own build verification.
+- `wrangler dev` is a blocking server. Lanes must not use it for verification —
+  prefer `pnpm -r typecheck` / `test` / `build` (all non-blocking), or note the need
+  for a live check in the report instead. One lane burned a 180s timeout and spawned
+  two orphaned servers learning this.
 
 ## Concurrency contract for parallel lanes
 Phases are strictly sequential (AGENTS.md). Within a phase, lanes run in the
