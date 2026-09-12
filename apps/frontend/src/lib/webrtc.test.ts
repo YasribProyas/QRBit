@@ -998,22 +998,33 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     channel.open()
     connection.setSessionKey(key)
     const received: WireMessage[] = []
-    connection.onMessage((message) => received.push(message))
+    const frameCount = 10
+
+    // The completion signal is the queue's own progress: the test resolves once
+    // the tenth frame has reached a subscriber, so nothing depends on how many
+    // microtasks or timers the decrypt chain happens to need on a loaded machine
+    // (the previous fixed `settle()` budget was what made this test load-sensitive).
+    const allDelivered = new Promise<void>((resolve) => {
+      connection.onMessage((message) => {
+        received.push(message)
+        if (received.length === frameCount) resolve()
+      })
+    })
 
     // All envelopes are handed over in one synchronous burst; a non-serialised
     // decrypt could deliver a later frame first.
     const envelopes = await Promise.all(
-      Array.from({ length: 10 }, (_unused, i) =>
+      Array.from({ length: frameCount }, (_unused, i) =>
         encodeFrame({ t: 'text-delta', id: 'a', content: `in-${i}` }, key),
       ),
     )
     for (const envelope of envelopes) {
       channel.receive(envelope)
     }
-    await settle()
+    await allDelivered
 
     expect(received).toEqual(
-      Array.from({ length: 10 }, (_unused, i): WireMessage => ({ t: 'text-delta', id: 'a', content: `in-${i}` })),
+      Array.from({ length: frameCount }, (_unused, i): WireMessage => ({ t: 'text-delta', id: 'a', content: `in-${i}` })),
     )
   })
 
