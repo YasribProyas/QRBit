@@ -18,6 +18,10 @@
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// The library store and its IndexedDB are NOT part of a session; `fake-indexeddb` is
+// here to prove that a session never writes to them (see the boundary describe below).
+import 'fake-indexeddb/auto'
+
 import { CHUNK_SIZE, FileAssembler, chunkFile } from '../lib/chunker'
 import {
   LOCKED_ITEM_MAX_PLAINTEXT_BYTES,
@@ -26,14 +30,21 @@ import {
   generateKeypair,
   toBase64,
 } from '../lib/crypto'
+import * as cryptoModule from '../lib/crypto'
+import type {
+  LibraryFileItem,
+  LibraryImageItem,
+  LibraryLockedItem,
+  LibraryTextItem,
+} from '../lib/library'
 import type { WireMessage } from '../lib/protocol'
 import { WIRE_MAX_FRAME_BYTES, encodeWire } from '../lib/protocol'
 import { PeerConnection } from '../lib/webrtc'
 import { useSessionStore } from '../store/sessionStore'
 import type { ItemStatus, LockedItem } from '../store/sessionStore'
 import { PEER_REJOINED_REASON, deriveSessionMaterial, useSession } from './useSession'
+import { queueLibrarySends, takeQueuedLibrarySends } from './useSession'
 import type { UseSessionResult } from './useSession'
-
 const SESSION_CODE = 'A7X3K9P2'
 
 // ---------------------------------------------------------------------------
@@ -383,6 +394,9 @@ beforeEach(() => {
   })
 
   useSessionStore.getState().reset()
+  // The pending-send queue is module-scoped memory, so a leftover selection from another
+  // test would otherwise fire into this one's session.
+  takeQueuedLibrarySends()
 })
 
 afterEach(() => {
@@ -2020,5 +2034,360 @@ describe('useSession locked items — the receive path (PLAN.md §10, §16 Phase
 
     expect(lockedItemOf(id)?.unlocked).toBeUndefined()
     expect('plaintextContent' in (lockedItemOf(id) ?? {})).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Library items (PLAN.md §7, §16 Phase 5, decisions D8 and D9)
+// ---------------------------------------------------------------------------
+
+/** A library item's base fields, so each case only states what it is about. */
+function libraryBase(name: string): {
+  id: string
+  folderId: string
+  name: string
+  createdAt: number
+  updatedAt: number
+} {
+  return {
+    id: globalThis.crypto.randomUUID(),
+    folderId: 'root',
+    name,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }
+}
+
+function libraryTextItem(content: string, name = 'note'): LibraryTextItem {
+  return { ...libraryBase(name), type: 'text', content }
+}
+
+function libraryFileItem(blob: Blob, name: string, mimeType: string): LibraryFileItem {
+  return { ...libraryBase(name), type: 'file', blob, mimeType, size: blob.size }
+}
+
+function libraryImageItem(blob: Blob, name: string, mimeType: string): LibraryImageItem {
+  return { ...libraryBase(name), type: 'image', blob, mimeType, size: blob.size }
+}
+
+describe('useSession library items (PLAN.md §7, §16 Phase 5, D8/D9)', () => {
+  it('is a no-op while the session is not active', async () => {
+    const devices = await pairDevices()
+
+    expect(() => {
+      session().sendLibraryItem(libraryTextItem('too early'))
+    }).not.toThrow()
+
+    await settle()
+    expect(devices.guestChannel.sent).toEqual([])
+    expect(devices.hostReceived).toEqual([])
+    expect(useSessionStore.getState().items).toEqual([])
+  })
+
+  it('announces a library text item and sends its stored content as the first delta', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const item = libraryTextItem('Portal password is hunter2', 'Portal password')
+    session().sendLibraryItem(item)
+
+    await waitFor(() => framesOf(devices.hostReceived, 'text-delta').length === 1, 'the delta')
+
+    const announce = framesOf(devices.hostReceived, 'item-announce')[0]
+    expect(announce).toMatchObject({ t: 'item-announce', type: 'text' })
+    expect(framesOf(devices.hostReceived, 'text-delta')[0]).toEqual({
+      t: 'text-delta',
+      id: announce?.id,
+      content: 'Portal password is hunter2',
+    })
+    // The sender's own row is the item that was picked, not a copy or an empty one.
+    expect(useSessionStore.getState().items[0]).toMatchObject({
+      id: announce?.id,
+      type: 'text',
+      status: 'complete',
+      content: 'Portal password is hunter2',
+    })
+  })
+
+  it('announces a library rich-text item as richtext, with its stored JSON', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const json = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] })
+    session().sendLibraryItem({ ...libraryTextItem(json, 'Rich text note'), type: 'richtext' })
+
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'richtext-delta').length === 1,
+      'the richtext delta',
+    )
+
+    expect(framesOf(devices.hostReceived, 'item-announce')[0]).toMatchObject({ type: 'richtext' })
+    expect(framesOf(devices.hostReceived, 'richtext-delta')[0]?.content).toBe(json)
+  })
+
+  it('runs a library file item through the chunk pipeline, byte-for-byte', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const bytes = patternedBytes(40 * 1024)
+    const item = libraryFileItem(new Blob([bytes]), 'thesis.pdf', 'application/pdf')
+
+    session().sendLibraryItem(item)
+
+    await waitFor(
+      () => devices.hostReceived.some((message) => message.t === 'file-done'),
+      'file-done',
+    )
+
+    // The announce names the stored file: the library's name and MIME type become the
+    // File's, so the receiver sees the item the user picked rather than a placeholder.
+    expect(framesOf(devices.hostReceived, 'item-announce')[0]).toMatchObject({
+      t: 'item-announce',
+      type: 'file',
+      fileName: 'thesis.pdf',
+      mimeType: 'application/pdf',
+      totalSize: bytes.byteLength,
+      totalChunks: 3,
+    })
+
+    const chunks = framesOf(devices.hostReceived, 'file-chunk')
+    expect(chunks.map((chunk) => chunk.index)).toEqual([0, 1, 2])
+
+    // Reassembled with the receiver's own assembler: byte-identical to the stored blob.
+    const assembler = new FileAssembler()
+    for (const chunk of chunks) assembler.addChunk(chunk.index, chunk.data)
+    expect(assembler.isComplete(3)).toBe(true)
+    expect(new Uint8Array(await assembler.assemble('application/pdf').arrayBuffer())).toEqual(bytes)
+  })
+
+  it('sends a library image as an image item', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const bytes = patternedBytes(4 * 1024)
+    session().sendLibraryItem(
+      libraryImageItem(new Blob([bytes], { type: 'image/png' }), 'cat.png', 'image/png'),
+    )
+
+    await waitFor(
+      () =>
+        framesOf(devices.hostReceived, 'item-announce').some(
+          (announce) => announce.type === 'image',
+        ),
+      'the image announce',
+    )
+
+    const announce = framesOf(devices.hostReceived, 'item-announce')[0]
+    expect(announce).toMatchObject({ type: 'image', fileName: 'cat.png', mimeType: 'image/png' })
+    // The sender's own row is an image too: the local type and the announced type come
+    // from the same MIME rule (PLAN.md §9).
+    expect(useSessionStore.getState().items[0]?.type).toBe('image')
+  })
+
+  it('sends a locked library item’s stored tuple without ever decrypting it (D9)', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const password = 'hunter2'
+    const plaintext = 'the secret the sender never needs to know'
+    const encrypted = await encryptItem(password, new TextEncoder().encode(plaintext))
+    const item: LibraryLockedItem = {
+      ...libraryBase('Uni portal password'),
+      type: 'locked',
+      label: 'Uni portal password',
+      innerType: 'text',
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      salt: encrypted.salt,
+    }
+
+    const decryptSpy = vi.spyOn(cryptoModule, 'decryptItem')
+    session().sendLibraryItem(item)
+
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'locked-payload').length === 1,
+      'the locked payload',
+    )
+
+    // THE D9 ASSERTION: forwarding a locked item asks for no password, derives no key and
+    // decrypts nothing. The tuple is what travels.
+    expect(decryptSpy).not.toHaveBeenCalled()
+
+    const announce = framesOf(devices.hostReceived, 'item-announce')[0]
+    expect(announce).toEqual({
+      t: 'item-announce',
+      id: announce?.id,
+      type: 'locked',
+      label: 'Uni portal password',
+      innerType: 'text',
+    })
+
+    const payload = framesOf(devices.hostReceived, 'locked-payload')[0]
+    if (payload === undefined) throw new Error('test bug: no payload frame')
+    expect(payload.ciphertext).toEqual(encrypted.ciphertext)
+    expect(payload.iv).toEqual(encrypted.iv)
+    expect(payload.salt).toEqual(encrypted.salt)
+
+    // The sender's own row carries the same tuple, and no plaintext — the whole point of
+    // the item is that its content is opaque until the receiver types the password.
+    const row = lockedItemOf(announce?.id ?? '')
+    expect(row?.ciphertext).toEqual(encrypted.ciphertext)
+    expect(row?.iv).toEqual(encrypted.iv)
+    expect(row?.salt).toEqual(encrypted.salt)
+    expect(row?.unlocked).toBeUndefined()
+    expect(row?.plaintextContent).toBeUndefined()
+
+    // Positive control: this spy DOES see useSession's own decryption call, so the
+    // assertion above is about the send path and not about a spy that intercepts nothing.
+    expect(await session().unlockItem(announce?.id ?? '', password)).toBe(true)
+    expect(decryptSpy).toHaveBeenCalledTimes(1)
+    expect(lockedItemOf(announce?.id ?? '')?.plaintextContent).toBe(plaintext)
+  })
+
+  it('refuses a stored locked tuple past D6’s cap, before any frame is sent', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const oversized: LibraryLockedItem = {
+      ...libraryBase('Too big'),
+      type: 'locked',
+      label: 'Too big',
+      innerType: 'file',
+      ciphertext: patternedBytes(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 17),
+      iv: patternedBytes(12),
+      salt: patternedBytes(16),
+    }
+
+    expect(() => {
+      session().sendLibraryItem(oversized)
+    }).toThrow(/3 MiB/)
+
+    await settle()
+    // The announce never went out either: the check runs before the first frame.
+    expect(framesOf(devices.hostReceived, 'item-announce')).toEqual([])
+    expect(framesOf(devices.hostReceived, 'locked-payload')).toEqual([])
+    expect(useSessionStore.getState().items).toEqual([])
+  })
+})
+
+describe('useSession pending sends (PLAN.md §7, §16 Phase 5, D8)', () => {
+  it('sends a queued selection the moment the session goes active', async () => {
+    const devices = await pairDevices()
+
+    const item = libraryTextItem('queued on the Home screen', 'Queued note')
+    queueLibrarySends([item])
+
+    // The safety-phrase gate still holds: nothing crosses before BOTH devices confirm.
+    await settle()
+    expect(devices.guestChannel.sent).toEqual([])
+
+    await activatePairing(devices)
+
+    await waitFor(() => framesOf(devices.hostReceived, 'text-delta').length === 1, 'the queued delta')
+    expect(framesOf(devices.hostReceived, 'text-delta')[0]?.content).toBe(
+      'queued on the Home screen',
+    )
+    // Drained: the same selection is not re-announced by the next phase change.
+    expect(takeQueuedLibrarySends()).toEqual([])
+    useSessionStore.getState().setPhase('pairing')
+    useSessionStore.getState().setPhase('active')
+    await settle()
+    expect(framesOf(devices.hostReceived, 'item-announce')).toHaveLength(1)
+  })
+
+  it('keeps the untaken remainder queued when a send ends the session mid-drain', async () => {
+    const devices = await pairDevices()
+
+    // The first item is one D6 refuses, and that refusal ends the session inside the
+    // drain. The second is a perfectly good selection this session will now never carry:
+    // it must still be waiting rather than be destroyed by the race.
+    const oversized: LibraryLockedItem = {
+      ...libraryBase('Too big'),
+      type: 'locked',
+      label: 'Too big',
+      innerType: 'file',
+      ciphertext: patternedBytes(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 17),
+      iv: patternedBytes(12),
+      salt: patternedBytes(16),
+    }
+    const survivor = libraryTextItem('selected second', 'Second note')
+    queueLibrarySends([oversized, survivor])
+
+    expect(useSessionStore.getState().errorMessage).toBe(null)
+    // Straight to the item gate: this test is about the drain, and the both-confirms
+    // handshake would end the session before the drain's own phase could be observed.
+    useSessionStore.getState().setPhase('active')
+
+    await waitFor(() => useSessionStore.getState().errorMessage !== null, 'the D6 rejection')
+    await settle()
+
+    // The failure reaches the user through the store's error surface...
+    expect(useSessionStore.getState().phase).toBe('ended')
+    expect(useSessionStore.getState().errorMessage).toMatch(/3 MiB/)
+    // ...and the item the session never got to is still queued, announced by nobody.
+    expect(takeQueuedLibrarySends().map((item) => item.id)).toEqual([survivor.id])
+    expect(framesOf(devices.hostReceived, 'item-announce')).toEqual([])
+    expect(framesOf(devices.hostReceived, 'text-delta')).toEqual([])
+  })
+
+  it('reports only the items that arrived as received (PLAN.md §8 Phase 4)', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    // This device creates one item of its own, so the board carries both origins.
+    const mine = session().addTextItem('mine')
+
+    const theirs = crypto.randomUUID()
+    devices.guest.send({ t: 'item-announce', id: theirs, type: 'text' })
+    devices.guest.send({ t: 'text-delta', id: theirs, content: 'theirs' })
+    await devices.guest.drain()
+    await waitFor(() => useSessionStore.getState().items.length === 2, 'both items')
+
+    expect(session().receivedItems.map((item) => item.id)).toEqual([theirs])
+    expect(session().receivedItems.map((item) => item.id)).not.toContain(mine)
+  })
+})
+
+describe('useSession never touches IndexedDB (AGENTS.md, PLAN.md §1/§17)', () => {
+  it('writes nothing during a whole session that never saves — queue included', async () => {
+    // fake-indexeddb's own classes, so these spies see the real call sites the library
+    // layer would use. Nothing in the session path may reach them.
+    const writes = [
+      vi.spyOn(IDBObjectStore.prototype, 'add'),
+      vi.spyOn(IDBObjectStore.prototype, 'put'),
+      vi.spyOn(IDBObjectStore.prototype, 'delete'),
+      vi.spyOn(IDBObjectStore.prototype, 'clear'),
+      vi.spyOn(IDBFactory.prototype, 'open'),
+    ]
+
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    // Every kind of session traffic: a composed text item, a chunked file, a locked item
+    // composed here (PBKDF2 + AES-GCM), a library item sent by hand, and one that came
+    // from the Home screen's queue.
+    const textId = session().addTextItem('typed here')
+    session().updateTextItem(textId, 'typed here and edited')
+    session().addFileItem(new File([patternedBytes(20 * 1024)], 'notes.bin'))
+    await session().addLockedItem({
+      label: 'Uni portal password',
+      innerType: 'text',
+      password: 'hunter2',
+      content: 'the secret',
+    })
+    session().sendLibraryItem(libraryTextItem('from the library', 'Library note'))
+    queueLibrarySends([libraryTextItem('queued', 'Queued note')])
+    useSessionStore.getState().setPhase('pairing')
+    useSessionStore.getState().setPhase('active')
+
+    await waitFor(() => framesOf(devices.hostReceived, 'file-done').length === 1, 'the file')
+    await waitFor(() => framesOf(devices.hostReceived, 'locked-payload').length === 1, 'the locked item')
+    await waitFor(() => framesOf(devices.hostReceived, 'text-delta').length >= 2, 'the deltas')
+    await settle()
+
+    // Keys, phrases, items, the queue — all of it stayed in memory.
+    for (const write of writes) {
+      expect(write).not.toHaveBeenCalled()
+    }
   })
 })

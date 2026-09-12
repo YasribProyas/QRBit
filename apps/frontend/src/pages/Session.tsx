@@ -1,9 +1,16 @@
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { AddItemBar } from '../components/session/AddItemBar'
 import { SafetyPhraseOverlay } from '../components/session/SafetyPhraseOverlay'
 import { SessionBoard, isSenderRole } from '../components/session/SessionBoard'
+import { SaveToLibraryModal } from '../components/library/SaveToLibraryModal'
+import { ITEM_TYPE_ICONS } from '../components/library/LibraryItemRow'
+import type { SaveableSessionItem } from '../components/library/SaveToLibraryModal'
 import { useSession } from '../hooks/useSession'
+import type { UseSessionResult } from '../hooks/useSession'
 import { LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from '../lib/crypto'
+import { useLibraryStore } from '../store/libraryStore'
+import type { SessionItem } from '../store/sessionStore'
 
 /**
  * Session page (PLAN.md §8).
@@ -62,13 +69,15 @@ export function Session() {
         A clean end (the overlay's Abort, or the peer ending the session) has no
         error to show, but it still needs a way back to a fresh session: PLAN.md §19
         decision 10 makes sessions single-use, so "again" always means "new".
+
+        PLAN.md §8 Phase 4: this is also the last moment a RECEIVED item can be kept,
+        because unsaved items die with the session (PLAN.md §1). The save section is
+        shown for an errored end too — the items that did arrive are just as real, and
+        the error panel above already carries the reason.
       */}
-      {session.phase === 'ended' && session.errorMessage === null ? (
+      {session.phase === 'ended' ? (
         <section className="panel">
-          <h2 className="panel__title">Session ended</h2>
-          <button type="button" className="button" onClick={session.restart}>
-            Start a new session
-          </button>
+          <SessionEnded api={session} />
         </section>
       ) : null}
 
@@ -112,4 +121,167 @@ export function Session() {
       ) : null}
     </main>
   )
+}
+
+/**
+ * The ended screen's save section (PLAN.md §8 Phase 4, §16 Phase 5).
+ *
+ * Only the RECEIVED items are offered: the hook reports them as the items this device
+ * did not create, because the ones it did create either already exist in the library
+ * (they were sent FROM it) or are the user's own composition on the other side of a
+ * transfer they just made. A received item is in memory only and dies with the session
+ * (PLAN.md §1), so this is its one chance to be kept.
+ *
+ * Saving is explicit and per item, even for 'Save all': `saveFromSession` writes one
+ * row per item, and an item whose transfer never finished has no bytes to write — its
+ * row is disabled in the dialog with the reason (PLAN.md §17), never stored truncated.
+ * Nothing is decrypted on the way in: a locked item is stored as the exact
+ * `{ciphertext, iv, salt}` tuple it arrived with (decision D9).
+ *
+ * The library lives in IndexedDB and the folders are the dialog's picker, so the section
+ * refreshes the store on mount; a failure shows under the buttons rather than throwing
+ * into the render.
+ */
+function SessionEnded({ api }: { api: UseSessionResult }) {
+  const folders = useLibraryStore((state) => state.folders)
+  const error = useLibraryStore((state) => state.error)
+  const refresh = useLibraryStore((state) => state.refresh)
+  const saveFromSession = useLibraryStore((state) => state.saveFromSession)
+
+  /** Session item ids this device has already stored; the dialog shows them as 'Saved'. */
+  const [savedIds, setSavedIds] = useState<string[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const received = api.receivedItems
+  const rows = received.map(saveableRow)
+
+  const saveItem = async (itemId: string, folderId: string | null): Promise<void> => {
+    const item = received.find((candidate) => candidate.id === itemId)
+    if (item === undefined) throw new Error('this session no longer has that item')
+
+    await saveFromSession(item, folderId)
+    setSavedIds((ids) => (ids.includes(itemId) ? ids : [...ids, itemId]))
+  }
+
+  /** PLAN.md §8 Phase 4's batch: one `saveFromSession` call per complete, unsaved item. */
+  const saveAll = async (folderId: string | null): Promise<void> => {
+    for (const row of rows) {
+      if (!row.complete || savedIds.includes(row.id)) continue
+      await saveItem(row.id, folderId)
+    }
+  }
+
+  return (
+    <>
+      <h2 className="panel__title">Session ended</h2>
+
+      {received.length === 0 ? (
+        <p className="muted">No items were received from the other device.</p>
+      ) : (
+        <>
+          <p className="muted">
+            {received.length} received {received.length === 1 ? 'item' : 'items'} — save what
+            you want to keep. Anything you leave is discarded with the session.
+          </p>
+          <ul className="session-ended__items library-modal__items">
+            {rows.map((row) => (
+              <li
+                className="library-modal__item"
+                key={row.id}
+                data-saved={savedIds.includes(row.id) ? 'true' : undefined}
+              >
+                <span className="library-item__icon" aria-hidden="true">
+                  {ITEM_TYPE_ICONS[row.type]}
+                </span>
+                <span className="library-modal__item-name">{row.name}</span>
+                {savedIds.includes(row.id) ? (
+                  <span className="badge library-modal__saved">Saved</span>
+                ) : null}
+                {!row.complete ? (
+                  <span className="library-modal__item-note muted">Transfer did not finish</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="button session-ended__save"
+            onClick={() => {
+              setPickerOpen(true)
+            }}
+          >
+            Save to Library →
+          </button>
+        </>
+      )}
+
+      {error !== null ? (
+        <p className="library-modal__error item-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      {api.errorMessage === null ? (
+        <button type="button" className="button" onClick={api.restart}>
+          Start a new session
+        </button>
+      ) : null}
+
+      {pickerOpen ? (
+        <SaveToLibraryModal
+          items={rows}
+          folders={folders}
+          savedIds={savedIds}
+          onSaveItem={saveItem}
+          onSaveAll={saveAll}
+          onClose={() => {
+            setPickerOpen(false)
+          }}
+        />
+      ) : null}
+    </>
+  )
+}
+
+/** Note names are clipped to the same width the library uses for them. */
+const NOTE_NAME_MAX_LENGTH = 40
+
+/**
+ * One session item as the save dialog needs it.
+ *
+ * The name here is the dialog row's label, not what gets stored: `saveFromSession`
+ * (lib/library.ts) names the stored item itself (a note's opening words, a locked item's
+ * label, a file's name). This mirrors that naming just far enough to be recognisable.
+ */
+function saveableRow(item: SessionItem): SaveableSessionItem {
+  return {
+    id: item.id,
+    name: displayName(item),
+    type: item.type,
+    complete: item.status === 'complete',
+  }
+}
+
+function displayName(item: SessionItem): string {
+  switch (item.type) {
+    case 'text': {
+      const collapsed = item.content.trim().replace(/\s+/g, ' ')
+      if (collapsed === '') return 'Text note'
+      return collapsed.length <= NOTE_NAME_MAX_LENGTH
+        ? collapsed
+        : `${collapsed.slice(0, NOTE_NAME_MAX_LENGTH)}…`
+    }
+    case 'richtext':
+      return 'Rich text note'
+    case 'locked':
+      return item.label.trim() === '' ? 'Locked item' : item.label
+    case 'image':
+    case 'file':
+      if (item.fileName.trim() !== '') return item.fileName
+      return item.type === 'image' ? 'Image' : 'File'
+  }
 }

@@ -2,30 +2,45 @@
  * Add item bar (PLAN.md §9: "Add item bar (sender only)").
  *
  * Six actions are specified there — T text, ¶ rich text, 🖼 image, 📎 file,
- * 🔒 locked, 📚 from library — and five exist now:
+ * 🔒 locked, 📚 from library — and all six exist now:
  *
  *   - 🔒 opens the Phase 4 compose modal (label, inner type, password twice,
  *     content). The bar only opens it: the modal owns the draft and calls
  *     `addLockedItem`, which encrypts and sends.
- *   - 📚 (library picker) is Phase 5. It is not rendered at all, so the bar cannot
- *     imply a feature that does not exist.
+ *   - 📚 opens the Phase 5 library sheet: folders on top (PLAN.md §6.4's tree as a
+ *     picker), the chosen folder's items below, and tapping an item sends it through
+ *     `sendLibraryItem` immediately. The sheet stays open, so a user can send several
+ *     items in a row, and it shows 'Sent' against what has already gone.
  *
  * Every action calls the items API and the new item appears on the board through
  * the store immediately — the bar never writes item state itself.
+ *
+ * The sheet is the only place in this file that knows about the library store, and it
+ * does so as the store's consumer: `useLibraryStore` is the UI's one route to
+ * IndexedDB, so the sheet lists folders and items through it and asks it to refresh.
+ * The items themselves are handed back as data — this component never touches the
+ * IndexedDB layer, and never knows that the library has one.
  */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ItemsApi } from './SessionBoard'
 import { LockedItemComposeModal } from './LockedItemComposeModal'
 import type { LockedItemInput } from './LockedItemComposeModal'
+import { FolderPicker } from '../library/FolderNode'
+import { itemsInFolder } from '../library/LibraryBrowser'
+import { ITEM_TYPE_ICONS } from '../library/LibraryItemRow'
+import type { LibraryItem } from '../library/LibraryItemRow'
+import { useLibraryStore } from '../../store/libraryStore'
 
 /**
  * What this bar needs from the items API: the three add methods the board also
- * declares, plus the Phase 4 locked-item add (which encrypts before it sends and
- * therefore resolves asynchronously).
+ * declares, the Phase 4 locked-item add (which encrypts before it sends and
+ * therefore resolves asynchronously), and the Phase 5 library send.
  */
 export type AddItemBarApi = Pick<ItemsApi, 'addTextItem' | 'addRichTextItem' | 'addFileItem'> & {
   addLockedItem: (input: LockedItemInput) => Promise<string>
+  /** Sends one library item as session traffic (PLAN.md §7, decision D8). */
+  sendLibraryItem: (item: LibraryItem) => void
 }
 
 export interface AddItemBarProps {
@@ -43,6 +58,7 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
   const imageInput = useRef<HTMLInputElement | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const [lockedComposeOpen, setLockedComposeOpen] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
 
   /** Multi-select fans out to one item per file (PLAN.md §9: items are independent). */
   const addAll = (files: FileList | null): void => {
@@ -140,6 +156,18 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
         >
           🔒
         </button>
+
+        <button
+          type="button"
+          className="add-item-bar__button"
+          aria-label="Send from library"
+          title="From library"
+          onClick={() => {
+            setLibraryOpen(true)
+          }}
+        >
+          📚
+        </button>
         <p className="add-item-bar__hint muted">
           🔒 locked items also need a password to open — the label stays visible
         </p>
@@ -159,6 +187,142 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
           maxFileBytes={maxLockedFileBytes}
         />
       ) : null}
+
+      {/* Mounted only while open, so a closed sheet holds no library data at all. */}
+      {libraryOpen ? (
+        <LibrarySendSheet
+          onSend={api.sendLibraryItem}
+          onClose={() => {
+            setLibraryOpen(false)
+          }}
+        />
+      ) : null}
     </>
+  )
+}
+
+export interface LibrarySendSheetProps {
+  /** Called once per tap, with the item whose row was tapped. */
+  onSend: (item: LibraryItem) => void
+  onClose: () => void
+}
+
+/**
+ * The 📚 sheet (PLAN.md §9/§16 Phase 5).
+ *
+ * Lightweight on purpose: the folder tree picks a source folder and the list below
+ * shows that folder's items, so one tap is one send. There is no rename, move or
+ * delete here — managing the library is the Home screen's job — and nothing is
+ * selected-then-confirmed: the tap IS the send, which is what makes tapping three
+ * items in a row work.
+ *
+ * The folders and items are the store's, refreshed on mount because a session page can
+ * be the first screen this tab opened (a scanned `/session?code=…` URL never renders
+ * Home). The 'Sent' badge is this sheet's own memory of what it has handed over — it
+ * marks a row, it never gates a second send of the same item, which is a legitimate
+ * thing to ask for.
+ */
+export function LibrarySendSheet({ onSend, onClose }: LibrarySendSheetProps) {
+  const folders = useLibraryStore((state) => state.folders)
+  const items = useLibraryStore((state) => state.items)
+  const loading = useLibraryStore((state) => state.loading)
+  const error = useLibraryStore((state) => state.error)
+  const refresh = useLibraryStore((state) => state.refresh)
+
+  /** The folder whose items are listed; `null` is the tree's Root. */
+  const [folderId, setFolderId] = useState<string | null>(null)
+  const [sentIds, setSentIds] = useState<string[]>([])
+  const [problem, setProblem] = useState<string | null>(null)
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const listed = itemsInFolder(items, folders, folderId)
+
+  /**
+   * Hands one item to the session. A rejection here is the API's (a stored locked tuple
+   * over D6's cap) — it belongs to this row, not to the session, so it is reported in
+   * the sheet and the session is left alone.
+   */
+  const send = (item: LibraryItem): void => {
+    try {
+      onSend(item)
+    } catch (cause: unknown) {
+      setProblem(cause instanceof Error && cause.message.trim() !== '' ? cause.message : 'That item could not be sent.')
+      return
+    }
+
+    setProblem(null)
+    setSentIds((ids) => (ids.includes(item.id) ? ids : [...ids, item.id]))
+  }
+
+  return (
+    <div
+      className="library-modal library-modal--send"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="library-send-title"
+    >
+      <div className="library-modal__panel">
+        <h2 className="library-modal__title" id="library-send-title">
+          Send from library
+        </h2>
+        <p className="library-modal__hint muted">
+          Tap an item to send it. Send as many as you like — nothing leaves this browser
+          until you tap.
+        </p>
+
+        <FolderPicker folders={folders} value={folderId} onChange={setFolderId} label="Library folder" />
+
+        {loading ? (
+          <p className="library-modal__empty muted" role="status">
+            Loading your library…
+          </p>
+        ) : listed.length === 0 ? (
+          <p className="library-modal__empty muted">Nothing in this folder.</p>
+        ) : (
+          <ul className="library-modal__items">
+            {listed.map((item) => (
+              <li className="library-modal__item" key={item.id}>
+                <span className="library-item__icon" aria-hidden="true">
+                  {ITEM_TYPE_ICONS[item.type]}
+                </span>
+                <button
+                  type="button"
+                  className="button button--link library-modal__item-name library-send__item"
+                  onClick={() => {
+                    send(item)
+                  }}
+                >
+                  {item.name}
+                </button>
+                {sentIds.includes(item.id) ? (
+                  <span className="badge library-modal__saved">Sent</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {error !== null ? (
+          <p className="library-modal__error item-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        {problem !== null ? (
+          <p className="library-modal__error item-error" role="alert">
+            {problem}
+          </p>
+        ) : null}
+
+        <div className="library-modal__actions">
+          <button type="button" className="button library-modal__done" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

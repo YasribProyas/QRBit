@@ -182,6 +182,19 @@ bound is the defensive backstop.
 provides the ONLY decryption path and cannot be recovered deserves a
 confirmation field; mismatch disables submit. Disclosed deviation from PLAN.md.
 
+### D8 — Phase 5 "send selected" starts a host session directly (Phase 5)
+§16 puts "'Scan & Send': QRScanner opens after multi-select" in Phase 5's checklist, but
+the scanner component is Phase 6. Phase 5 owns the QUEUEING MECHANISM: selected
+library items flow into a new session and send once it goes active. The entry
+point is a direct host-session start (the flow that exists since Phase 1);
+Phase 6's scanner replaces the entry point without touching the queue.
+
+### D9 — sending a locked library item requires NO password (Phase 5)
+The {ciphertext, iv, salt} tuple is what travels; the password never does. A
+sender can therefore forward a locked library item without unlocking it — the
+receiver needs the password to unlock. This is the double-encryption property
+§2 promises and it means the send path must never "helpfully" decrypt.
+
 ## Concurrency contract for parallel lanes
 Phases are strictly sequential (AGENTS.md). Within a phase, lanes run in the
 **shared cwd** with **disjoint file ownership** — each lane may only create or

@@ -1,0 +1,783 @@
+/**
+ * Local library — the device-local IndexedDB store (PLAN.md §6.1–§6.3).
+ *
+ * THE ONE SANCTIONED INDEXEDDB USER (AGENTS.md, PLAN.md §6): the library is
+ * permanent, device-local storage, never synced to any server. Session artifacts
+ * — keys, the safety phrase, in-flight items, received items the user has not
+ * explicitly saved — never reach this module (PLAN.md §1, §17). Save is always an
+ * explicit user action: `saveItem` or `saveFromSession`.
+ *
+ * A plain data layer: no UI, no hooks, no zustand store, no crypto, no wire. It
+ * never decrypts and never re-encrypts — a locked item's `{ciphertext, iv, salt}`
+ * tuple is stored exactly as it arrived (PLAN.md §6.2, §14; orchestration
+ * decision D9). The PBKDF2 key is derived from the user's password on every
+ * unlock and is never written here.
+ *
+ * The module is also the boundary that keeps garbage out of IDB: IDB is untyped
+ * at runtime, so every write is validated against the declared §6.1 shape, every
+ * read is normalised, and an id that must exist but does not is an error rather
+ * than a silent no-op.
+ */
+
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb'
+
+import type { FileItem, ImageItem, SessionItem } from '../store/sessionStore'
+
+// ---------------------------------------------------------------------------
+// Data model (PLAN.md §6.1)
+// ---------------------------------------------------------------------------
+
+export interface LibraryFolder {
+  id: string
+  name: string
+  /** null = lives in the root (PLAN.md §6.1). */
+  parentId: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export type LibraryItemType = 'text' | 'richtext' | 'image' | 'file' | 'locked'
+
+export interface LibraryItemBase {
+  id: string
+  /** ROOT_FOLDER_ID, or the id of the folder that holds the item. */
+  folderId: string
+  /** Display name, user-editable. */
+  name: string
+  type: LibraryItemType
+  createdAt: number
+  updatedAt: number
+}
+
+export interface LibraryTextItem extends LibraryItemBase {
+  type: 'text'
+  content: string
+}
+
+export interface LibraryRichTextItem extends LibraryItemBase {
+  type: 'richtext'
+  /** Tiptap JSON string. */
+  content: string
+}
+
+export interface LibraryImageItem extends LibraryItemBase {
+  type: 'image'
+  blob: Blob
+  mimeType: string
+  size: number
+}
+
+export interface LibraryFileItem extends LibraryItemBase {
+  type: 'file'
+  blob: Blob
+  mimeType: string
+  size: number
+}
+
+export interface LibraryLockedItem extends LibraryItemBase {
+  type: 'locked'
+  /** The §9 session-locked-item label. Plaintext by design, like `name`. */
+  label: string
+  innerType: 'text' | 'richtext' | 'file'
+  /** AES-256-GCM output. Opaque bytes — never decrypted by this module. */
+  ciphertext: Uint8Array
+  /** 12 bytes (PLAN.md §6.1). */
+  iv: Uint8Array
+  /** 16 bytes (PLAN.md §6.1). */
+  salt: Uint8Array
+}
+
+export type LibraryItem =
+  | LibraryTextItem
+  | LibraryRichTextItem
+  | LibraryImageItem
+  | LibraryFileItem
+  | LibraryLockedItem
+
+/**
+ * The id of the library's root folder (ADDITIVE to PLAN.md §6.1, which only says
+ * `folderId` means "root folder if uncategorized").
+ *
+ * The root is virtual. PLAN.md §6.1 defines `LibraryFolder.parentId === null` to
+ * mean "lives in the root", so the root itself is not a row in `folders`: it is
+ * the `folderId` uncategorised items carry. `getFolders()` therefore returns the
+ * user's folders only, and a UI renders the root node itself.
+ *
+ * `createFolder` accepts this id as an alias for `null` — a folder created while
+ * the root is open is a top-level folder — but nothing is ever *stored* with
+ * `parentId: 'root'`. `renameFolder`/`deleteFolder` reject it: the root always
+ * exists and cannot be renamed or removed.
+ */
+export const ROOT_FOLDER_ID = 'root'
+
+// ---------------------------------------------------------------------------
+// Schema and connection (PLAN.md §6.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Not exported: this module is the only code that may open the database, and
+ * nothing outside it should name the store (the boundary the library exists for).
+ */
+const DB_NAME = 'qrdrop-library'
+const DB_VERSION = 1
+
+interface LibraryDB extends DBSchema {
+  folders: { key: string; value: LibraryFolder }
+  items: {
+    key: string
+    value: LibraryItem
+    indexes: { folderId: string; type: LibraryItemType; updatedAt: number }
+  }
+}
+
+type LibraryTransaction = IDBPTransaction<LibraryDB, ('folders' | 'items')[], 'readwrite'>
+
+let database: Promise<IDBPDatabase<LibraryDB>> | null = null
+
+function getDatabase(): Promise<IDBPDatabase<LibraryDB>> {
+  if (database === null) {
+    const opening = openDB<LibraryDB>(DB_NAME, DB_VERSION, {
+      upgrade(db) {
+        db.createObjectStore('folders', { keyPath: 'id' })
+        const items = db.createObjectStore('items', { keyPath: 'id' })
+        items.createIndex('folderId', 'folderId')
+        items.createIndex('type', 'type')
+        items.createIndex('updatedAt', 'updatedAt')
+      },
+    })
+    // A failed open must not poison the cache: the next call tries again.
+    opening.catch(() => {
+      if (database === opening) database = null
+    })
+    database = opening
+  }
+  return database
+}
+
+/**
+ * Closes the cached connection; the next API call opens the database again.
+ *
+ * ADDITIONAL to PLAN.md §6.3. A long-lived connection is what should hold a
+ * `versionchange` from blocking, and tests use this to start each case from an
+ * empty database (a `deleteDatabase` cannot proceed while a connection is open).
+ */
+export async function closeLibraryDatabase(): Promise<void> {
+  const current = database
+  database = null
+  if (current === null) return
+  try {
+    ;(await current).close()
+  } catch {
+    // A connection that never opened has nothing to close; the cache is cleared either way.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Validation — the boundary between untyped IDB and the §6.1 model
+// ---------------------------------------------------------------------------
+
+type LockedInnerType = LibraryLockedItem['innerType']
+
+const ITEM_TYPES: readonly LibraryItemType[] = ['text', 'richtext', 'image', 'file', 'locked']
+const LOCKED_INNER_TYPES: readonly LockedInnerType[] = ['text', 'richtext', 'file']
+
+/**
+ * The fixed widths of a locked tuple's two bookkeeping fields (PLAN.md §6.1, §11.4:
+ * `encryptItem` emits a random 12-byte IV and a 16-byte salt).
+ */
+const LOCKED_IV_BYTE_LENGTH = 12
+const LOCKED_SALT_BYTE_LENGTH = 16
+
+const BASE_FIELDS: readonly string[] = ['id', 'folderId', 'name', 'type', 'createdAt', 'updatedAt']
+
+/** The type-specific fields of each §6.1 item. */
+const TYPE_FIELDS: Record<LibraryItemType, readonly string[]> = {
+  text: ['content'],
+  richtext: ['content'],
+  image: ['blob', 'mimeType', 'size'],
+  file: ['blob', 'mimeType', 'size'],
+  locked: ['label', 'innerType', 'ciphertext', 'iv', 'salt'],
+}
+
+const FOLDER_FIELDS: readonly string[] = ['id', 'name', 'parentId', 'createdAt', 'updatedAt']
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isItemType(value: unknown): value is LibraryItemType {
+  return typeof value === 'string' && ITEM_TYPES.some((itemType) => itemType === value)
+}
+
+function isLockedInnerType(value: unknown): value is LockedInnerType {
+  return typeof value === 'string' && LOCKED_INNER_TYPES.some((innerType) => innerType === value)
+}
+
+/** A non-empty string argument of a public function. */
+function requireId(id: string, what: string): string {
+  if (typeof id !== 'string' || id.trim() === '') {
+    throw new Error(`library: ${what} needs a non-empty id`)
+  }
+  return id
+}
+
+function requireName(name: string, what: string): string {
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new Error(`library: ${what} needs a non-empty name`)
+  }
+  return name.trim()
+}
+
+function readString(record: Record<string, unknown>, key: string, what: string): string {
+  const value = record[key]
+  if (typeof value !== 'string') {
+    throw new Error(`library: ${what} needs a string "${key}"`)
+  }
+  return value
+}
+
+function readTimestamp(record: Record<string, unknown>, key: string, what: string): number {
+  const value = record[key]
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`library: ${what} needs a non-negative number "${key}"`)
+  }
+  return value
+}
+
+/**
+ * A true `Uint8Array`, whatever form structured clone handed back.
+ *
+ * IDB stores a `Uint8Array` natively but engines differ in whether they return
+ * it as a byte array, an `ArrayBuffer` or another view, so every byte field is
+ * normalised here. A `Uint8Array` is returned by reference (a locked item can
+ * hold megabytes and a copy would double peak memory).
+ */
+function toBytes(value: unknown, key: string, what: string): Uint8Array {
+  if (value instanceof Uint8Array) return value
+  if (value instanceof ArrayBuffer) return new Uint8Array(value)
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+  }
+  throw new Error(`library: ${what} needs "${key}" as Uint8Array bytes`)
+}
+
+/** Non-empty bytes: an absent, empty or wrongly-typed unlock share is garbage. */
+function readBytes(record: Record<string, unknown>, key: string, what: string): Uint8Array {
+  const bytes = toBytes(record[key], key, what)
+  if (bytes.byteLength === 0) {
+    throw new Error(`library: ${what} needs non-empty "${key}" bytes`)
+  }
+  return bytes
+}
+
+/**
+ * A byte field whose width PLAN.md §6.1 fixes.
+ *
+ * Only the ciphertext of a locked tuple varies in length — it is the plaintext plus the
+ * AES-GCM tag — so a 12-byte IV and a 16-byte salt are the signature of a tuple this app
+ * produced. They are asserted at this boundary because it is the only one: a hostile
+ * peer's `locked-payload` is validated as bytes and nothing more on the wire
+ * (`protocol.ts`), so a 1-byte IV or a 5000-byte salt would be copied into IndexedDB
+ * permanently by `saveFromSession`. Web Crypto then raises `OperationError` on every
+ * unlock attempt, and both unlock paths report that as "wrong password" — the exact
+ * misdiagnosis PLAN.md §17 exists to prevent.
+ */
+function readFixedBytes(
+  record: Record<string, unknown>,
+  key: string,
+  what: string,
+  byteLength: number,
+): Uint8Array {
+  const bytes = readBytes(record, key, what)
+  if (bytes.byteLength !== byteLength) {
+    throw new Error(
+      `library: ${what} needs "${key}" to be ${byteLength} bytes (got ${bytes.byteLength})`,
+    )
+  }
+  return bytes
+}
+
+function readBlob(
+  record: Record<string, unknown>,
+  key: string,
+  what: string,
+  mimeType: string,
+): Blob {
+  const value = record[key]
+  if (value instanceof Blob) return value
+  if (value instanceof ArrayBuffer) return new Blob([value], { type: mimeType })
+  if (ArrayBuffer.isView(value)) {
+    // Copied into an ArrayBuffer-backed view: `BlobPart` will not take the shared
+    // buffer a view may point at, and this branch is only for bytes written by
+    // hand rather than as a Blob.
+    return new Blob([new Uint8Array(toBytes(value, key, what))], { type: mimeType })
+  }
+  throw new Error(`library: ${what} needs a Blob "${key}"`)
+}
+
+function assertKnownFields(record: Record<string, unknown>, fields: readonly string[], what: string): void {
+  for (const key of Object.keys(record)) {
+    if (!fields.includes(key)) {
+      throw new Error(`library: unexpected field "${key}" on a ${what}`)
+    }
+  }
+}
+
+function readBlobFields(
+  record: Record<string, unknown>,
+  type: 'image' | 'file',
+): { blob: Blob; mimeType: string; size: number } {
+  const what = `${type} item`
+  const mimeType = readString(record, 'mimeType', what)
+  const blob = readBlob(record, 'blob', what, mimeType)
+  const size = record['size']
+  if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
+    throw new Error(`library: ${what} needs a non-negative integer "size"`)
+  }
+  if (size !== blob.size) {
+    throw new Error(`library: ${what} declares size ${size} but its blob holds ${blob.size} bytes`)
+  }
+  return { blob, mimeType, size }
+}
+
+/**
+ * Parses one stored (or to-be-stored) item into the §6.1 model, or throws.
+ *
+ * The single validator both write paths and every read path go through, so the
+ * shape written and the shape read cannot drift. An empty `content` is valid — an
+ * empty note is a real item — but a missing or non-string `content` is not.
+ */
+function parseItem(value: unknown): LibraryItem {
+  if (!isRecord(value)) throw new Error('library: an item must be an object')
+
+  const type = value['type']
+  if (!isItemType(type)) {
+    throw new Error(`library: unknown item type ${JSON.stringify(value['type'])}`)
+  }
+  assertKnownFields(value, [...BASE_FIELDS, ...(TYPE_FIELDS[type])], `${type} item`)
+
+  const what = `${type} item`
+  const id = requireId(readString(value, 'id', what), 'an item')
+  const folderId = requireId(readString(value, 'folderId', what), 'an item')
+  const name = requireName(readString(value, 'name', what), 'an item')
+  const createdAt = readTimestamp(value, 'createdAt', what)
+  const updatedAt = readTimestamp(value, 'updatedAt', what)
+
+  switch (type) {
+    case 'text':
+      return {
+        id,
+        folderId,
+        name,
+        type: 'text',
+        createdAt,
+        updatedAt,
+        content: readString(value, 'content', what),
+      }
+    case 'richtext':
+      return {
+        id,
+        folderId,
+        name,
+        type: 'richtext',
+        createdAt,
+        updatedAt,
+        content: readString(value, 'content', what),
+      }
+    case 'image':
+      return { id, folderId, name, type: 'image', createdAt, updatedAt, ...readBlobFields(value, 'image') }
+    case 'file':
+      return { id, folderId, name, type: 'file', createdAt, updatedAt, ...readBlobFields(value, 'file') }
+    case 'locked': {
+      const innerType = value['innerType']
+      if (!isLockedInnerType(innerType)) {
+        throw new Error(
+          `library: locked item needs an "innerType" of text, richtext or file (got ${JSON.stringify(innerType)})`,
+        )
+      }
+      return {
+        id,
+        folderId,
+        name,
+        type: 'locked',
+        createdAt,
+        updatedAt,
+        label: readString(value, 'label', what),
+        innerType,
+        ciphertext: readBytes(value, 'ciphertext', what),
+        iv: readFixedBytes(value, 'iv', what, LOCKED_IV_BYTE_LENGTH),
+        salt: readFixedBytes(value, 'salt', what, LOCKED_SALT_BYTE_LENGTH),
+      }
+    }
+  }
+}
+
+function parseFolder(value: unknown): LibraryFolder {
+  if (!isRecord(value)) throw new Error('library: a folder must be an object')
+  assertKnownFields(value, FOLDER_FIELDS, 'folder')
+
+  const parentId = value['parentId']
+  if (parentId !== null && typeof parentId !== 'string') {
+    throw new Error('library: a folder needs a "parentId" that is a folder id or null')
+  }
+
+  return {
+    id: requireId(readString(value, 'id', 'folder'), 'a folder'),
+    name: requireName(readString(value, 'name', 'folder'), 'a folder'),
+    parentId,
+    createdAt: readTimestamp(value, 'createdAt', 'folder'),
+    updatedAt: readTimestamp(value, 'updatedAt', 'folder'),
+  }
+}
+
+/**
+ * The folder a write targets must exist, and the check shares its transaction
+ * with the write so a folder cannot be deleted in between.
+ *
+ * The root has no row, so ROOT_FOLDER_ID and null both mean "the root".
+ */
+async function requireFolder(tx: LibraryTransaction, folderId: string | null): Promise<void> {
+  if (folderId === null || folderId === ROOT_FOLDER_ID) return
+  const folder = await tx.objectStore('folders').get(folderId)
+  if (folder === undefined) {
+    throw new Error(`library: no folder with id "${folderId}"`)
+  }
+}
+
+/** `null` and the root's own id both mean "top level" (PLAN.md §6.1). */
+function normaliseParentId(parentId: string | null): string | null {
+  if (parentId === null || parentId === ROOT_FOLDER_ID) return null
+  if (typeof parentId !== 'string' || parentId.trim() === '') {
+    throw new Error('library: a folder parent must be a folder id or null')
+  }
+  return parentId
+}
+
+function compareNames(a: string, b: string): number {
+  if (a === b) return 0
+  return a < b ? -1 : 1
+}
+
+// ---------------------------------------------------------------------------
+// Folders (PLAN.md §6.3)
+// ---------------------------------------------------------------------------
+
+/** Every folder, oldest first (name breaks a same-millisecond tie). */
+export async function getFolders(): Promise<LibraryFolder[]> {
+  const db = await getDatabase()
+  const folders = (await db.getAll('folders')).map(parseFolder)
+  return folders.sort((a, b) => a.createdAt - b.createdAt || compareNames(a.name, b.name))
+}
+
+export async function createFolder(name: string, parentId: string | null): Promise<LibraryFolder> {
+  const folderName = requireName(name, 'a folder')
+  const parent = normaliseParentId(parentId)
+  const now = Date.now()
+  const folder: LibraryFolder = {
+    id: globalThis.crypto.randomUUID(),
+    name: folderName,
+    parentId: parent,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items'], 'readwrite')
+  await requireFolder(tx, parent)
+  // `add`, not `put`: a colliding id must fail loudly rather than overwrite a folder tree.
+  await tx.objectStore('folders').add(folder)
+  await tx.done
+
+  return folder
+}
+
+export async function renameFolder(id: string, name: string): Promise<void> {
+  const folderId = requireId(id, 'renameFolder')
+  if (folderId === ROOT_FOLDER_ID) throw new Error('library: the root folder cannot be renamed')
+  const folderName = requireName(name, 'a folder')
+
+  const db = await getDatabase()
+  const tx = db.transaction('folders', 'readwrite')
+  const store = tx.objectStore('folders')
+  const existing = await store.get(folderId)
+  if (existing === undefined) throw new Error(`library: no folder with id "${folderId}"`)
+
+  await store.put({ ...existing, name: folderName, updatedAt: Date.now() })
+  await tx.done
+}
+
+/**
+ * Deletes a folder, every folder beneath it and every item inside them — a
+ * folder tree dies whole (PLAN.md §6.3), because an item whose folder is gone
+ * would be unreachable. Items in the root and in unrelated folders are untouched.
+ *
+ * One transaction, so a crash cannot leave orphaned items behind.
+ */
+export async function deleteFolder(id: string): Promise<void> {
+  const folderId = requireId(id, 'deleteFolder')
+  if (folderId === ROOT_FOLDER_ID) throw new Error('library: the root folder cannot be deleted')
+
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items'], 'readwrite')
+  const folderStore = tx.objectStore('folders')
+  if ((await folderStore.get(folderId)) === undefined) {
+    throw new Error(`library: no folder with id "${folderId}"`)
+  }
+
+  const doomed = collectSubtree(await folderStore.getAll(), folderId)
+  const itemStore = tx.objectStore('items')
+  for (const doomedFolderId of doomed) {
+    for (const itemKey of await itemStore.index('folderId').getAllKeys(doomedFolderId)) {
+      await itemStore.delete(itemKey)
+    }
+  }
+  for (const doomedFolderId of doomed) {
+    await folderStore.delete(doomedFolderId)
+  }
+  await tx.done
+}
+
+/**
+ * `rootId` plus the ids of every folder beneath it (breadth first).
+ *
+ * A folder already visited is skipped, so a corrupt cycle (`a → b → a`) cannot
+ * loop forever or leave a folder behind.
+ */
+function collectSubtree(folders: readonly LibraryFolder[], rootId: string): Set<string> {
+  const subtree = new Set<string>([rootId])
+  let frontier = [rootId]
+
+  while (frontier.length > 0) {
+    const next: string[] = []
+    for (const folder of folders) {
+      const parentId = folder.parentId
+      if (parentId === null || subtree.has(folder.id)) continue
+      if (!frontier.includes(parentId)) continue
+      subtree.add(folder.id)
+      next.push(folder.id)
+    }
+    frontier = next
+  }
+
+  return subtree
+}
+
+// ---------------------------------------------------------------------------
+// Items (PLAN.md §6.3)
+// ---------------------------------------------------------------------------
+
+/** The items directly in `folderId`, most recently updated first. */
+export async function getItemsInFolder(folderId: string): Promise<LibraryItem[]> {
+  const target = requireId(folderId, 'getItemsInFolder')
+  const db = await getDatabase()
+  const items = (await db.getAllFromIndex('items', 'folderId', target)).map(parseItem)
+  return items.sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+}
+
+/** `undefined` for an id with no item — a read has nothing to throw about. */
+export async function getItem(id: string): Promise<LibraryItem | undefined> {
+  const itemId = requireId(id, 'getItem')
+  const db = await getDatabase()
+  const stored = await db.get('items', itemId)
+  return stored === undefined ? undefined : parseItem(stored)
+}
+
+/** Create or overwrite by id (the library id is the store's key). */
+export async function saveItem(item: LibraryItem): Promise<void> {
+  await putItem(parseItem(item))
+}
+
+/** The write half of `saveItem`, for callers that already hold a parsed item. */
+async function putItem(item: LibraryItem): Promise<void> {
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items'], 'readwrite')
+  await requireFolder(tx, item.folderId)
+  await tx.objectStore('items').put(item)
+  await tx.done
+}
+
+/**
+ * Applies a partial update, preserving the item's type fields.
+ *
+ * The patch is merged onto the stored item and the result re-parsed, so the
+ * fields the patch does not name survive and a patch cannot smuggle in a field
+ * belonging to another type. `id`, `type` and `createdAt` are immutable and
+ * `updatedAt` is stamped here — the layer owns those four.
+ */
+export async function updateItem(id: string, patch: Partial<LibraryItem>): Promise<void> {
+  const itemId = requireId(id, 'updateItem')
+
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items'], 'readwrite')
+  const store = tx.objectStore('items')
+  const existing = await store.get(itemId)
+  if (existing === undefined) throw new Error(`library: no item with id "${itemId}"`)
+
+  const merged: Record<string, unknown> = { ...existing, ...patch, updatedAt: Date.now() }
+  if (merged['id'] !== existing.id) {
+    throw new Error(`library: an item's id is immutable (use saveItem to create one)`)
+  }
+  if (merged['type'] !== existing.type) {
+    throw new Error(`library: an item's type is immutable (it is "${existing.type}")`)
+  }
+  if (merged['createdAt'] !== existing.createdAt) {
+    throw new Error(`library: an item's createdAt is immutable`)
+  }
+
+  const updated = parseItem(merged)
+  await requireFolder(tx, updated.folderId)
+  await store.put(updated)
+  await tx.done
+}
+
+export async function deleteItem(id: string): Promise<void> {
+  const itemId = requireId(id, 'deleteItem')
+
+  const db = await getDatabase()
+  const tx = db.transaction('items', 'readwrite')
+  const store = tx.objectStore('items')
+  if ((await store.get(itemId)) === undefined) {
+    throw new Error(`library: no item with id "${itemId}"`)
+  }
+
+  await store.delete(itemId)
+  await tx.done
+}
+
+/** Moves an item to another folder. Nothing else about it changes. */
+export async function moveItem(id: string, targetFolderId: string): Promise<void> {
+  const itemId = requireId(id, 'moveItem')
+  const target = requireId(targetFolderId, 'moveItem')
+
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items'], 'readwrite')
+  await requireFolder(tx, target)
+  const store = tx.objectStore('items')
+  const existing = await store.get(itemId)
+  if (existing === undefined) throw new Error(`library: no item with id "${itemId}"`)
+
+  await store.put(parseItem({ ...existing, folderId: target, updatedAt: Date.now() }))
+  await tx.done
+}
+
+// ---------------------------------------------------------------------------
+// Session → library (PLAN.md §6.3 "save a received item")
+// ---------------------------------------------------------------------------
+
+/**
+ * Saves a §9 session item into the library and returns what was stored.
+ *
+ * The library item gets a NEW uuid: session item ids are ephemeral and live in a
+ * different namespace. Nothing is decrypted or re-encrypted on the way in — a
+ * locked item's tuple is copied byte-for-byte, so it stays locked and the
+ * password stays optional on the send path (PLAN.md §14, decision D9).
+ *
+ * An item whose transfer never completed has no bytes to keep and throws: a
+ * truncated file must never reach the permanent library.
+ */
+export async function saveFromSession(item: SessionItem, folderId: string): Promise<LibraryItem> {
+  const target = requireId(folderId, 'saveFromSession')
+  const converted = parseItem(
+    libraryItemFromSession(item, globalThis.crypto.randomUUID(), target, Date.now()),
+  )
+  await putItem(converted)
+  return converted
+}
+
+function libraryItemFromSession(
+  item: SessionItem,
+  id: string,
+  folderId: string,
+  now: number,
+): LibraryItem {
+  if (item.status !== 'complete') {
+    throw new Error(
+      `library: cannot save a ${item.type} item while its transfer is "${item.status}" — it has no complete data yet`,
+    )
+  }
+
+  switch (item.type) {
+    case 'text':
+      return {
+        id,
+        folderId,
+        name: nameForText(item.content),
+        type: 'text',
+        createdAt: now,
+        updatedAt: now,
+        content: item.content,
+      }
+    case 'richtext':
+      // Tiptap JSON is not readable text, so the name stays the §6.1 default a UI can rename.
+      return {
+        id,
+        folderId,
+        name: 'Rich text note',
+        type: 'richtext',
+        createdAt: now,
+        updatedAt: now,
+        content: item.content,
+      }
+    case 'image':
+      return { id, folderId, type: 'image', createdAt: now, updatedAt: now, ...blobFields(item) }
+    case 'file':
+      return { id, folderId, type: 'file', createdAt: now, updatedAt: now, ...blobFields(item) }
+    case 'locked':
+      return {
+        id,
+        folderId,
+        name: item.label.trim() === '' ? 'Locked item' : item.label,
+        type: 'locked',
+        createdAt: now,
+        updatedAt: now,
+        label: item.label,
+        innerType: item.innerType,
+        // Byte-for-byte copies, so a later mutation of the session item's buffer
+        // cannot rewrite what is in the library.
+        ciphertext: copyBytes(item.ciphertext, 'ciphertext'),
+        iv: copyBytes(item.iv, 'iv'),
+        salt: copyBytes(item.salt, 'salt'),
+      }
+  }
+}
+
+/** The `{name, blob, mimeType, size}` an image/file item contributes. */
+function blobFields(item: ImageItem | FileItem): {
+  name: string
+  blob: Blob
+  mimeType: string
+  size: number
+} {
+  const blob = item.blob
+  if (blob === undefined) {
+    throw new Error(
+      `library: cannot save "${item.fileName}" — its ${item.type} transfer never produced a blob`,
+    )
+  }
+
+  return {
+    name: item.fileName.trim() === '' ? (item.type === 'image' ? 'Image' : 'File') : item.fileName,
+    blob,
+    // An empty announce (a browser leaves `File.type` blank for unknown
+    // extensions) falls back to whatever the blob itself carries.
+    mimeType: item.mimeType === '' ? blob.type : item.mimeType,
+    size: blob.size,
+  }
+}
+
+function copyBytes(bytes: Uint8Array, key: string): Uint8Array {
+  return toBytes(bytes, key, 'locked item').slice()
+}
+
+const NOTE_NAME_MAX_LENGTH = 40
+
+/** A note's name: its opening words, or the §6.1 default when it is empty. */
+function nameForText(content: string): string {
+  const collapsed = content.trim().replace(/\s+/g, ' ')
+  if (collapsed === '') return 'Text note'
+  if (collapsed.length <= NOTE_NAME_MAX_LENGTH) return collapsed
+
+  const clipped = collapsed.slice(0, NOTE_NAME_MAX_LENGTH)
+  const lastSpace = clipped.lastIndexOf(' ')
+  return `${lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped}…`
+}

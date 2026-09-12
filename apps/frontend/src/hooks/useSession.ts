@@ -18,6 +18,14 @@
  * password (`unlockItem`). Its plaintext lives on the store item for as long as the
  * session does — never in IndexedDB, the Cache API or localStorage (PLAN.md §16
  * Phase 4, §17).
+ *
+ * PHASE 5: a library item can be sent without leaving the session (`sendLibraryItem`),
+ * and items selected on the Home screen wait in a module-scoped queue until a session
+ * goes active (decision D8). Nothing on that path is persistent: the queue is an
+ * in-memory array, and a locked library item travels as the `{ciphertext, iv, salt}`
+ * tuple it is stored as — the send path never asks for a password and never decrypts
+ * (decision D9). This module imports only the library's TYPES, so the session hook
+ * cannot reach IndexedDB even by accident.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -36,6 +44,7 @@ import {
   importPeerPublicKey,
   toBase64,
 } from '../lib/crypto'
+import type { LibraryItem } from '../lib/library'
 import type { LockedInnerType, WireMessage } from '../lib/protocol'
 import { bytesToPhrase } from '../lib/safetyPhrase'
 import { SignalingClient, isPeerRejoinedCue, shouldHostSendOffer } from '../lib/signaling'
@@ -167,6 +176,26 @@ const LOCKED_ITEM_MAX_PLAINTEXT_MIB = LOCKED_ITEM_MAX_PLAINTEXT_BYTES / (1024 * 
  */
 function lockedItemTooLargeMessage(alternative: string): string {
   return `a locked item carries at most ${LOCKED_ITEM_MAX_PLAINTEXT_MIB} MiB — send it as ${alternative} instead`
+}
+
+/** Bytes AES-GCM appends to its plaintext; `encryptItem` produces ciphertext + tag. */
+const GCM_TAG_BYTE_LENGTH = 16
+
+/**
+ * D6's cap, re-checked on the path that sends an ALREADY-ENCRYPTED library item.
+ *
+ * The tuple a library locked item holds was produced by `encryptItem` at compose time,
+ * where D6 is enforced, so it is within the cap by construction — but a stored row is
+ * input, not a guarantee, and this is the only frame in the protocol that carries a
+ * whole item. Asserting here means an oversized tuple fails with a message that names
+ * the limit instead of becoming an opaque encoder rejection after the announce has
+ * already gone out.
+ */
+function assertSendableLockedTuple(ciphertext: Uint8Array): void {
+  if (ciphertext.byteLength <= LOCKED_ITEM_MAX_PLAINTEXT_BYTES + GCM_TAG_BYTE_LENGTH) return
+  throw new Error(
+    `this locked item is larger than the ${LOCKED_ITEM_MAX_PLAINTEXT_MIB} MiB a locked item may carry`,
+  )
 }
 
 /**
@@ -408,6 +437,51 @@ function zeroBytes(bytes: ArrayBuffer | Uint8Array): void {
   new Uint8Array(bytes).fill(0)
 }
 
+// ---------------------------------------------------------------------------
+// The pending-send queue (PLAN.md §7 'pre-select then send', §16 Phase 5, D8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Library items the user picked on the Home screen, waiting for a session to carry
+ * them (ORCHESTRATION.md D8).
+ *
+ * MEMORY ONLY, and deliberately module-scoped: this is how a selection survives the
+ * navigation from `/` to `/session` without touching localStorage, the Cache API or
+ * IndexedDB (AGENTS.md). It is not session state either — a session that never
+ * activates leaves the queue alone, so the same selection is still waiting for the
+ * next attempt, and nothing here outlives the tab.
+ */
+let queuedLibrarySends: LibraryItem[] = []
+
+/** Adds items to the pending-send queue, in the order they should be announced. */
+export function queueLibrarySends(items: readonly LibraryItem[]): void {
+  queuedLibrarySends = [...queuedLibrarySends, ...items]
+}
+
+/**
+ * Takes everything in the queue; the caller owns those items now.
+ *
+ * The hook calls this once, on the render where the session goes active, so an item is
+ * announced exactly once per selection. Nothing else consumes the queue — the
+ * on-screen 📚 picker sends immediately and never queues.
+ */
+export function takeQueuedLibrarySends(): LibraryItem[] {
+  const queued = queuedLibrarySends
+  queuedLibrarySends = []
+  return queued
+}
+
+/**
+ * Puts items back at the front of the queue, ahead of anything selected since.
+ *
+ * The drain's escape hatch: an item the session never carried belongs to the next
+ * attempt, and it was selected before whatever was queued while this one was live.
+ */
+function requeueLibrarySends(items: readonly LibraryItem[]): void {
+  if (items.length === 0) return
+  queuedLibrarySends = [...items, ...queuedLibrarySends]
+}
+
 /**
  * Derives this session's encryption key and safety phrase from the peer's public
  * key (PLAN.md §11.1–§11.3, §11.6).
@@ -561,6 +635,31 @@ export interface UseSessionResult {
   unlockItem: (id: string, password: string) => Promise<boolean>
   /** Phase 4: re-hides an item — `unlocked` back to false, plaintext dropped. */
   lockItemAgain: (id: string) => void
+
+  /**
+   * Phase 5 (PLAN.md §7/§16, decision D8): sends a library item as session traffic,
+   * converting it per its type. Text and rich text announce and then carry their stored
+   * content; an image or file runs the ordinary chunk pipeline from its stored blob; a
+   * locked item announces and delivers the `{ciphertext, iv, salt}` tuple it is STORED
+   * as, with no password, no key derivation and no decryption (decision D9).
+   *
+   * A no-op while the session is not active, like every other send. Throws only when a
+   * stored locked tuple is over D6's cap — a state the store should not be able to
+   * produce, and one whose own message is better than the encoder's.
+   */
+  sendLibraryItem: (item: LibraryItem) => void
+
+  /**
+   * ADDITIVE to PLAN.md §9's state: the items THIS DEVICE did not create.
+   *
+   * PLAN.md §8 Phase 4 saves "each received item" to the library, and the board cannot
+   * tell received from sent by looking at an item: `useSession` created some of them
+   * (through the add bar, or from the library) and only ever saw the others as
+   * `item-announce` frames. The hook records which ids it created for exactly this
+   * question, so the ended screen offers to save what actually arrived rather than
+   * what this device already has.
+   */
+  receivedItems: SessionItem[]
 }
 
 export function useSession(options: UseSessionOptions): UseSessionResult {
@@ -574,6 +673,12 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
   const safetyPhrase = useSessionStore((state) => state.safetyPhrase)
   const phraseConfirmed = useSessionStore((state) => state.phraseConfirmed)
   const peerConfirmed = useSessionStore((state) => state.peerConfirmed)
+  /**
+   * The board's items, subscribed here as well as in the board: the ended screen needs
+   * to know what arrived (`receivedItems`), and that answer is this device's, not the
+   * rendering component's.
+   */
+  const items = useSessionStore((state) => state.items)
 
   const startConnecting = useSessionStore((state) => state.startConnecting)
   const setSessionCode = useSessionStore((state) => state.setSessionCode)
@@ -613,6 +718,13 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
    */
   const exchangedPeerKeyRef = useRef<string | null>(null)
   const confirmSentRef = useRef(false)
+
+  /**
+   * The ids of the items THIS DEVICE created — the add bar's items and the ones sent
+   * from the library. Everything else on the board arrived over the wire, which is what
+   * `receivedItems` filters on (PLAN.md §8 Phase 4, §9).
+   */
+  const locallyCreatedIdsRef = useRef(new Set<string>())
 
   /**
    * Per-item transfer state. Deliberately refs, not state: the assemblers hold the
@@ -1093,6 +1205,7 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
 
       const id = crypto.randomUUID()
       const content = initialContent ?? ''
+      locallyCreatedIdsRef.current.add(id)
       upsertItem({ id, type: 'text', status: 'complete', createdAt: Date.now(), content })
       sendItemFrame({ t: 'item-announce', id, type: 'text' })
       // The announce carries no content, so an item that starts non-empty needs its
@@ -1109,6 +1222,7 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
 
       const id = crypto.randomUUID()
       const content = initialJson ?? ''
+      locallyCreatedIdsRef.current.add(id)
       upsertItem({ id, type: 'richtext', status: 'complete', createdAt: Date.now(), content })
       sendItemFrame({ t: 'item-announce', id, type: 'richtext' })
       if (content !== '') sendItemFrame({ t: 'richtext-delta', id, content })
@@ -1126,6 +1240,7 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
       const id = crypto.randomUUID()
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
 
+      locallyCreatedIdsRef.current.add(id)
       upsertItem({
         id,
         type: localTypeFor(file.type),
@@ -1185,6 +1300,7 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
       }
 
       const id = crypto.randomUUID()
+      locallyCreatedIdsRef.current.add(id)
       upsertItem({
         id,
         type: 'locked',
@@ -1210,6 +1326,79 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
       return id
     },
     [sendAwaitable, upsertItem],
+  )
+
+  /**
+   * Sends one item from this device's library (PLAN.md §7, §16 Phase 5, decision D8).
+   *
+   * The conversion is per type, and each case reuses the same path the add bar takes so
+   * there is one spelling of "an item enters a session":
+   *
+   *   - text / rich text — announce, plus the stored content as the item's first delta.
+   *     PLAN.md §10's announce carries no content, and this content is already final.
+   *   - image / file — the stored `Blob` becomes a `File` under the item's name and MIME
+   *     type and goes through the ordinary chunk pipeline, chunker and all. The row
+   *     this device shows carries that `File`, exactly like a picked one.
+   *   - locked — announce + `locked-payload`, carrying the STORED `{ciphertext, iv,
+   *     salt}` untouched (decision D9): no password is asked for, no key is derived and
+   *     nothing is decrypted, because the tuple is what travels and the receiver needs
+   *     the password to open it. That is the double-encryption property PLAN.md §2
+   *     promises, and a sender forwarding a locked item it cannot open is the normal
+   *     case, not a failure.
+   *
+   * The active gate is the same one every send uses, and the drain that feeds this from
+   * the D8 queue holds nothing but these calls.
+   */
+  const sendLibraryItem = useCallback(
+    (item: LibraryItem): void => {
+      if (!sessionIsActive()) return
+
+      switch (item.type) {
+        case 'text':
+          addTextItem(item.content)
+          return
+        case 'richtext':
+          addRichTextItem(item.content)
+          return
+        case 'image':
+        case 'file':
+          addFileItem(new File([item.blob], item.name, { type: item.mimeType }))
+          return
+        case 'locked': {
+          assertSendableLockedTuple(item.ciphertext)
+
+          const id = crypto.randomUUID()
+          locallyCreatedIdsRef.current.add(id)
+          upsertItem({
+            id,
+            type: 'locked',
+            status: 'complete',
+            createdAt: Date.now(),
+            label: item.label,
+            innerType: item.innerType,
+            ciphertext: item.ciphertext,
+            iv: item.iv,
+            salt: item.salt,
+          })
+          sendItemFrame({
+            t: 'item-announce',
+            id,
+            type: 'locked',
+            label: item.label,
+            innerType: item.innerType,
+          })
+          sendItemFrame({
+            t: 'locked-payload',
+            id,
+            ciphertext: item.ciphertext,
+            iv: item.iv,
+            salt: item.salt,
+          })
+          return
+        }
+      }
+    },
+    [addFileItem, addRichTextItem, addTextItem, sendItemFrame, upsertItem],
   )
 
   const updateTextItem = useCallback(
@@ -1480,6 +1669,8 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
       exchangedPeerKeyRef.current = null
       sessionCodeRef.current = null
       confirmSentRef.current = false
+      // The previous attempt's ids belong to its board, which `startConnecting` clears.
+      locallyCreatedIdsRef.current.clear()
       stopItemWork()
       setChannelOpen(false)
       setSessionKeyReady(false)
@@ -1614,6 +1805,46 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
   }, [phase, markActive])
 
   /**
+   * Hands the D8 queue to the session once the item gate is open (PLAN.md §7/§16 Phase 5).
+   *
+   * The queue is filled on the Home screen, before this page exists, so the items have
+   * to wait for a session that can actually carry them: PLAN.md §8 gates item traffic on
+   * the both-confirms transition, and a frame sent earlier would be refused by the
+   * transport. Declared after the `markActive` effect so the gate is open by the time
+   * this runs — React runs a commit's effects in declaration order.
+   *
+   * `sendLibraryItem` returns silently once the session is no longer active, so the drain
+   * asks the same question itself, item by item, and hands any remainder back to the
+   * queue instead of dropping it: a session that ends mid-drain (a rejected send ends it)
+   * must not destroy a selection the user never got a notice about. A throw (D6's cap on a
+   * stored tuple) is reported the way every other send failure is instead of vanishing
+   * inside an effect.
+   */
+  useEffect(() => {
+    if (phase !== 'active') return
+
+    const queued = takeQueuedLibrarySends()
+    for (const [index, item] of queued.entries()) {
+      // Checked per item, not once for the loop: `sessionIsActive` reads the store, so it
+      // sees a session that ended since the previous send.
+      if (!sessionIsActive()) {
+        requeueLibrarySends(queued.slice(index))
+        return
+      }
+
+      try {
+        sendLibraryItem(item)
+      } catch (error) {
+        // The item that failed is the one this device reports; the untaken rest of the
+        // selection stays queued for the next attempt.
+        requeueLibrarySends(queued.slice(index + 1))
+        endSession(describeError(error))
+        return
+      }
+    }
+  }, [phase, endSession, sendLibraryItem])
+
+  /**
    * PLAN.md §19 decision 10: sessions are single-use, so a finished session leaves no
    * live transfer work behind — no pump waiting on a channel, no assembler holding
    * file bytes, no timer that could still write.
@@ -1704,6 +1935,15 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
         ? 'Guest — you opened the other device’s session'
         : 'Assigning role…'
 
+  /**
+   * What PLAN.md §8 Phase 4 may save — the items that arrived over the wire.
+   *
+   * Derived against the ids this device created rather than stored, so an item can
+   * never be half-labelled: the id is recorded with the row it belongs to, in the same
+   * task, and the filter is therefore exact from the first render that sees the item.
+   */
+  const receivedItems = items.filter((item) => !locallyCreatedIdsRef.current.has(item.id))
+
   return {
     role,
     phase,
@@ -1722,10 +1962,12 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     addRichTextItem,
     addFileItem,
     addLockedItem,
+    sendLibraryItem,
     updateTextItem,
     updateRichTextItem,
     deleteItem,
     unlockItem,
     lockItemAgain,
+    receivedItems,
   }
 }

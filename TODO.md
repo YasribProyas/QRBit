@@ -30,6 +30,19 @@ Items the agent cannot complete autonomously. Per AGENTS.md, work continues past
 
 ## Deferred design questions
 
+- [ ] **Destructive deletes have no confirmation (Phase 5 review P2).** §6.4's menu spec is
+      literal: rename/move/delete send immediately. Folder delete cascades the whole subtree
+      permanently — total data loss on one mis-tap on a phone. Product decision: add a confirm
+      dialog (recommended) or accept spec-literal behaviour. Left as-is tonight; the menu label
+      does disclose the cascade ("Delete folder and contents").
+- [ ] **Save-to-library dialog uses one shared folder picker, not §8 Phase 4's per-item picker.**
+      Per-item targets remain reachable (pick → Save row 1 → re-pick → Save row 2; the dialog stays
+      open), so this is a shape deviation from the spec's wording, not a functional loss. Accepted
+      reading; revisit if the per-item flow feels clumsy in use.
+- [ ] **DataChannel `maxMessageSize` on real devices (Phase 4 review residual).** A locked item is
+      one frame up to ~3 MiB. If a browser rejects it, send() throws and the session ends rather
+      than failing the item. Needs a real-device check (Chrome/Safari/Firefox).
+
 - [ ] **No server-side registry of issued session codes** (Phase 8). `createSession`
       writes no record; identity is pure `idFromName(code)`. So PLAN.md §17's
       "expired codes return 404" only holds while the DO instance is alive — after
