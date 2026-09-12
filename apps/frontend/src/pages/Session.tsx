@@ -3,6 +3,7 @@ import { AddItemBar } from '../components/session/AddItemBar'
 import { SafetyPhraseOverlay } from '../components/session/SafetyPhraseOverlay'
 import { SessionBoard, isSenderRole } from '../components/session/SessionBoard'
 import { useSession } from '../hooks/useSession'
+import { LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from '../lib/crypto'
 
 /**
  * Session page (PLAN.md §8).
@@ -84,7 +85,13 @@ export function Session() {
       */}
       {session.phase === 'active' ? (
         <>
-          {isSenderRole(session.role) ? <AddItemBar api={session} /> : null}
+          {/*
+            D6's cap reaches the compose modal from the one module that owns the number
+            (`lib/crypto.ts`), rather than from a second copy in the UI.
+          */}
+          {isSenderRole(session.role) ? (
+            <AddItemBar api={session} maxLockedFileBytes={LOCKED_ITEM_MAX_PLAINTEXT_BYTES} />
+          ) : null}
           <SessionBoard api={session} role={session.role} />
         </>
       ) : null}

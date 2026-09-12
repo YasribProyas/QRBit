@@ -1,26 +1,35 @@
 /**
- * Tests for the E2EE core (PLAN.md §11.1–§11.3, §10, §17).
+ * Tests for the E2EE core (PLAN.md §11.1–§11.4, §10, §17).
  *
  * The interoperability test is the one that matters most: it proves that two
  * independent devices, each holding only their own private key and the peer's
  * public key, arrive at the same session key and the same safety phrase. If it
  * ever fails, the app would silently fail to decrypt every frame.
  *
+ * Locked items are at the bottom: PBKDF2 at 600,000 iterations costs ~300ms per
+ * call by design (PLAN.md §19.9), so those tests share work where they can and
+ * stay in the low tens of derivations rather than the hundreds.
+ *
  * Runs in the default node environment: Node 20+ exposes `globalThis.crypto`.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
+  deriveItemKey,
   deriveSafetyPhraseBytes,
   deriveSessionKey,
   deriveSharedSecret,
   decrypt,
+  decryptItem,
   encrypt,
+  encryptItem,
   exportPublicKey,
   fromBase64,
   generateKeypair,
   importPeerPublicKey,
+  LOCKED_ITEM_MAX_PLAINTEXT_BYTES,
+  PBKDF2_ITERATIONS,
   PHRASE_BYTE_LENGTH,
   toBase64,
 } from './crypto'
@@ -91,6 +100,28 @@ function patternedBytes(length: number): Uint8Array<ArrayBuffer> {
 
 function utf8(text: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(text)
+}
+
+/** Returns a copy of `bytes` with bit 0 of one byte flipped. */
+function flipBit(bytes: Uint8Array, index: number): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(bytes)
+  const original = copy[index]
+  if (original === undefined) throw new Error(`test: index ${index} is outside the buffer`)
+  copy[index] = original ^ 0x01
+  return copy
+}
+
+/**
+ * Narrows one argument of a spied `deriveKey` call to PBKDF2 parameters, so the
+ * iteration count can be asserted without reaching for a cast.
+ */
+function isPbkdf2Params(algorithm: unknown): algorithm is Pbkdf2Params {
+  return (
+    typeof algorithm === 'object' &&
+    algorithm !== null &&
+    'name' in algorithm &&
+    algorithm.name === 'PBKDF2'
+  )
 }
 
 /**
@@ -345,6 +376,115 @@ describe('session key usages and extractability', () => {
     expect(key.extractable).toBe(false)
     expect(key.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 })
     expect([...key.usages].sort()).toEqual(['decrypt', 'encrypt'])
+    await expect(globalThis.crypto.subtle.exportKey('raw', key)).rejects.toThrow()
+  })
+})
+
+describe('locked items (PLAN.md §11.4, §6.2)', () => {
+  const PASSWORD = 'correct horse battery staple'
+  const WRONG_PASSWORD = 'correct horse battery stapl'
+
+  it('round-trips text bytes, a 64 KiB payload and empty plaintext', async () => {
+    const payloads = [
+      utf8('Uni Portal: hunter2 / 4831'),
+      patternedBytes(64 * 1024),
+      new Uint8Array(0),
+    ]
+    for (const plaintext of payloads) {
+      const { ciphertext, iv, salt } = await encryptItem(PASSWORD, plaintext)
+      const decrypted = await decryptItem(PASSWORD, salt, iv, ciphertext)
+      expect(decrypted.byteLength).toBe(plaintext.byteLength)
+      expect(firstDifference(decrypted, plaintext)).toBe(-1)
+    }
+  })
+
+  it('rejects the wrong password with an OperationError, and does not swallow it', async () => {
+    const plaintext = utf8('for the right password only')
+    const { ciphertext, iv, salt } = await encryptItem(PASSWORD, plaintext)
+
+    const failure = await decryptItem(WRONG_PASSWORD, salt, iv, ciphertext).then(
+      () => null,
+      (error: unknown) => error,
+    )
+    if (failure === null) throw new Error('test: a wrong password decrypted a locked item')
+    if (!(failure instanceof DOMException)) {
+      throw new Error(`test: expected a DOMException, received ${String(failure)}`)
+    }
+    // PLAN.md §17: the caller distinguishes failure from success by catching this.
+    expect(failure.name).toBe('OperationError')
+    expect(failure.message).toMatch(/operation/i)
+
+    // The rejection must be per-call: it may not poison the same tuple for the
+    // correct password (that is what "clears the input and lets you retry" needs).
+    expect(await decryptItem(PASSWORD, salt, iv, ciphertext)).toEqual(plaintext)
+  })
+
+  it('draws a fresh 16-byte salt and 12-byte IV per call, so output never repeats', async () => {
+    const plaintext = utf8('identical input twice')
+    const first = await encryptItem(PASSWORD, plaintext)
+    const second = await encryptItem(PASSWORD, plaintext)
+
+    expect(first.salt.byteLength).toBe(16)
+    expect(first.iv.byteLength).toBe(12)
+    expect(second.salt.byteLength).toBe(16)
+    expect(second.iv.byteLength).toBe(12)
+    expect([...first.salt]).not.toEqual([...second.salt])
+    expect([...first.iv]).not.toEqual([...second.iv])
+    expect([...first.ciphertext]).not.toEqual([...second.ciphertext])
+
+    // The salt is not decoration: the first ciphertext must not open under the
+    // second salt, which proves the fresh salt actually seeds the derivation.
+    await expect(decryptItem(PASSWORD, second.salt, first.iv, first.ciphertext)).rejects.toThrow()
+  })
+
+  it('pins PBKDF2 to SHA-256 at exactly 600,000 iterations', async () => {
+    const deriveKey = vi.spyOn(globalThis.crypto.subtle, 'deriveKey')
+    try {
+      const key = await deriveItemKey(PASSWORD, new Uint8Array(16))
+      expect(key.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 })
+
+      const pbkdf2 = deriveKey.mock.calls.map((call) => call[0]).find(isPbkdf2Params)
+      if (pbkdf2 === undefined) {
+        throw new Error('test: deriveItemKey did not call deriveKey with PBKDF2')
+      }
+      // Both spellings on purpose: the literal pins the number, the constant
+      // pins that callers and tests agree on which number that is.
+      expect(pbkdf2.iterations).toBe(600_000)
+      expect(pbkdf2.iterations).toBe(PBKDF2_ITERATIONS)
+      expect(pbkdf2.hash).toBe('SHA-256')
+      expect(pbkdf2.salt.byteLength).toBe(16)
+    } finally {
+      deriveKey.mockRestore()
+    }
+  })
+
+  it('rejects a flipped ciphertext bit and a flipped IV bit', async () => {
+    const plaintext = utf8('tamper target')
+    const { ciphertext, iv, salt } = await encryptItem(PASSWORD, plaintext)
+
+    await expect(
+      decryptItem(PASSWORD, salt, iv, flipBit(ciphertext, 0)),
+    ).rejects.toBeInstanceOf(DOMException)
+    await expect(
+      decryptItem(PASSWORD, salt, flipBit(iv, 0), ciphertext),
+    ).rejects.toBeInstanceOf(DOMException)
+  })
+
+  it('caps locked-item plaintext at 3 MiB (D6)', () => {
+    // One `locked-payload` frame carries the whole item and WIRE_MAX_FRAME_BYTES
+    // is 4 MiB, so the plaintext cap leaves room for the tag, IV, salt and
+    // MessagePack overhead. Anything larger goes as a regular file item.
+    expect(LOCKED_ITEM_MAX_PLAINTEXT_BYTES).toBe(3 * 1024 * 1024)
+    expect(LOCKED_ITEM_MAX_PLAINTEXT_BYTES).toBe(3_145_728)
+  })
+
+  it('derives a non-extractable AES-256-GCM key with exactly encrypt and decrypt usages', async () => {
+    const key = await deriveItemKey(PASSWORD, new Uint8Array(16))
+    expect(key.extractable).toBe(false)
+    expect(key.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 })
+    expect([...key.usages].sort()).toEqual(['decrypt', 'encrypt'])
+    // PLAN.md §6.2/§19.3 — the item key is re-derived on every unlock and can
+    // never be read back out to be stored anywhere.
     await expect(globalThis.crypto.subtle.exportKey('raw', key)).rejects.toThrow()
   })
 })

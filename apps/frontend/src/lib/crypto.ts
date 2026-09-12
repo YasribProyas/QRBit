@@ -1,6 +1,6 @@
 /**
- * QRDrop crypto core — key exchange, key derivation and session encryption
- * (PLAN.md §11.1–§11.3, §2, §10, §17).
+ * QRDrop crypto core — key exchange, key derivation, session encryption and
+ * locked-item encryption (PLAN.md §11.1–§11.4, §2, §6.2, §10, §17).
  *
  * Everything here is native Web Crypto (`globalThis.crypto.subtle`). No
  * third-party crypto library is used or permitted (AGENTS.md, PLAN.md §8).
@@ -22,8 +22,14 @@
  *   - No `console.*` call exists in this file, by design (PLAN.md §17: never log
  *     keys, SDP, ICE or item data).
  *
- * NOT IN PHASE 2 (leave the seams alone):
- *   - §11.4 `deriveItemKey` / `encryptItem` / `decryptItem` (PBKDF2) — Phase 4.
+ * Locked-item rules honoured by the §11.4 functions below (PLAN.md §2, §6.2, §19.3):
+ *   - The item key is derived from the user's password on every call and is never
+ *     stored anywhere: no CryptoKey, no derived bits and no copy of the password
+ *     outlives the operation that produced it.
+ *   - Only `{ ciphertext, iv, salt }` ever leaves this module, which is exactly
+ *     the tuple PLAN.md §6.2 stores (in Phase 5) and sends (in Phase 4).
+ *
+ * NOT YET IMPLEMENTED (leave the seams alone):
  *   - §11.5 `encryptExport` / `decryptExport` — Phase 7.
  */
 
@@ -223,6 +229,132 @@ export async function decrypt(
   const iv = envelope.slice(0, IV_BYTE_LENGTH)
   const ciphertext = envelope.slice(IV_BYTE_LENGTH)
   const plaintext = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
+  return new Uint8Array(plaintext)
+}
+
+/**
+ * PBKDF2 iteration count for item keys (PLAN.md §11.4, §19 decision 9).
+ *
+ * OWASP's 2023 recommendation. Costs roughly 300ms on a mid-range phone, which
+ * is the point: an attacker who steals the `{ ciphertext, iv, salt }` tuple must
+ * pay that cost per password guess, while a legitimate unlock pays it once and
+ * shows a spinner.
+ */
+export const PBKDF2_ITERATIONS = 600_000
+
+/** PBKDF2 salt length in bytes (PLAN.md §6.1/§9: `salt: Uint8Array // 16 bytes`). */
+const ITEM_SALT_BYTE_LENGTH = 16
+
+/** AES-256 key length in bits for item keys (PLAN.md §11.4: `keyLength=256`). */
+const ITEM_KEY_BIT_LENGTH = 256
+
+/**
+ * Largest plaintext a single locked item may carry (orchestration decision D6).
+ *
+ * `locked-payload` sends the whole item in ONE frame, and `protocol.ts`
+ * `WIRE_MAX_FRAME_BYTES` caps a frame at 4 MiB. The frame must hold the
+ * ciphertext plus the 16-byte GCM tag, the 12-byte IV, the 16-byte salt and the
+ * MessagePack envelope around them, so the plaintext is capped well below 4 MiB
+ * to leave that headroom. Chunking an encrypted blob would mean a second chunk
+ * pipeline for a rare case, so larger content is sent as a regular file item
+ * (already E2EE in transit; locking exists for double encryption of secrets
+ * like passwords and keys, not for media). The UI enforces this at compose
+ * time with a clear error; `decodeWire`'s existing 4 MiB bound is the defensive
+ * backstop.
+ *
+ * Kept here rather than in the UI so the one number has one spelling.
+ */
+export const LOCKED_ITEM_MAX_PLAINTEXT_BYTES = 3 * 1024 * 1024
+
+/**
+ * Derives a locked item's AES-256-GCM key from a password with PBKDF2
+ * (PLAN.md §11.4).
+ *
+ * The returned key is non-extractable and usable only for encrypt/decrypt, so it
+ * cannot be read back out of the CryptoKey and kept (PLAN.md §6.2, §19.3 — the
+ * key is re-derived on every unlock and never stored). The password itself is
+ * imported as non-extractable key material and dropped when this function
+ * returns; nothing here caches it.
+ *
+ * The salt is supplied by the caller because decryption must reuse the salt that
+ * was stored with the ciphertext.
+ */
+export async function deriveItemKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  const passwordMaterial = await globalThis.crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  )
+  return globalThis.crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: toBufferSourceView(salt),
+      iterations: PBKDF2_ITERATIONS,
+    },
+    passwordMaterial,
+    { name: 'AES-GCM', length: ITEM_KEY_BIT_LENGTH },
+    false,
+    ['encrypt', 'decrypt'],
+  )
+}
+
+/**
+ * Encrypts a locked item's plaintext under a password (PLAN.md §11.4).
+ *
+ * Returns the `{ ciphertext, iv, salt }` tuple that PLAN.md §6.1 stores in
+ * IndexedDB and §10 puts on the wire; nothing else about the item is encrypted,
+ * so the label stays readable by design (§9 — the receiver shows the label
+ * before unlocking).
+ *
+ * Both the 16-byte salt and the 12-byte GCM IV are drawn fresh from
+ * `globalThis.crypto.getRandomValues` on every call, so encrypting the same
+ * plaintext with the same password twice yields unrelated output. The IV is
+ * never caller-supplied: reuse under the same item key would leak plaintext XOR
+ * and break GCM authentication. GCM's 16-byte tag is already appended to the
+ * ciphertext by Web Crypto, so `ciphertext` is `plaintext.length + 16` bytes.
+ */
+export async function encryptItem(
+  password: string,
+  plaintext: Uint8Array,
+): Promise<{ ciphertext: Uint8Array; iv: Uint8Array; salt: Uint8Array }> {
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(ITEM_SALT_BYTE_LENGTH))
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTE_LENGTH))
+  const key = await deriveItemKey(password, salt)
+  const ciphertext = await globalThis.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    toBufferSourceView(plaintext),
+  )
+  return { ciphertext: new Uint8Array(ciphertext), iv, salt }
+}
+
+/**
+ * Decrypts a locked item with the password the user just typed (PLAN.md §11.4).
+ *
+ * The GCM failure is deliberately NOT caught: a wrong password, a tampered
+ * ciphertext, a tampered IV or a swapped salt all reject with Web Crypto's
+ * `OperationError` DOMException, which is how callers tell "this password is
+ * wrong" from "here is the plaintext" (PLAN.md §16 Phase 4, §17). Catching it
+ * here would turn a failed unlock into silently empty content.
+ *
+ * The key is derived inside this call and dropped with it; no part of the item
+ * key survives the operation (PLAN.md §6.2, §19.3).
+ */
+export async function decryptItem(
+  password: string,
+  salt: Uint8Array,
+  iv: Uint8Array,
+  ciphertext: Uint8Array,
+): Promise<Uint8Array> {
+  const key = await deriveItemKey(password, salt)
+  const plaintext = await globalThis.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: toBufferSourceView(iv) },
+    key,
+    toBufferSourceView(ciphertext),
+  )
   return new Uint8Array(plaintext)
 }
 

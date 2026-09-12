@@ -298,12 +298,39 @@ describe('itemFromAnnounce (PLAN.md §9/§10)', () => {
     expect(item).toMatchObject({ totalSize: 16 * 1024 * 2 + 5, totalChunks: 3 })
   })
 
-  it('returns null for a locked announce, which Phase 4 owns', () => {
-    expect(
-      itemFromAnnounce(
-        { t: 'item-announce', id: 'f', type: 'locked', label: 'Uni portal', innerType: 'text' },
-        createdAt,
-      ),
-    ).toBe(null)
+  it('maps a locked announce onto a transferring row with no ciphertext yet (PLAN.md §10)', () => {
+    const item = itemFromAnnounce(
+      { t: 'item-announce', id: 'f', type: 'locked', label: 'Uni portal', innerType: 'file' },
+      createdAt,
+    )
+
+    // PLAN.md §10 carries a locked item in two frames, so the announce alone produces a
+    // row that is not yet openable: `transferring` until its locked-payload lands.
+    expect(item).toEqual({
+      id: 'f',
+      type: 'locked',
+      status: 'transferring',
+      createdAt,
+      label: 'Uni portal',
+      innerType: 'file',
+      ciphertext: new Uint8Array(0),
+      iv: new Uint8Array(0),
+      salt: new Uint8Array(0),
+    })
+
+    // Empty byte fields are per item, never one shared array: an empty `Uint8Array` is
+    // still mutable, and two rows sharing one would be a write waiting to happen.
+    const other = itemFromAnnounce(
+      { t: 'item-announce', id: 'g', type: 'locked', label: 'Other' },
+      createdAt,
+    )
+    if (other?.type !== 'locked' || item?.type !== 'locked') {
+      throw new Error('test bug: the announce did not produce a locked item')
+    }
+    expect(other.innerType).toBe('text')
+    expect(other.label).toBe('Other')
+    expect(other.ciphertext).not.toBe(item.ciphertext)
+    expect(other.iv).not.toBe(item.iv)
+    expect(other.salt).not.toBe(item.salt)
   })
 })

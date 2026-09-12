@@ -13,9 +13,11 @@
 
 import type { SessionRole } from '../../lib/signaling'
 import { useSessionStore } from '../../store/sessionStore'
-import type { ItemStatus, ItemType, LockedItem, SessionItem } from '../../store/sessionStore'
+import type { ItemStatus, ItemType, SessionItem } from '../../store/sessionStore'
+import type { LockedItemInput } from './LockedItemComposeModal'
 import { FileItem } from './items/FileItem'
 import { ImageItem } from './items/ImageItem'
+import { LockedItem } from './items/LockedItem'
 import { RichTextItem } from './items/RichTextItem'
 import { TextItem } from './items/TextItem'
 
@@ -28,6 +30,20 @@ export interface ItemsApi {
   addTextItem(initialContent?: string): string
   addRichTextItem(initialJson?: string): string
   addFileItem(file: File): string
+  /**
+   * Phase 4 (PLAN.md §16): encrypts the composed content under the password on this
+   * device and sends it as an announce plus a `locked-payload`, resolving with the new
+   * item's id. Typed with the compose modal's own input, so the two ends of that
+   * contract cannot drift without a compile error at the page that joins them.
+   */
+  addLockedItem(input: LockedItemInput): Promise<string>
+  /**
+   * Phase 4: decrypts a locked item. True with the plaintext revealed in memory, false
+   * for a wrong password, rejection only when there is nothing to unlock.
+   */
+  unlockItem(id: string, password: string): Promise<boolean>
+  /** Phase 4: re-hides an unlocked item. */
+  lockItemAgain(id: string): void
   updateTextItem(id: string, content: string): void
   updateRichTextItem(id: string, json: string): void
   deleteItem(id: string): void
@@ -141,23 +157,23 @@ function renderItem(item: SessionItem, editable: boolean, api: ItemsApi) {
     case 'file':
       return <FileItem item={item} />
     case 'locked':
-      return <LockedItemRow item={item} />
+      /*
+        The one item whose sender and receiver views are the same shape (PLAN.md §9):
+        both sides unlock the ciphertext with the password, and `sender` only decides
+        whether the row states the inner type the author chose. The row owns the reveal;
+        see `items/LockedItem.tsx`.
+      */
+      return (
+        <LockedItem
+          item={item}
+          sender={editable}
+          onUnlock={api.unlockItem}
+          onLockAgain={api.lockItemAgain}
+        />
+      )
     default:
       return assertNever(item)
   }
-}
-
-/**
- * Phase 4 owns locked items end to end (PLAN.md §16). Until then the label the
- * sender chose is all there is to show — no password field, no unlock, and no
- * ciphertext handling, all of which arrive with `LockedItem.tsx` in that phase.
- */
-function LockedItemRow({ item }: { item: LockedItem }) {
-  return (
-    <p className="locked-item muted">
-      <span className="locked-item__label">{item.label}</span> — locked; unlocking arrives in Phase 4.
-    </p>
-  )
 }
 
 function assertNever(value: never): never {

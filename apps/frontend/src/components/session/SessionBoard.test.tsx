@@ -37,6 +37,9 @@ function makeApi(): ItemsApi {
     addTextItem: vi.fn((): string => 'new-text'),
     addRichTextItem: vi.fn((): string => 'new-rich'),
     addFileItem: vi.fn((): string => 'new-file'),
+    addLockedItem: vi.fn(async (): Promise<string> => 'new-locked'),
+    unlockItem: vi.fn(async (): Promise<boolean> => true),
+    lockItemAgain: vi.fn(),
     updateTextItem: vi.fn(),
     updateRichTextItem: vi.fn(),
     deleteItem: vi.fn(),
@@ -92,7 +95,9 @@ function lockedItem(overrides: Partial<LockedItem> = {}): LockedItem {
   return {
     id: 'l1',
     type: 'locked',
-    status: 'pending',
+    // `complete` because the unlocked announce has landed its ciphertext, which is what
+    // the row's Unlock affordance waits for.
+    status: 'complete',
     createdAt: 5,
     label: 'Uni portal password',
     innerType: 'text',
@@ -241,15 +246,56 @@ describe('SessionBoard item delegation (PLAN.md §9)', () => {
     expect(rendered[1]?.textContent).toContain('report.pdf')
   })
 
-  it('shows a locked item by its label only, with the phase that builds it', () => {
+  it('renders a locked row with its label and an Unlock affordance, and no password field until it is asked for', () => {
     setItems([lockedItem()])
 
-    const { element } = renderBoard()
+    const { element } = renderBoard({ role: 'host' })
 
     expect(element.textContent).toContain('Uni portal password')
-    expect(element.textContent).toContain('Phase 4')
-    // No unlock affordance exists yet (PLAN.md §16 Phase 4 owns it).
+    expect(element.querySelector('.locked-item__badge')).not.toBe(null)
+    const unlock = element.querySelector('.locked-item__unlock')
+    expect(unlock).not.toBe(null)
+    // The password modal is the row's, opened on demand: PLAN.md §9 has the receiver
+    // see the label only, so a password field on the board would be a leak of nothing
+    // but noise.
     expect(element.querySelector('input[type="password"]')).toBe(null)
+
+    if (!(unlock instanceof HTMLButtonElement)) throw new Error('test bug: no unlock button')
+    act(() => {
+      unlock.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    // The row unlocks nothing itself — it opens the password modal and hands the
+    // board's `api.unlockItem` to it (the submit path is pinned in LockedItem's and
+    // UnlockModal's own tests).
+    expect(element.querySelector('input[type="password"]')).not.toBe(null)
+  })
+
+  it('delegates unlocking and re-hiding to the items API', () => {
+    setItems([lockedItem({ unlocked: true, plaintextContent: 'the secret' })])
+
+    const { element, api } = renderBoard({ role: 'host' })
+
+    expect(element.textContent).toContain('the secret')
+
+    const lockAgain = element.querySelector('.locked-item__lock-again')
+    expect(lockAgain).not.toBe(null)
+
+    act(() => {
+      lockAgain?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(api.lockItemAgain).toHaveBeenCalledWith('l1')
+  })
+
+  it('shows the inner type the sender chose to the sender only', () => {
+    setItems([lockedItem({ innerType: 'file' })])
+
+    const sender = renderBoard({ role: 'guest' })
+    expect(sender.element.querySelector('.locked-item__inner-type')).not.toBe(null)
+
+    const receiver = renderBoard({ role: 'host' })
+    expect(receiver.element.querySelector('.locked-item__inner-type')).toBe(null)
   })
 })
 

@@ -168,6 +168,20 @@ PLAN.md §12 specifies `send(msg): void`, but AES-256-GCM encryption is async.
 Resolution for Phase 2: keep the public `void` signature and serialise through an
 internal promise queue inside the `encodeFrame` seam. Do not broaden the signature.
 
+### D6 — locked file items capped at 3 MiB plaintext (Phase 4)
+`locked-payload` carries the whole item in ONE frame, and `WIRE_MAX_FRAME_BYTES` is
+4 MiB (ciphertext + iv + salt + msgpack overhead needs headroom). Chunking an
+encrypted blob would add a second chunk pipeline for a rare case. Capped at
+compose time with a clear error; larger content goes as a regular file item
+(already E2EE in transit — locked exists for at-rest/double encryption, which
+is for secrets like passwords and keys, not media). decodeWire's existing 4 MiB
+bound is the defensive backstop.
+
+### D7 — locked compose asks for the password twice (Phase 4)
+§16 Phase 4 says "label, type, password, content" — one field. A password that
+provides the ONLY decryption path and cannot be recovered deserves a
+confirmation field; mismatch disables submit. Disclosed deviation from PLAN.md.
+
 ## Concurrency contract for parallel lanes
 Phases are strictly sequential (AGENTS.md). Within a phase, lanes run in the
 **shared cwd** with **disjoint file ownership** — each lane may only create or

@@ -815,3 +815,244 @@ button {
     flex-basis: auto;
   }
 }
+
+/* ---------------------------------------------- locked item row (P4) -- */
+
+/*
+ * PLAN.md §9's `locked` row: the label is plaintext by design, and everything the
+ * password protects sits inside `.locked-item__reveal`. Both views are the same
+ * row — the sender's copy additionally names the inner type it chose.
+ */
+.locked-item__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.locked-item__badge {
+  flex: none;
+}
+
+.locked-item__label {
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.locked-item__inner-type {
+  flex: none;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.0625rem 0.5rem;
+}
+
+.locked-item__unlock,
+.locked-item__lock-again {
+  flex: none;
+  margin-left: auto;
+}
+
+.locked-item__pending {
+  padding-top: 0.375rem;
+}
+
+.locked-item__reveal {
+  margin-top: 0.5rem;
+}
+
+/* Secret text is usually a password or a key: it keeps its own whitespace. */
+.locked-item__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.9375rem;
+}
+
+.locked-item__download {
+  margin-top: 0.5rem;
+}
+
+/* ------------------------------------------- locked item modals (P4) -- */
+
+/*
+ * The compose and unlock dialogs share one shell: a viewport-fixed overlay that
+ * swallows every pointer event aimed at the board behind it (the same idiom as the
+ * safety-phrase overlay) with a single-column panel on top.
+ */
+.locked-compose,
+.unlock-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--gap);
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.locked-compose__panel,
+.unlock-modal__panel {
+  width: 100%;
+  max-width: 26rem;
+  margin: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: calc(var(--gap) * 1.25) var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.locked-compose__title,
+.unlock-modal__title {
+  font-size: 1.0625rem;
+}
+
+.locked-compose__intro {
+  margin-bottom: 0.25rem;
+}
+
+.locked-compose__field,
+.unlock-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.locked-compose__field-label,
+.unlock-modal__field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.locked-compose__label-input,
+.locked-compose__password,
+.locked-compose__confirm-password,
+.locked-compose__text,
+.unlock-modal__password {
+  width: 100%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9375rem;
+}
+
+.locked-compose__label-input:focus-visible,
+.locked-compose__password:focus-visible,
+.locked-compose__confirm-password:focus-visible,
+.locked-compose__text:focus-visible,
+.unlock-modal__password:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The secret text is reading material; the password fields stay masked. */
+.locked-compose__text {
+  resize: vertical;
+}
+
+.locked-compose__types {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.locked-compose__legend {
+  padding: 0 0 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.locked-compose__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-right: 0.75rem;
+  font-size: 0.9375rem;
+}
+
+.locked-compose__type-radio {
+  accent-color: var(--accent);
+}
+
+.locked-compose__file {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.locked-compose__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.locked-compose__hint,
+.unlock-modal__hint {
+  font-size: 0.8125rem;
+}
+
+.locked-compose__busy,
+.unlock-modal__busy {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.locked-compose__actions,
+.unlock-modal__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+/* ------------------------------------------------------ spinner (P4) -- */
+
+/*
+ * PLAN.md §19 decision 9: PBKDF2 at 600,000 iterations takes roughly 300ms, so both
+ * locked-item actions show this instead of a dead button. The words next to it carry
+ * the meaning when motion is switched off.
+ */
+.spinner {
+  flex: none;
+  display: inline-block;
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}

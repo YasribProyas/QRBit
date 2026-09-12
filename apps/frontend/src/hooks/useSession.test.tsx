@@ -19,11 +19,18 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CHUNK_SIZE, FileAssembler, chunkFile } from '../lib/chunker'
-import { exportPublicKey, generateKeypair, toBase64 } from '../lib/crypto'
+import {
+  LOCKED_ITEM_MAX_PLAINTEXT_BYTES,
+  encryptItem,
+  exportPublicKey,
+  generateKeypair,
+  toBase64,
+} from '../lib/crypto'
 import type { WireMessage } from '../lib/protocol'
+import { WIRE_MAX_FRAME_BYTES, encodeWire } from '../lib/protocol'
 import { PeerConnection } from '../lib/webrtc'
 import { useSessionStore } from '../store/sessionStore'
-import type { ItemStatus } from '../store/sessionStore'
+import type { ItemStatus, LockedItem } from '../store/sessionStore'
 import { PEER_REJOINED_REASON, deriveSessionMaterial, useSession } from './useSession'
 import type { UseSessionResult } from './useSession'
 
@@ -632,6 +639,17 @@ function patternedBytes(length: number): Uint8Array<ArrayBuffer> {
     bytes[index] = (index * 31 + 7) % 251
   }
   return bytes
+}
+
+/** The board's live copy of a locked item, or null when this session has none. */
+function lockedItemOf(id: string): LockedItem | null {
+  const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+  return item?.type === 'locked' ? item : null
+}
+
+/** A cheap, exact fingerprint for a payload too large to deep-compare element-wise. */
+async function digestOf(bytes: Uint8Array): Promise<string> {
+  return toBase64(await crypto.subtle.digest('SHA-256', bytes))
 }
 
 /** One readable label per frame, for wire-order assertions. */
@@ -1445,31 +1463,6 @@ describe('useSession items — the receive path (PLAN.md §9, §10, §12)', () =
     expect(item?.type === 'text' && item.content).toBe('already typing')
   })
 
-  it('ignores a locked announce — Phase 4 owns locked items', async () => {
-    const devices = await pairDevicesAsReceiver()
-    await activateReceiverPairing(devices)
-
-    devices.guest.send({
-      t: 'item-announce',
-      id: crypto.randomUUID(),
-      type: 'locked',
-      label: 'Uni portal password',
-      innerType: 'text',
-    })
-    devices.guest.send({
-      t: 'locked-payload',
-      id: crypto.randomUUID(),
-      ciphertext: new Uint8Array([1, 2, 3]),
-      iv: new Uint8Array(12),
-      salt: new Uint8Array(16),
-    })
-    await devices.guest.drain()
-    await settle()
-
-    expect(useSessionStore.getState().items).toEqual([])
-    expect(useSessionStore.getState().errorMessage).toBe(null)
-  })
-
   it('keeps a received file in memory only, never in web storage', async () => {
     // AGENTS.md: session data and its Blobs never touch IndexedDB, the Cache API or
     // localStorage. jsdom ships no IndexedDB or Cache API at all here, so the one
@@ -1511,5 +1504,521 @@ describe('useSession items — the receive path (PLAN.md §9, §10, §12)', () =
 
     // An echo would make two devices delete the same id at each other forever.
     expect(devices.hostChannel.sent.length).toBe(sentBeforeDelete)
+  })
+})
+
+describe('useSession locked items — the sender side (PLAN.md §10, §11.4, §16 Phase 4)', () => {
+  it('encrypts locally, sends the announce before the payload, and keeps ciphertext only', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+    const framesBeforeCompose = devices.guestChannel.sent.length
+
+    const id = await session().addLockedItem({
+      label: 'Uni portal password',
+      innerType: 'text',
+      password: 'correct horse battery staple',
+      content: 'the secret',
+    })
+
+    await waitFor(
+      () => devices.hostReceived.some((message) => message.t === 'locked-payload'),
+      'the locked payload frame',
+    )
+
+    // Both frames crossed the real encrypted channel, and in the order PLAN.md §10
+    // needs: the receiver creates its row from the announce and fills it from the
+    // payload that follows.
+    const related = devices.hostReceived.filter(
+      (message) => message.t === 'item-announce' || message.t === 'locked-payload',
+    )
+    expect(related.map(describeFrame)).toEqual(['item-announce', 'locked-payload'])
+    expect(devices.guestChannel.sent.length).toBeGreaterThan(framesBeforeCompose)
+
+    const announce = framesOf(devices.hostReceived, 'item-announce')[0]
+    expect(announce).toEqual({
+      t: 'item-announce',
+      id,
+      type: 'locked',
+      label: 'Uni portal password',
+      innerType: 'text',
+    })
+
+    const payload = framesOf(devices.hostReceived, 'locked-payload')[0]
+    if (!payload) throw new Error('test bug: no locked payload frame')
+    expect(payload.id).toBe(id)
+    expect(payload.iv.byteLength).toBe(12)
+    expect(payload.salt.byteLength).toBe(16)
+    // Fresh per item: a reused IV under a per-item key would leak plaintext XOR.
+    expect(payload.ciphertext.byteLength).toBeGreaterThan(0)
+
+    // The whole wire is encrypted envelopes, and the plaintext is not in any of them.
+    for (const frame of devices.guestChannel.sent) {
+      expect(frame).toBeInstanceOf(ArrayBuffer)
+      const text = new TextDecoder().decode(new Uint8Array(frame as ArrayBuffer))
+      expect(text).not.toContain('the secret')
+      expect(text).not.toContain('locked-payload')
+      expect(text).not.toContain('correct horse')
+    }
+
+    // The sender's own row is what the receiver's will be: label, inner type and
+    // ciphertext — never the plaintext the sender typed (PLAN.md §9 has no field for
+    // it, unlike a regular file item, which keeps its source File for the preview).
+    const mine = lockedItemOf(id)
+    if (mine === null) throw new Error('test bug: the sender has no locked row')
+    expect(mine.status).toBe('complete')
+    expect(mine.label).toBe('Uni portal password')
+    expect(mine.innerType).toBe('text')
+    expect(mine.ciphertext).toEqual(payload.ciphertext)
+    expect('plaintextContent' in mine).toBe(false)
+    expect(mine.unlocked).toBeUndefined()
+
+    // The sender checks its own item the same way anyone else opens it: with the
+    // password, which is the only way to be sure it decrypts back to what was meant.
+    expect(await session().unlockItem(id, 'not the password')).toBe(false)
+    expect(lockedItemOf(id)?.unlocked).toBeUndefined()
+    expect('plaintextContent' in (lockedItemOf(id) ?? {})).toBe(false)
+
+    expect(await session().unlockItem(id, 'correct horse battery staple')).toBe(true)
+    expect(lockedItemOf(id)?.unlocked).toBe(true)
+    expect(lockedItemOf(id)?.plaintextContent).toBe('the secret')
+
+    session().lockItemAgain(id)
+    expect(lockedItemOf(id)?.unlocked).toBe(false)
+    expect(lockedItemOf(id)?.plaintextContent).toBeUndefined()
+    // Re-locking does not touch the ciphertext: the password can bring it back.
+    expect(lockedItemOf(id)?.ciphertext).toEqual(payload.ciphertext)
+  })
+
+  it('carries a locked file at exactly D6’s cap, inside the wire frame bound (decision D6)', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    // The largest item D6 allows: one frame has to hold this and its MessagePack
+    // envelope, well under the 4 MiB `WIRE_MAX_FRAME_BYTES` the receiver enforces.
+    const bytes = patternedBytes(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)
+    const id = await session().addLockedItem({
+      label: 'At the cap',
+      innerType: 'file',
+      password: 'pw',
+      content: new File([bytes], 'cap.bin'),
+    })
+
+    await waitFor(
+      () => devices.hostReceived.some((message) => message.t === 'locked-payload'),
+      'the payload frame',
+    )
+
+    const payload = framesOf(devices.hostReceived, 'locked-payload')[0]
+    if (!payload) throw new Error('test bug: no locked payload frame')
+    // GCM appends its 16-byte tag to the ciphertext.
+    expect(payload.ciphertext.byteLength).toBe(bytes.byteLength + 16)
+
+    // Measured the way the transport measures it: the decoded MessagePack bytes of the
+    // whole message, which is what `decodeWire` bounds. The session envelope around it
+    // adds only an IV and a tag (28 bytes).
+    const frameBytes = encodeWire({
+      t: 'locked-payload',
+      id,
+      ciphertext: payload.ciphertext,
+      iv: payload.iv,
+      salt: payload.salt,
+    })
+    expect(frameBytes.byteLength).toBeLessThan(WIRE_MAX_FRAME_BYTES)
+
+    // And the item at the cap still decrypts back byte-identically on the device that
+    // made it. Compared by digest: a 3 MiB element-wise deep equality costs more than
+    // the transfer it is checking.
+    expect(await session().unlockItem(id, 'pw')).toBe(true)
+    const revealed = lockedItemOf(id)?.plaintextContent
+    if (!(revealed instanceof Blob)) throw new Error('test bug: the unlocked file is not a Blob')
+    const revealedBytes = new Uint8Array(await revealed.arrayBuffer())
+    expect(revealedBytes.byteLength).toBe(bytes.byteLength)
+    expect(await digestOf(revealedBytes)).toBe(await digestOf(bytes))
+  })
+
+  it('sends no locked frame at all before both devices confirmed the phrase (PLAN.md §8)', async () => {
+    const devices = await pairDevices()
+    const framesBefore = devices.guestChannel.sent.length
+
+    await expect(
+      session().addLockedItem({
+        label: 'Early',
+        innerType: 'text',
+        password: 'pw',
+        content: 'the secret',
+      }),
+    ).rejects.toThrow(/active/)
+
+    await settle()
+
+    // Neither frame, and no local row: the gate is the same one every other item
+    // frame goes through, so a forgotten check here cannot open it early.
+    expect(devices.guestChannel.sent.length).toBe(framesBefore)
+    expect(devices.guestChannel.sent).toEqual([])
+    expect(useSessionStore.getState().items).toEqual([])
+  })
+
+  it('refuses a locked file over D6’s cap before anything reaches the wire (decision D6)', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+    const framesBefore = devices.guestChannel.sent.length
+
+    const oversized = new File(['x'.repeat(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 1)], 'huge.bin')
+
+    await expect(
+      session().addLockedItem({
+        label: 'Too big',
+        innerType: 'file',
+        password: 'pw',
+        content: oversized,
+      }),
+    ).rejects.toThrow(/at most 3 MiB/)
+
+    await settle()
+
+    // No frame, no payload, no local row — an item nobody can be sent must not exist
+    // on this board either, or the sender would see a row the peer never got.
+    expect(devices.guestChannel.sent.length).toBe(framesBefore)
+    expect(devices.hostReceived.some((message) => message.t === 'locked-payload')).toBe(false)
+    expect(useSessionStore.getState().items).toEqual([])
+  })
+
+  it('refuses locked text over D6’s cap before anything reaches the wire (decision D6)', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+    const framesBefore = devices.guestChannel.sent.length
+
+    // One ASCII character is one UTF-8 byte, so this content is exactly one byte over
+    // the cap — the size that used to encrypt cleanly and then be dropped by the peer
+    // while this device's own row already said 'complete'.
+    const oversized = 'x'.repeat(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 1)
+
+    await expect(
+      session().addLockedItem({
+        label: 'Too much text',
+        innerType: 'text',
+        password: 'pw',
+        content: oversized,
+      }),
+    ).rejects.toThrow(/at most 3 MiB — send it as a regular text item instead/)
+
+    await settle()
+
+    expect(devices.guestChannel.sent.length).toBe(framesBefore)
+    expect(devices.hostReceived.some((message) => message.t === 'locked-payload')).toBe(false)
+    expect(useSessionStore.getState().items).toEqual([])
+  })
+
+  it('refuses locked rich text over D6’s cap before anything reaches the wire (decision D6)', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+    const framesBefore = devices.guestChannel.sent.length
+
+    // A Tiptap document is a JSON string, so the cap is on the JSON's UTF-8 bytes.
+    const oversized = `{"type":"doc","content":"${'x'.repeat(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)}"}`
+
+    await expect(
+      session().addLockedItem({
+        label: 'Too much rich text',
+        innerType: 'richtext',
+        password: 'pw',
+        content: oversized,
+      }),
+    ).rejects.toThrow(/at most 3 MiB — send it as a regular rich text item instead/)
+
+    await settle()
+
+    expect(devices.guestChannel.sent.length).toBe(framesBefore)
+    expect(devices.hostReceived.some((message) => message.t === 'locked-payload')).toBe(false)
+    expect(useSessionStore.getState().items).toEqual([])
+  })
+
+  it('still sends a locked text item at exactly D6’s cap, inside the wire frame bound', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const content = 'x'.repeat(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)
+    const id = await session().addLockedItem({
+      label: 'At the cap',
+      innerType: 'text',
+      password: 'pw',
+      content,
+    })
+
+    await waitFor(
+      () => devices.hostReceived.some((message) => message.t === 'locked-payload'),
+      'the payload frame',
+    )
+
+    const payload = framesOf(devices.hostReceived, 'locked-payload')[0]
+    if (!payload) throw new Error('test bug: no locked payload frame')
+    // GCM appends its 16-byte tag to the ciphertext, exactly as for a file.
+    expect(payload.ciphertext.byteLength).toBe(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 16)
+
+    // Also measured the way the receiver does: the decoded MessagePack bytes of the
+    // whole message must stay under the bound `decodeWire` enforces.
+    const frameBytes = encodeWire({
+      t: 'locked-payload',
+      id,
+      ciphertext: payload.ciphertext,
+      iv: payload.iv,
+      salt: payload.salt,
+    })
+    expect(frameBytes.byteLength).toBeLessThan(WIRE_MAX_FRAME_BYTES)
+
+    // And the item at the cap decrypts back to exactly what was typed.
+    expect(await session().unlockItem(id, 'pw')).toBe(true)
+    expect(lockedItemOf(id)?.plaintextContent).toBe(content)
+  })
+})
+
+describe('useSession locked items — the receive path (PLAN.md §10, §16 Phase 4)', () => {
+  it('completes a received locked item from its payload, then unlocks it with the password', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    const plaintext = new TextEncoder().encode('the secret')
+    const encrypted = await encryptItem('hunter2', plaintext)
+
+    devices.guest.send({
+      t: 'item-announce',
+      id,
+      type: 'locked',
+      label: 'Uni portal password',
+      innerType: 'text',
+    })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id) !== null, 'the locked row')
+
+    // PLAN.md §9: the label is readable before the password is typed, and the row has
+    // nothing to decrypt yet — so it is still transferring, not complete.
+    expect(lockedItemOf(id)?.status).toBe('transferring')
+    expect(lockedItemOf(id)?.label).toBe('Uni portal password')
+    expect(lockedItemOf(id)?.ciphertext.byteLength).toBe(0)
+    await expect(session().unlockItem(id, 'hunter2')).rejects.toThrow(/payload/)
+
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      salt: encrypted.salt,
+    })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id)?.status === 'complete', 'the locked payload to land')
+
+    const received = lockedItemOf(id)
+    if (received === null) throw new Error('test bug: the locked row went away')
+    expect(received.ciphertext).toEqual(encrypted.ciphertext)
+    expect(received.iv).toEqual(encrypted.iv)
+    expect(received.salt).toEqual(encrypted.salt)
+    // The payload is not a reveal: an arrival is not a password (PLAN.md §17).
+    expect(received.unlocked).toBeUndefined()
+    expect('plaintextContent' in received).toBe(false)
+
+    expect(await session().unlockItem(id, 'nope')).toBe(false)
+    expect(lockedItemOf(id)?.unlocked).toBeUndefined()
+    expect('plaintextContent' in (lockedItemOf(id) ?? {})).toBe(false)
+
+    expect(await session().unlockItem(id, 'hunter2')).toBe(true)
+    expect(lockedItemOf(id)?.unlocked).toBe(true)
+    expect(lockedItemOf(id)?.plaintextContent).toBe('the secret')
+  })
+
+  it('drops a payload for an unknown id, and the second payload for an id it knows', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    // An unknown id is not an invitation to invent a row: buffering unannounced bytes
+    // would let a peer make this device hold items nobody announced (PLAN.md §2/§17).
+    devices.guest.send({
+      t: 'locked-payload',
+      id: crypto.randomUUID(),
+      ciphertext: new Uint8Array([9, 9, 9]),
+      iv: new Uint8Array(12),
+      salt: new Uint8Array(16),
+    })
+    await devices.guest.drain()
+    await settle()
+    expect(useSessionStore.getState().items).toEqual([])
+
+    const id = crypto.randomUUID()
+    const first = await encryptItem('hunter2', new TextEncoder().encode('first'))
+    devices.guest.send({ t: 'item-announce', id, type: 'locked', label: 'First' })
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: first.ciphertext,
+      iv: first.iv,
+      salt: first.salt,
+    })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id)?.status === 'complete', 'the first payload')
+
+    // A second payload for the same id is refused: the first one wins, so a peer cannot
+    // swap the ciphertext out from under a label the user has already read.
+    const second = await encryptItem('other', new TextEncoder().encode('second'))
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: second.ciphertext,
+      iv: second.iv,
+      salt: second.salt,
+    })
+    await devices.guest.drain()
+    await settle()
+
+    expect(lockedItemOf(id)?.ciphertext).toEqual(first.ciphertext)
+    // And the first payload's password is still the one that opens the item.
+    expect(await session().unlockItem(id, 'hunter2')).toBe(true)
+    expect(lockedItemOf(id)?.plaintextContent).toBe('first')
+  })
+
+  it('transfers a locked file within the cap and unlocks it byte-identically', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    const bytes = patternedBytes(64 * 1024)
+    const encrypted = await encryptItem('hunter2', bytes)
+
+    devices.guest.send({
+      t: 'item-announce',
+      id,
+      type: 'locked',
+      label: 'One time codes',
+      innerType: 'file',
+    })
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      salt: encrypted.salt,
+    })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id)?.status === 'complete', 'the locked file payload')
+
+    // A locked file is never chunked: it is one frame (PLAN.md §16 Phase 4, D6), so the
+    // item goes straight from `transferring` to `complete` with no assembler involved.
+    expect(lockedItemOf(id)?.status).toBe('complete')
+    expect(await session().unlockItem(id, 'hunter2')).toBe(true)
+
+    const revealed = lockedItemOf(id)?.plaintextContent
+    if (!(revealed instanceof Blob)) throw new Error('test bug: the unlocked file is not a Blob')
+    expect(new Uint8Array(await revealed.arrayBuffer())).toEqual(bytes)
+  })
+
+  it('drops a locked payload past the wire bound instead of failing the session', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    devices.guest.send({ t: 'item-announce', id, type: 'locked', label: 'Hostile' })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id) !== null, 'the locked row')
+
+    // D6 caps a locked item at compose time; this is the defensive backstop for a peer
+    // that never had a compose UI. The frame is a valid `locked-payload` on the wire,
+    // but its decoded size is past WIRE_MAX_FRAME_BYTES, so `decodeWire` refuses it.
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: patternedBytes(5 * 1024 * 1024),
+      iv: new Uint8Array(12),
+      salt: new Uint8Array(16),
+    })
+    await devices.guest.drain()
+    await settle()
+
+    // The row stays as it was and the session is unharmed: a hostile frame costs the
+    // frame, never the session (PLAN.md §17).
+    expect(lockedItemOf(id)?.status).toBe('transferring')
+    expect(lockedItemOf(id)?.ciphertext.byteLength).toBe(0)
+    expect(useSessionStore.getState().errorMessage).toBe(null)
+    expect(useSessionStore.getState().phase).toBe('active')
+
+    // And a legitimate payload afterwards still completes the row, so the drop did not
+    // poison the item.
+    const encrypted = await encryptItem('hunter2', new TextEncoder().encode('late but fine'))
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      salt: encrypted.salt,
+    })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id)?.status === 'complete', 'the following payload')
+    expect(await session().unlockItem(id, 'hunter2')).toBe(true)
+    expect(lockedItemOf(id)?.plaintextContent).toBe('late but fine')
+  })
+
+  it('drops every unlocked plaintext when the session ends (memory-only)', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    const encrypted = await encryptItem('hunter2', new TextEncoder().encode('the secret'))
+    devices.guest.send({ t: 'item-announce', id, type: 'locked', label: 'Uni portal password' })
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      salt: encrypted.salt,
+    })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id)?.status === 'complete', 'the locked payload')
+    expect(await session().unlockItem(id, 'hunter2')).toBe(true)
+    expect(lockedItemOf(id)?.plaintextContent).toBe('the secret')
+
+    // AGENTS.md: the reveal is session-scoped, so the session ending takes the decrypted
+    // bytes with it — the ciphertext stays, the plaintext does not.
+    devices.guest.send({ t: 'session-end' })
+    await devices.guest.drain()
+    await waitFor(() => useSessionStore.getState().phase === 'ended', 'the ended phase')
+    // The teardown effect is what drops it, so wait for the drop rather than for the
+    // phase the store set synchronously.
+    await waitFor(() => lockedItemOf(id)?.unlocked === false, 'the plaintext to be dropped')
+
+    expect(lockedItemOf(id)?.unlocked).toBe(false)
+    expect(lockedItemOf(id)?.plaintextContent).toBeUndefined()
+    expect(lockedItemOf(id)?.ciphertext).toEqual(encrypted.ciphertext)
+  })
+
+  it('refuses a reveal whose unlock resolves after the session ended (PLAN.md §17)', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    const encrypted = await encryptItem('hunter2', new TextEncoder().encode('the secret'))
+    devices.guest.send({ t: 'item-announce', id, type: 'locked', label: 'Uni portal password' })
+    devices.guest.send({
+      t: 'locked-payload',
+      id,
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      salt: encrypted.salt,
+    })
+    await devices.guest.drain()
+    await waitFor(() => lockedItemOf(id)?.status === 'complete', 'the locked payload')
+
+    // The unlock awaits ~300ms of PBKDF2, and the session end lands inside that window —
+    // the one moment the teardown (which runs once, at the phase change) cannot cover.
+    // No await between the two calls, so the timing is exact instead of raced.
+    const pending = session().unlockItem(id, 'hunter2')
+    useSessionStore.getState().endSession(null)
+
+    // The password WAS right, so the caller is told so; it is the reveal that is refused,
+    // because the session that authorised it is over and plaintext may not outlive it.
+    await expect(pending).resolves.toBe(true)
+
+    await waitFor(() => useSessionStore.getState().phase === 'ended', 'the ended phase')
+    await settle()
+
+    expect(lockedItemOf(id)?.unlocked).toBeUndefined()
+    expect('plaintextContent' in (lockedItemOf(id) ?? {})).toBe(false)
   })
 })

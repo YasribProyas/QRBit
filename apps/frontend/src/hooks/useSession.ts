@@ -11,22 +11,32 @@
  * (PLAN.md §8). Nothing here stores key material: the keypair, the session key and
  * the phrase live in memory for the lifetime of the session and are dropped when the
  * peer connection closes (AGENTS.md forbids persistence).
+ *
+ * PHASE 4: a locked item is encrypted here, on the sending device, under a password
+ * that never crosses the wire (`addLockedItem`), announced and then delivered as one
+ * `locked-payload` frame, and decrypted back into memory only when a user types that
+ * password (`unlockItem`). Its plaintext lives on the store item for as long as the
+ * session does — never in IndexedDB, the Cache API or localStorage (PLAN.md §16
+ * Phase 4, §17).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { buildNewSessionUrl, SIGNALING_WS_URL } from '../config'
 import { CHUNK_SIZE, FileAssembler, chunkFile } from '../lib/chunker'
 import {
+  LOCKED_ITEM_MAX_PLAINTEXT_BYTES,
+  decryptItem,
   deriveSafetyPhraseBytes,
   deriveSessionKey,
   deriveSharedSecret,
+  encryptItem,
   exportPublicKey,
   fromBase64,
   generateKeypair,
   importPeerPublicKey,
   toBase64,
 } from '../lib/crypto'
-import type { WireMessage } from '../lib/protocol'
+import type { LockedInnerType, WireMessage } from '../lib/protocol'
 import { bytesToPhrase } from '../lib/safetyPhrase'
 import { SignalingClient, isPeerRejoinedCue, shouldHostSendOffer } from '../lib/signaling'
 import type { SessionRole, SignalingMessage } from '../lib/signaling'
@@ -129,11 +139,183 @@ function localTypeFor(mimeType: string): 'image' | 'file' {
 }
 
 /**
- * Maps an inbound `item-announce` onto the store item it creates (PLAN.md §9/§10).
+ * The four values a locked item is composed from (PLAN.md §16 Phase 4).
  *
- * Returns null for a `locked` announce: Phase 4 owns locked items end to end (the
- * composing UI, `locked-payload` and `encryptItem`/`decryptItem` in `lib/crypto.ts`),
- * so this phase neither stores nor renders one.
+ * `content` is the raw string for `text`, the Tiptap JSON for `richtext`, and the
+ * `File` itself for `file` — the same content the compose modal collects. This
+ * interface and the modal's own `LockedItemInput` describe one contract from two
+ * sides of the same seam (a hook must not import a component), and `pages/Session.tsx`
+ * hands this hook's result to `AddItemBar`, which is where the two are checked against
+ * each other: a drift between them stops that page from compiling.
+ */
+export interface AddLockedItemInput {
+  label: string
+  innerType: LockedInnerType
+  password: string
+  content: string | File
+}
+
+/**
+ * D6's cap in the unit its error message is worded in. Derived, never re-typed: the
+ * number itself belongs to `lib/crypto.ts`.
+ */
+const LOCKED_ITEM_MAX_PLAINTEXT_MIB = LOCKED_ITEM_MAX_PLAINTEXT_BYTES / (1024 * 1024)
+
+/**
+ * D6's rejection, worded as an action: the regular item named here is still encrypted
+ * end to end in transit, so the secret is not being asked to travel in the clear.
+ */
+function lockedItemTooLargeMessage(alternative: string): string {
+  return `a locked item carries at most ${LOCKED_ITEM_MAX_PLAINTEXT_MIB} MiB — send it as ${alternative} instead`
+}
+
+/**
+ * The bytes `encryptItem` is about to lock (PLAN.md §11.4, §16 Phase 4).
+ *
+ * Text and rich text are their UTF-8 bytes; a file is read out of the `File`. That
+ * read is one-way on purpose: PLAN.md §9's `LockedItem` has no plaintext field, so the
+ * sender's row keeps the ciphertext and nothing else — unlike a regular file item,
+ * which keeps its source `File` for the preview.
+ *
+ * D6 is enforced here for EVERY inner type, not only `file`: a locked item travels in
+ * ONE frame under `WIRE_MAX_FRAME_BYTES`, so the cap belongs to the plaintext the frame
+ * has to carry. A file is measured before it is even read, text after it is encoded.
+ * The compose modal checks the same cap for the user's benefit; this is the gate.
+ *
+ * The caller zeroes the returned buffer once it has been encrypted.
+ */
+async function lockedPlaintextFor(
+  innerType: LockedInnerType,
+  content: string | File,
+): Promise<Uint8Array> {
+  if (innerType === 'file') {
+    if (!(content instanceof File)) {
+      throw new Error('a locked file item needs a File to encrypt')
+    }
+    if (content.size > LOCKED_ITEM_MAX_PLAINTEXT_BYTES) {
+      throw new Error(lockedItemTooLargeMessage('a regular file item'))
+    }
+    return new Uint8Array(await content.arrayBuffer())
+  }
+
+  if (typeof content !== 'string') {
+    throw new Error(`a locked ${innerType} item needs a string to encrypt`)
+  }
+
+  // Measured on the ENCODED bytes — the same unit the file branch uses and the only
+  // unit the frame's bound is about. Without this check an oversized locked text item
+  // sends a `locked-payload` past `WIRE_MAX_FRAME_BYTES`, which the receiver drops
+  // silently while the sender's row already reads 'complete'.
+  const bytes = new TextEncoder().encode(content)
+  if (bytes.byteLength > LOCKED_ITEM_MAX_PLAINTEXT_BYTES) {
+    throw new Error(
+      lockedItemTooLargeMessage(
+        innerType === 'richtext' ? 'a regular rich text item' : 'a regular text item',
+      ),
+    )
+  }
+  return bytes
+}
+
+/**
+ * Encrypts the plaintext and drops this device's copy of it, whichever way the
+ * encryption goes (PLAN.md §11.4).
+ *
+ * Only the `{ ciphertext, iv, salt }` tuple leaves this function — never the
+ * plaintext, and never the key, which is derived inside `encryptItem` from a password
+ * this function does not keep.
+ */
+async function encryptLockedContent(
+  password: string,
+  plaintext: Uint8Array,
+): Promise<{ ciphertext: Uint8Array; iv: Uint8Array; salt: Uint8Array }> {
+  try {
+    return await encryptItem(password, plaintext)
+  } finally {
+    zeroBytes(plaintext)
+  }
+}
+
+/**
+ * Turns decrypted bytes into the plaintext an unlocked item holds, and drops the copy
+ * it was handed (PLAN.md §9).
+ *
+ * A file becomes a `Blob`: PLAN.md §9's `LockedItem` carries no MIME type and the wire
+ * announces none, so the bytes are handed over with no declared type and the row's
+ * download name falls back to the item's label. Everything else is text, decoded as
+ * UTF-8 — `richtext` included, whose plaintext is a Tiptap JSON document.
+ *
+ * Both the buffer this is given and the copy the Blob is built from are zeroed, so the
+ * only readable plaintext left anywhere is the item's own `plaintextContent`, which is
+ * what the user asked to see and lives no longer than the session (AGENTS.md).
+ */
+function revealFromDecrypted(innerType: LockedInnerType, decrypted: Uint8Array): string | Blob {
+  try {
+    if (innerType !== 'file') return new TextDecoder().decode(decrypted)
+
+    const bytes = decrypted.slice()
+    try {
+      return new Blob([bytes])
+    } finally {
+      zeroBytes(bytes)
+    }
+  } finally {
+    zeroBytes(decrypted)
+  }
+}
+
+/**
+ * Whether a rejection from Web Crypto means "this password did not open this item".
+ *
+ * Matched by name, not with `instanceof DOMException`: the error object comes from
+ * whichever realm implements Web Crypto, and under jsdom (whose `crypto.subtle` is
+ * Node's) it is not this realm's `DOMException` — an `instanceof` test would miss it
+ * and let a wrong password escape as an unhandled rejection, which is the one thing
+ * the contract forbids. `OperationError` is what AES-GCM raises for a failed tag
+ * check, an IV of the wrong length and a ciphertext too short to hold a tag: all of
+ * them mean the item did not decrypt with what was supplied, never something a retry
+ * with the same inputs would fix.
+ */
+function isFailedDecryption(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  return 'name' in error && error.name === 'OperationError'
+}
+
+/** Whether an item still holds decrypted plaintext that a teardown must drop. */
+function holdsUnlockedPlaintext(item: SessionItem): boolean {
+  return item.type === 'locked' && (item.unlocked === true || item.plaintextContent !== undefined)
+}
+
+/**
+ * Drops every unlocked plaintext from the board (AGENTS.md, PLAN.md §17).
+ *
+ * An unlock is a session-scoped reveal: the decrypted bytes live on the store item for
+ * as long as this session does and nowhere else, so the teardown that drops the
+ * assemblers drops them too. `unlocked` goes back to false with the plaintext, so no
+ * half-cleared row can render.
+ *
+ * The ciphertext stays: it is what the password can bring back, and it is not a secret
+ * this function is responsible for.
+ *
+ * Read from the store rather than through a hook selector because the callers are
+ * teardown paths, not renders, and a captured snapshot would be stale by the time one
+ * of them runs.
+ */
+function discardUnlockedPlaintext(): void {
+  const store = useSessionStore.getState()
+  if (!store.items.some(holdsUnlockedPlaintext)) return
+
+  store.setItems(
+    store.items.map((item) =>
+      holdsUnlockedPlaintext(item)
+        ? { ...item, unlocked: false, plaintextContent: undefined }
+        : item,
+    ),
+  )
+}
+
+/**
+ * Maps an inbound `item-announce` onto the store item it creates (PLAN.md §9/§10).
  *
  * Optional announce fields are defaulted rather than trusted — the peer is a holder
  * of the session key, not a trusted party (PLAN.md §2). An announce with no
@@ -141,7 +323,9 @@ function localTypeFor(mimeType: string): 'image' | 'file' {
  * file whose `file-done` completes immediately.
  *
  * Text and rich-text items are created as `complete`: their content streams live, so
- * there is no transfer for `pending`/`transferring` to describe.
+ * there is no transfer for `pending`/`transferring` to describe. A `locked` item is
+ * the opposite — it arrives as an announce plus a `locked-payload`, so its row exists
+ * before it can be opened and starts `transferring`.
  */
 export function itemFromAnnounce(
   message: Extract<WireMessage, { t: 'item-announce' }>,
@@ -176,7 +360,22 @@ export function itemFromAnnounce(
     }
 
     case 'locked':
-      return null
+      // PLAN.md §10 carries a locked item in two frames: the announce names it, and the
+      // `locked-payload` that follows carries the ciphertext. Hence `transferring`, and
+      // hence three empty byte fields — the row has a label to show and a place to put
+      // the ciphertext, and nothing to decrypt yet. The arrays are fresh per item rather
+      // than one shared constant: an empty `Uint8Array` is still mutable.
+      return {
+        id,
+        type: 'locked',
+        status: 'transferring',
+        createdAt,
+        label: message.label ?? '',
+        innerType: message.innerType ?? 'text',
+        ciphertext: new Uint8Array(0),
+        iv: new Uint8Array(0),
+        salt: new Uint8Array(0),
+      }
   }
 }
 
@@ -326,10 +525,12 @@ export interface UseSessionResult {
    * `components/session/SessionBoard.tsx` declares as `ItemsApi` and the item
    * components call through it.
    *
-   * Every method is a no-op while the session is not `active` — the board is only
-   * rendered then, but the transport must not depend on that. The peer enforces the
-   * same rule a second time (`markActive()`), so a forgotten check here cannot put
-   * an item frame on the wire early.
+   * The methods that put a frame on the wire are no-ops (or, for the async locked-item
+   * send, rejections) while the session is not `active` — the board is only rendered
+   * then, but the transport must not depend on that. The peer enforces the same rule a
+   * second time (`markActive()`), so a forgotten check here cannot put an item frame on
+   * the wire early. Unlocking and re-hiding are local to this device and carry no frame,
+   * so they are not gated on the phase of a session that is ending.
    */
   /** Announces a new text item and returns its id ('' when the session is not active). */
   addTextItem: (initialContent?: string) => string
@@ -343,6 +544,23 @@ export interface UseSessionResult {
   updateRichTextItem: (id: string, json: string) => void
   /** Sends `item-delete` and removes the item on this device. */
   deleteItem: (id: string) => void
+
+  /**
+   * Phase 4 (PLAN.md §16): encrypts the composed content under `input.password` on
+   * this device and sends the item as an announce plus a `locked-payload`. Resolves
+   * with the new item's id once both frames have been written; rejects while the
+   * session is not active, for content that does not match its inner type, and for a
+   * locked FILE over D6's cap.
+   */
+  addLockedItem: (input: AddLockedItemInput) => Promise<string>
+  /**
+   * Phase 4: decrypts a locked item with the password the user typed. Resolves true
+   * with the plaintext revealed in memory, false for a wrong password (never a
+   * rejection for one), and rejects only when there is nothing here to unlock.
+   */
+  unlockItem: (id: string, password: string) => Promise<boolean>
+  /** Phase 4: re-hides an item — `unlocked` back to false, plaintext dropped. */
+  lockItemAgain: (id: string) => void
 }
 
 export function useSession(options: UseSessionOptions): UseSessionResult {
@@ -484,7 +702,11 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
    *
    * The first announce for an id wins: re-announcing an existing item must not wipe
    * content or an in-flight transfer, which is exactly what a hostile peer would aim
-   * for. A `locked` announce is dropped — Phase 4 owns locked items.
+   * for.
+   *
+   * Only image and file items get a chunk assembler: a `locked` item is never chunked,
+   * so its row waits for one `locked-payload` frame instead (see `handleLockedPayload`),
+   * and neither text nor rich text has a transfer to assemble.
    */
   const handleItemAnnounce = useCallback(
     (message: Extract<WireMessage, { t: 'item-announce' }>): void => {
@@ -573,6 +795,36 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     [updateItem],
   )
 
+  /**
+   * `locked-payload` → the ciphertext on the row its announce created (PLAN.md §10).
+   *
+   * The frame fills a row in and does nothing else. `updateItem` is a no-op for an id
+   * this session does not carry, which is what drops a payload whose announce never
+   * came; the `transferring` status is what makes the FIRST payload for an id win. That
+   * matters twice over: a second payload cannot swap the ciphertext of an item the user
+   * has already read the label of, and a peer cannot overwrite this device's OWN locked
+   * item — a sender's row is `complete` with its own ciphertext from the moment it was
+   * composed.
+   *
+   * Nothing here decrypts: the peer's bytes stay ciphertext until `unlockItem` is given
+   * the password, which never came over the wire (PLAN.md §9/§17).
+   */
+  const handleLockedPayload = useCallback(
+    (message: Extract<WireMessage, { t: 'locked-payload' }>): void => {
+      updateItem(message.id, (current) => {
+        if (current.type !== 'locked' || current.status !== 'transferring') return current
+        return {
+          ...current,
+          status: 'complete',
+          ciphertext: message.ciphertext,
+          iv: message.iv,
+          salt: message.salt,
+        }
+      })
+    },
+    [updateItem],
+  )
+
   const handlePeerMessage = useCallback(
     (message: WireMessage): void => {
       // PLAN.md §8: the same classification the send gate uses — only the two control
@@ -631,13 +883,21 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
           return
         }
         case 'locked-payload': {
-          // Phase 4 owns locked items end to end; the frame is valid on the wire
-          // (protocol.ts) but means nothing to this phase yet.
+          handleLockedPayload(message)
           return
         }
       }
     },
-    [endSession, forgetItem, handleFileChunk, handleFileDone, handleItemAnnounce, setPeerConfirmed, updateItem],
+    [
+      endSession,
+      forgetItem,
+      handleFileChunk,
+      handleFileDone,
+      handleItemAnnounce,
+      handleLockedPayload,
+      setPeerConfirmed,
+      updateItem,
+    ],
   )
 
   const handleChannelOpen = useCallback((): void => {
@@ -700,6 +960,10 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     debounceTimersRef.current.clear()
     assemblersRef.current.clear()
     writtenProgressRef.current.clear()
+    // Decrypted plaintext belongs to the session that produced it, so it goes out with
+    // the transfer state: this runs on teardown, on the ended phase and at the start of
+    // a fresh attempt, which are exactly the session boundaries (PLAN.md §1, §17).
+    discardUnlockedPlaintext()
     releaseBackpressure()
   }, [releaseBackpressure])
 
@@ -885,6 +1149,69 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     [startFilePump, upsertItem],
   )
 
+  /**
+   * Composes a locked item end to end (PLAN.md §9/§10/§11.4, §16 Phase 4).
+   *
+   * The order is the point: the content is encrypted HERE, on this device, before any
+   * frame exists. The password never crosses the wire, and neither does anything it
+   * unlocks. `encryptItem` is where the ~300ms PBKDF2 derivation lives (PLAN.md §19
+   * decision 9), which is what the compose modal's spinner covers.
+   *
+   * The sender's own row carries the label, the inner type and the ciphertext — exactly
+   * what the receiver's row carries, and deliberately NOT the plaintext: PLAN.md §9's
+   * `LockedItem` has no field for it. The sender unlocks its own item through
+   * `unlockItem` with the password it chose, which is the only way to be sure the item
+   * really decrypts back to what was meant.
+   *
+   * Rejects, and sends nothing at all, when the session is not active, when the content
+   * does not match its declared inner type, or when the content is over D6's cap
+   * (a file before it is read, text and rich text once encoded).
+   */
+  const addLockedItem = useCallback(
+    async (input: AddLockedItemInput): Promise<string> => {
+      if (!sessionIsActive()) {
+        throw new Error('a locked item can only be sent while the session is active')
+      }
+
+      const { label, innerType, password, content } = input
+      const plaintext = await lockedPlaintextFor(innerType, content)
+      const { ciphertext, iv, salt } = await encryptLockedContent(password, plaintext)
+
+      // PBKDF2 takes ~300ms, long enough for the session to end underneath it. Sending
+      // now would be refused by the transport's own gate, and a row whose payload never
+      // left is a row neither device can explain.
+      if (!sessionIsActive()) {
+        throw new Error('the session ended before the locked item could be sent')
+      }
+
+      const id = crypto.randomUUID()
+      upsertItem({
+        id,
+        type: 'locked',
+        status: 'complete',
+        createdAt: Date.now(),
+        label,
+        innerType,
+        ciphertext,
+        iv,
+        salt,
+      })
+
+      // Announce first, then the payload (PLAN.md §10): the peer creates its row from
+      // the announce and fills in the ciphertext when the payload lands. Awaiting each
+      // write — not merely enqueueing it — is what makes the contract's "after
+      // encryption + send" literal, and the transport's single ordered queue would hold
+      // the order anyway. A write that fails after the guard is reported through the
+      // transport's `onSendError`, like every other item frame; a guard that fails (the
+      // channel went away) rejects this promise, which is the compose modal's inline
+      // error rather than a silently lost secret.
+      await sendAwaitable({ t: 'item-announce', id, type: 'locked', label, innerType })
+      await sendAwaitable({ t: 'locked-payload', id, ciphertext, iv, salt })
+      return id
+    },
+    [sendAwaitable, upsertItem],
+  )
+
   const updateTextItem = useCallback(
     (id: string, content: string): void => {
       if (!sessionIsActive()) return
@@ -917,6 +1244,95 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
       sendItemFrame({ t: 'item-delete', id })
     },
     [forgetItem, sendItemFrame],
+  )
+
+  /**
+   * Decrypts a locked item with the password the user just typed (PLAN.md §11.4, §17).
+   *
+   * Three outcomes, deliberately distinct:
+   *
+   *   - `true` — the item now holds `unlocked: true` and its plaintext, in memory only
+   *     (AGENTS.md: never IndexedDB, the Cache API or localStorage).
+   *   - `false` — that password is not the item's password. GCM authentication failed,
+   *     which is also what a tampered ciphertext, IV or salt produces; nothing can tell
+   *     those apart and nothing should, since the user's next move is the same either
+   *     way. The item is left exactly as it was.
+   *   - a rejection — there is no locked item with that id, or its payload never
+   *     arrived. Neither is something a password can fix, and reporting them as a wrong
+   *     password would send the user hunting for a typo that was never the problem.
+   *
+   * The password is read once here and stored nowhere: `decryptItem` derives the item
+   * key inside the call and drops it, and the decrypted bytes are turned into what the
+   * item holds (a string, or a Blob) and then zeroed.
+   *
+   * The reveal itself is written only while the session is still active. `decryptItem`
+   * is ~300ms of PBKDF2 (PLAN.md §19 decision 9), long enough for the peer's
+   * `session-end` to land inside it, and the teardown that drops decrypted plaintext
+   * runs once, at the phase change (PLAN.md §17) — so a reveal written after it would
+   * sit in the store until reset/unmount, outliving the session that authorised it.
+   * A correct password still resolves `true` in that case; only the write is dropped.
+   */
+  const unlockItem = useCallback(
+    async (id: string, password: string): Promise<boolean> => {
+      const item = findSessionItem(id)
+      if (item === null || item.type !== 'locked') {
+        throw new Error('unlockItem: this session has no locked item with that id')
+      }
+      if (item.status !== 'complete') {
+        throw new Error('unlockItem: the encrypted payload for this item has not arrived')
+      }
+
+      let decrypted: Uint8Array
+      try {
+        decrypted = await decryptItem(password, item.salt, item.iv, item.ciphertext)
+      } catch (error) {
+        // A failed decryption is a failed unlock, not a session failure; anything else
+        // is a bug in this device's own state, not a wrong password, and is not dressed
+        // up as one.
+        if (isFailedDecryption(error)) return false
+        throw error
+      }
+
+      // Re-read from the store rather than trust the phase captured at the call: the
+      // derivation above is where the session can end underneath this unlock. The
+      // decrypted bytes are dropped on this path too — no copy of them may outlive
+      // either the session or the reveal.
+      if (useSessionStore.getState().phase !== 'active') {
+        zeroBytes(decrypted)
+        return true
+      }
+
+      // The reveal is built from its own copy of the decrypted bytes, and both that
+      // copy and the original are dropped here (see `revealFromDecrypted`).
+      const revealed = revealFromDecrypted(item.innerType, decrypted)
+
+      // A no-op when the item went away while the key was being derived (the store is
+      // re-read per update), so an unlock cannot outlive its own row.
+      updateItem(id, (current) =>
+        current.type === 'locked'
+          ? { ...current, unlocked: true, plaintextContent: revealed }
+          : current,
+      )
+      return true
+    },
+    [updateItem],
+  )
+
+  /**
+   * Re-hides an unlocked item (PLAN.md §9's 'Lock again').
+   *
+   * The ciphertext stays — it is what the password can bring back — and the decrypted
+   * plaintext is dropped from the store, the only place it ever lived.
+   */
+  const lockItemAgain = useCallback(
+    (id: string): void => {
+      updateItem(id, (current) =>
+        current.type === 'locked'
+          ? { ...current, unlocked: false, plaintextContent: undefined }
+          : current,
+      )
+    },
+    [updateItem],
   )
 
   useEffect(() => {
@@ -1305,8 +1721,11 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     addTextItem,
     addRichTextItem,
     addFileItem,
+    addLockedItem,
     updateTextItem,
     updateRichTextItem,
     deleteItem,
+    unlockItem,
+    lockItemAgain,
   }
 }
