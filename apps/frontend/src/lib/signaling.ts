@@ -76,11 +76,13 @@ function isNonNullObject(value: unknown): value is object {
  *
  * PLAN.md §13 defines no explicit peer-joined frame. `pubkey` is that cue: the
  * Durable Object sends it to an arriving participant whose peer has already
- * attached, and it is the only frame that means "the other role is now here". In
- * Phase 2 it will carry the peer's real P-256 public key, so reading it as the join
+ * attached, and it is the only frame that means "the other role is now here". It
+ * carries the peer's real P-256 public key (Phase 2), so reading it as the join
  * signal stays semantically correct.
  */
-export function isPeerJoinedCue(message: SignalingMessage): boolean {
+export function isPeerJoinedCue(
+  message: SignalingMessage,
+): message is Extract<SignalingMessage, { type: 'pubkey' }> {
   return message.type === 'pubkey'
 }
 
@@ -114,17 +116,26 @@ export function shouldHostSendOffer(
  * rules out reconnect logic, so the only remaining option is to fail fast (D4)
  * instead of leaving both UIs on "Connecting…" until the 300s TTL closes the sockets.
  *
- * Known trade-off: the DO can also hand the side that joined second a duplicate copy of
- * one join cue, so a host in that position sees a second cue here too. Phase 1 cannot
- * tell that copy apart from a real re-join — both carry an empty `publicKey` — so D4's
- * policy applies to both: end explicitly rather than resume.
+ * That host also receives a *duplicate* of the very first cue, with no re-join involved:
+ * the DO hands the peer's key to the newcomer directly and then flushes the copy it
+ * buffered while waiting for that newcomer (`session.ts` `handleJoin`), so whoever joins
+ * second sees this cue twice. In Phase 2 the two kinds of cue are still distinguishable,
+ * because every attempt generates a fresh ephemeral keypair: a duplicate repeats the key
+ * this host has already exchanged with, while a genuine re-join arrives with a new one.
+ * So a cue is only a re-join when its `publicKey` differs from `exchangedPeerPublicKey`
+ * (ORCHESTRATION.md D5). A `null` there means no exchange has completed yet, which cannot
+ * be a re-join.
  */
 export function isPeerRejoinedCue(
   message: SignalingMessage,
   role: SessionRole | null,
   offerSent: boolean,
+  exchangedPeerPublicKey: string | null,
 ): boolean {
-  return role === 'host' && offerSent && isPeerJoinedCue(message)
+  if (role !== 'host' || !offerSent) return false
+  if (!isPeerJoinedCue(message)) return false
+  if (exchangedPeerPublicKey === null) return false
+  return message.publicKey !== exchangedPeerPublicKey
 }
 
 /**

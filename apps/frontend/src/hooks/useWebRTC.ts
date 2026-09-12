@@ -9,16 +9,22 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PeerConnection } from '../lib/webrtc'
-import type { HelloMessage, PeerConnectionOptions } from '../lib/webrtc'
+import type { Frame, PeerConnectionOptions } from '../lib/webrtc'
 import { useSessionStore } from '../store/sessionStore'
 
 export interface UseWebRTCHandlers {
   /** A local ICE candidate to relay to the peer over signaling. */
   onIceCandidate: (candidate: RTCIceCandidateInit) => void
-  /** A message arrived on the DataChannel. */
-  onMessage: (message: HelloMessage) => void
+  /** A message arrived on the DataChannel (already decrypted and authenticated). */
+  onMessage: (message: Frame) => void
   /** The DataChannel is open; the session can start exchanging items. */
   onOpen: () => void
+  /**
+   * A frame failed after `send()` returned. Encryption and the channel write are
+   * asynchronous (ORCHESTRATION.md D3), so this is the only way a send failure can
+   * reach the session: without it the failure would be swallowed.
+   */
+  onSendError: (error: unknown) => void
 }
 
 export interface UseWebRTCResult {
@@ -29,7 +35,14 @@ export interface UseWebRTCResult {
   receiveOffer: (offer: RTCSessionDescriptionInit) => Promise<RTCSessionDescriptionInit>
   receiveAnswer: (answer: RTCSessionDescriptionInit) => Promise<void>
   addIceCandidate: (candidate: RTCIceCandidateInit) => Promise<void>
-  send: (message: HelloMessage) => void
+  /**
+   * Installs the ECDH-derived session key. Until this is called the peer refuses
+   * to send, so no plaintext application frame can reach the channel.
+   */
+  setSessionKey: (key: CryptoKey) => void
+  send: (message: Frame) => void
+  /** Resolves once every accepted frame has left the channel. Never rejects. */
+  drain: () => Promise<void>
   /** Tears down the peer. Idempotent. */
   close: () => void
 }
@@ -45,6 +58,13 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
 
   const peerRef = useRef<PeerConnection | null>(null)
   const unsubscribersRef = useRef<readonly (() => void)[]>([])
+
+  /**
+   * The session key is held here as well as on the peer, so a key that arrives
+   * before `createPeer()` is not lost — otherwise the session would refuse to send
+   * for its whole lifetime.
+   */
+  const sessionKeyRef = useRef<CryptoKey | null>(null)
 
   /**
    * Handlers are kept in a ref so a re-render with fresh closures never rebuilds
@@ -67,6 +87,10 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
     if (peerRef.current) return
 
     const peer = new PeerConnection(options)
+    const sessionKey = sessionKeyRef.current
+    if (sessionKey) {
+      peer.setSessionKey(sessionKey)
+    }
     peerRef.current = peer
     unsubscribersRef.current = [
       peer.onIceCandidate((candidate) => {
@@ -82,8 +106,16 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
         setConnectionState(state)
         setStoreConnectionState(state)
       }),
+      peer.onSendError((error) => {
+        handlersRef.current.onSendError(error)
+      }),
     ]
   }, [setStoreConnectionState])
+
+  const setSessionKey = useCallback((key: CryptoKey): void => {
+    sessionKeyRef.current = key
+    peerRef.current?.setSessionKey(key)
+  }, [])
 
   const close = useCallback((): void => {
     for (const unsubscribe of unsubscribersRef.current) {
@@ -93,6 +125,7 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
 
     const peer = peerRef.current
     peerRef.current = null
+    sessionKeyRef.current = null
     peer?.close()
 
     setConnectionState('closed')
@@ -125,11 +158,15 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
   )
 
   const send = useCallback(
-    (message: HelloMessage): void => {
+    (message: Frame): void => {
       requirePeer().send(message)
     },
     [requirePeer],
   )
+
+  const drain = useCallback(async (): Promise<void> => {
+    await peerRef.current?.drain()
+  }, [])
 
   // Safety net: closing again from the caller is a no-op, so either teardown
   // path may run first without breaking the other.
@@ -146,7 +183,9 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
     receiveOffer,
     receiveAnswer,
     addIceCandidate,
+    setSessionKey,
     send,
+    drain,
     close,
   }
 }

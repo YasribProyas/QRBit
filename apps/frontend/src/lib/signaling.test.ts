@@ -142,7 +142,10 @@ describe('SignalingClient join handshake', () => {
     })
   })
 
-  it('sends an empty public key in Phase 1 without dropping the field', async () => {
+  it('always serialises the publicKey field, even when the caller passes none', async () => {
+    // Phase 2 always passes the real base64 public key (see useSession), but the
+    // client itself must never drop the field: a join without `publicKey` is not a
+    // valid signaling message (PLAN.md §13).
     const { registry } = await makeConnectedClient('host')
     const frame = JSON.parse(registry.latest.sent[0] ?? 'null') as Record<string, unknown>
     expect(frame['publicKey']).toBe('')
@@ -393,34 +396,50 @@ describe('peer-joined cue', () => {
   })
 
   /**
-   * ORCHESTRATION.md D4. A pre-pairing disconnect releases the role's slot but leaves
-   * the code joinable (D1), so a guest that drops out and re-joins the same code makes
-   * the Durable Object send the host a second cue. The host has already latched its one
-   * offer, so the session ends rather than hanging on "Connecting…" until the TTL.
+   * ORCHESTRATION.md D4 and D5. A pre-pairing disconnect releases the role's slot but
+   * leaves the code joinable (D1), so a guest that drops out and re-joins the same code
+   * makes the Durable Object send the host a second cue. The host has already latched its
+   * one offer, so the session ends rather than hanging on "Connecting…" until the TTL.
+   *
+   * The same host also gets a duplicate of the first cue, because the DO sends the
+   * newcomer the peer key directly and then flushes the copy it buffered while waiting
+   * for that newcomer. The duplicate repeats the already-exchanged key, which is what
+   * separates it from a re-join (D5).
    */
   describe('isPeerRejoinedCue', () => {
-    const CUE: SignalingMessage = { type: 'pubkey', publicKey: '' }
+    const EXCHANGED_KEY = 'BNibRy0JQ3v0kZ9dT7xLpQ'
+    const REJOINED: SignalingMessage = { type: 'pubkey', publicKey: 'BA1qWmPz8uYcE2nH5sVfKg' }
+    const DUPLICATE: SignalingMessage = { type: 'pubkey', publicKey: EXCHANGED_KEY }
 
-    it('is true only when a host that has already offered sees the cue', () => {
-      expect(isPeerRejoinedCue(CUE, 'host', true)).toBe(true)
-      expect(isPeerRejoinedCue(CUE, 'host', false)).toBe(false)
-      expect(isPeerRejoinedCue(CUE, 'guest', true)).toBe(false)
-      expect(isPeerRejoinedCue(CUE, null, true)).toBe(false)
+    it('is true only when a host that has already offered sees a cue for a different key', () => {
+      expect(isPeerRejoinedCue(REJOINED, 'host', true, EXCHANGED_KEY)).toBe(true)
+      expect(isPeerRejoinedCue(REJOINED, 'host', false, EXCHANGED_KEY)).toBe(false)
+      expect(isPeerRejoinedCue(REJOINED, 'guest', true, EXCHANGED_KEY)).toBe(false)
+      expect(isPeerRejoinedCue(REJOINED, null, true, EXCHANGED_KEY)).toBe(false)
+    })
+
+    it('ignores the duplicate copy of the cue, which repeats the exchanged key', () => {
+      // The DO's second copy must not abort a session that is pairing normally.
+      expect(isPeerRejoinedCue(DUPLICATE, 'host', true, EXCHANGED_KEY)).toBe(false)
+    })
+
+    it('does not claim a re-join before any key has been exchanged', () => {
+      expect(isPeerRejoinedCue(DUPLICATE, 'host', true, null)).toBe(false)
     })
 
     it('is false for every message that is not the peer-joined cue', () => {
       for (const message of ALL_MESSAGE_TYPES) {
         if (message.type === 'pubkey') continue
-        expect(isPeerRejoinedCue(message, 'host', true)).toBe(false)
+        expect(isPeerRejoinedCue(message, 'host', true, EXCHANGED_KEY)).toBe(false)
       }
     })
 
     it('leaves the first cue to shouldHostSendOffer', () => {
-      // The two predicates are exact complements on the cue: only the latch separates
-      // "a peer joined" from "the peer re-joined", which is why the first cue still
-      // produces the offer instead of ending the session.
-      expect(isPeerRejoinedCue(CUE, 'host', false)).toBe(false)
-      expect(shouldHostSendOffer(CUE, 'host', false)).toBe(true)
+      // The two predicates are exact complements on a first cue: only the offer latch
+      // separates "a peer joined" from "the peer re-joined", which is why the first cue
+      // still produces the offer instead of ending the session.
+      expect(isPeerRejoinedCue(REJOINED, 'host', false, null)).toBe(false)
+      expect(shouldHostSendOffer(REJOINED, 'host', false)).toBe(true)
     })
   })
 })

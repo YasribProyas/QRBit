@@ -142,7 +142,21 @@ worth it for a quick transfer tool." Rebuilding the `PeerConnection` and re-offe
 peer. A clear immediate failure is both plan-aligned and better UX than a silent
 five-minute spinner.
 
-### D2 — `pubkey` doubles as the "peer joined" cue (Phase 1 → 2)
+### D5 — pubkey identity as the D4 re-join discriminator (Phase 2)
+D4's `isPeerRejoinedCue()` originally returned true for *any* second `pubkey` cue
+after `offerSent`, regardless of whether the key changed. The DO provably delivers
+two copies of the same cue to the second joiner: one direct send and one flushed
+from the buffer. With a guest-first join the host gets the duplicate after it has
+already offered, triggering a false D4 abort — "the other device reconnected" —
+with no re-join having occurred. Latent today (timing-dependent: fires only if HKDF
+completed before the duplicate arrives) but fragile.
+
+Fix: pass the previously-exchanged peer public key (string) into `isPeerRejoinedCue`.
+A same-key duplicate → false (ignore). A new key → true (genuine re-join, fail fast).
+This discriminator is correct because `run()` regenerates the keypair on every
+attempt, so a real re-join always carries a new ephemeral key.
+
+
 The host sends its SDP offer only on receiving `pubkey`, because the worker
 rejects a premature offer as `peer-not-connected`. PLAN.md §13 has no explicit
 `peer-joined` frame. Keeping this: in Phase 2 `pubkey` carries a real key, so the

@@ -1,10 +1,15 @@
 /** @vitest-environment jsdom */
 /**
- * Tests that the peer's connection state reaches the session store (PLAN.md §9).
+ * Tests for the `useWebRTC` wrapper (PLAN.md §9, §12).
  *
  * `useSession` — and every Phase 3 component — reads `connectionState` from
  * `useSessionStore`, so the hook's peer subscription has to write there too. A
  * hook-local `useState` alone leaves the store at `'new'` for the whole session.
+ *
+ * The second group covers the Phase 2 async send channel: because AES-GCM is
+ * asynchronous the `send()` signature stays `void` (ORCHESTRATION.md D3), so a
+ * failed send has to reach the session through `onSendError` rather than by
+ * throwing at the call site.
  *
  * node/jsdom ship no `RTCPeerConnection`, so the global is replaced with the fake
  * below before the hook constructs its peer. React's own `act` is used directly
@@ -17,9 +22,37 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { useSessionStore } from '../store/sessionStore'
 import { useWebRTC } from './useWebRTC'
-import type { UseWebRTCResult } from './useWebRTC'
+import type { UseWebRTCHandlers, UseWebRTCResult } from './useWebRTC'
+
+class FakeDataChannel {
+  readonly sent: unknown[] = []
+  readyState: RTCDataChannelState = 'connecting'
+  binaryType: BinaryType = 'blob'
+  closed = false
+
+  onopen: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  onclose: ((event: Event) => void) | null = null
+
+  send(data: unknown): void {
+    this.sent.push(data)
+  }
+
+  close(): void {
+    this.closed = true
+    this.readyState = 'closed'
+  }
+
+  open(): void {
+    this.readyState = 'open'
+    this.onopen?.(new Event('open'))
+  }
+}
 
 class FakeRTCPeerConnection {
+  readonly createdChannels: FakeDataChannel[] = []
+
   onicecandidate: ((event: RTCPeerConnectionIceEvent) => void) | null = null
   ondatachannel: ((event: RTCDataChannelEvent) => void) | null = null
   onconnectionstatechange: ((event: Event) => void) | null = null
@@ -29,6 +62,20 @@ class FakeRTCPeerConnection {
 
   constructor() {
     fakes.push(this)
+  }
+
+  createDataChannel(): RTCDataChannel {
+    const channel = new FakeDataChannel()
+    this.createdChannels.push(channel)
+    return channel as unknown as RTCDataChannel
+  }
+
+  async createOffer(): Promise<RTCSessionDescriptionInit> {
+    return { type: 'offer', sdp: 'fake-offer-sdp' }
+  }
+
+  async setLocalDescription(): Promise<void> {
+    // Nothing to record: this fake only needs to satisfy the host path.
   }
 
   close(): void {
@@ -47,11 +94,19 @@ function latestFake(): FakeRTCPeerConnection {
 }
 
 /** Renders the hook and exposes its latest result, so tests can drive it directly. */
-function renderHookProbe(): { result: () => UseWebRTCResult; unmount: () => void } {
+function renderHookProbe(
+  overrides: Partial<UseWebRTCHandlers> = {},
+): { result: () => UseWebRTCResult; unmount: () => void } {
   let current: UseWebRTCResult | null = null
 
   function Probe() {
-    current = useWebRTC({ onIceCandidate: () => {}, onMessage: () => {}, onOpen: () => {} })
+    current = useWebRTC({
+      onIceCandidate: () => {},
+      onMessage: () => {},
+      onOpen: () => {},
+      onSendError: () => {},
+      ...overrides,
+    })
     return null
   }
 
@@ -71,6 +126,33 @@ function renderHookProbe(): { result: () => UseWebRTCResult; unmount: () => void
       })
     },
   }
+}
+
+/** A stand-in for the ECDH-derived session key; the derivation is tested elsewhere. */
+async function makeSessionKey(): Promise<CryptoKey> {
+  return globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ])
+}
+
+/** Brings the probe's peer up to the point where a frame can be sent. */
+async function openChannel(
+  probe: { result: () => UseWebRTCResult },
+): Promise<FakeDataChannel> {
+  act(() => {
+    probe.result().createPeer()
+  })
+  await act(async () => {
+    await probe.result().initAsHost()
+  })
+
+  const channel = latestFake().createdChannels[0]
+  if (!channel) throw new Error('test bug: initAsHost created no data channel')
+  act(() => {
+    channel.open()
+  })
+  return channel
 }
 
 beforeEach(() => {
@@ -125,6 +207,73 @@ describe('useWebRTC connection state (PLAN.md §9)', () => {
 
     expect(latestFake().closed).toBe(true)
     expect(useSessionStore.getState().connectionState).toBe('closed')
+
+    probe.unmount()
+  })
+})
+
+describe('useWebRTC encrypted send channel (ORCHESTRATION.md D3)', () => {
+  it('refuses to send until the session key has been installed', async () => {
+    const probe = renderHookProbe()
+    await openChannel(probe)
+
+    expect(() => {
+      probe.result().send({ t: 'phrase-confirm' })
+    }).toThrow(/session key is not ready/)
+
+    probe.unmount()
+  })
+
+  it('installs the session key on the peer so a frame can be encrypted and sent', async () => {
+    const probe = renderHookProbe()
+    const channel = await openChannel(probe)
+
+    const key = await makeSessionKey()
+    act(() => {
+      probe.result().setSessionKey(key)
+    })
+    act(() => {
+      probe.result().send({ t: 'session-end' })
+    })
+    await act(async () => {
+      await probe.result().drain()
+    })
+
+    expect(channel.sent).toHaveLength(1)
+    expect(channel.sent[0]).toBeInstanceOf(ArrayBuffer)
+
+    probe.unmount()
+  })
+
+  it('routes an asynchronous send failure to onSendError instead of dropping it', async () => {
+    const errors: unknown[] = []
+    const probe = renderHookProbe({ onSendError: (error) => errors.push(error) })
+    const channel = await openChannel(probe)
+    const key = await makeSessionKey()
+    act(() => {
+      probe.result().setSessionKey(key)
+    })
+
+    act(() => {
+      probe.result().send({ t: 'session-end' })
+    })
+    // The peer is gone by the time the queued write runs.
+    channel.readyState = 'closed'
+
+    await act(async () => {
+      await probe.result().drain()
+    })
+
+    expect(errors).toHaveLength(1)
+    expect(channel.sent).toEqual([])
+
+    probe.unmount()
+  })
+
+  it('resolves drain() for a probe whose peer was never created', async () => {
+    const probe = renderHookProbe()
+
+    await expect(probe.result().drain()).resolves.toBeUndefined()
 
     probe.unmount()
   })

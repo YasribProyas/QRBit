@@ -1,20 +1,34 @@
 /**
- * Session orchestration for Phase 1 (PLAN.md §8).
+ * Session orchestration (PLAN.md §8).
  *
  * Owns the whole handshake: role assignment from the URL, session creation,
- * signaling, the offer/answer/ICE exchange, and the first DataChannel messages.
- * `pages/Session.tsx` stays presentational because of this.
+ * signaling, the ECDH public-key exchange, the offer/answer/ICE exchange, the
+ * safety-phrase gate, and the first encrypted DataChannel frames. `pages/Session.tsx`
+ * stays presentational because of this.
  *
- * PHASE 2 SEAM: ECDH key exchange, the safety phrase and the phrase-confirm gate
- * slot in here, between the `paired` message and the point the session is marked
- * active. The `pubkey` and `paired` branches below are already reserved for it.
+ * PHASE 2 SCOPE: the phase sequence is connecting → pairing (the safety-phrase
+ * overlay is up and the session is held until both devices confirm) → active
+ * (PLAN.md §8). Nothing here stores key material: the keypair, the session key and
+ * the phrase live in memory for the lifetime of the session and are dropped when the
+ * peer connection closes (AGENTS.md forbids persistence).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { buildNewSessionUrl, SIGNALING_WS_URL } from '../config'
+import {
+  deriveSafetyPhraseBytes,
+  deriveSessionKey,
+  deriveSharedSecret,
+  exportPublicKey,
+  fromBase64,
+  generateKeypair,
+  importPeerPublicKey,
+  toBase64,
+} from '../lib/crypto'
+import { bytesToPhrase } from '../lib/safetyPhrase'
 import { SignalingClient, isPeerRejoinedCue, shouldHostSendOffer } from '../lib/signaling'
 import type { SessionRole, SignalingMessage } from '../lib/signaling'
-import type { HelloMessage, PeerConnectionOptions } from '../lib/webrtc'
+import type { Frame, PeerConnectionOptions } from '../lib/webrtc'
 import { useSessionStore } from '../store/sessionStore'
 import type { SessionPhase } from '../store/sessionStore'
 import { useWebRTC } from './useWebRTC'
@@ -91,6 +105,62 @@ export function describeError(error: unknown): string {
   return 'Something went wrong starting the session'
 }
 
+/** Overwrites a buffer that held key material. Never logged, never returned. */
+function zeroBytes(bytes: ArrayBuffer | Uint8Array): void {
+  if (bytes instanceof Uint8Array) {
+    bytes.fill(0)
+    return
+  }
+  new Uint8Array(bytes).fill(0)
+}
+
+/**
+ * Derives this session's encryption key and safety phrase from the peer's public
+ * key (PLAN.md §11.1–§11.3, §11.6).
+ *
+ * `sessionId` is the 8-character session code both devices already know and is used
+ * as the HKDF salt; only the public keys cross the (untrusted) signaling channel, so
+ * a compromised worker cannot derive any of this. The session key and the phrase
+ * bytes come from different HKDF info strings, which is why showing the three words
+ * on screen gives nothing away about the key.
+ *
+ * The raw shared secret is zeroed as soon as both derivations have consumed it —
+ * it must never be stored, transported, logged or persisted.
+ */
+export async function deriveSessionMaterial(
+  privateKey: CryptoKey,
+  peerPublicKeyBase64: string,
+  sessionId: string,
+): Promise<{ sessionKey: CryptoKey; phrase: [string, string, string] }> {
+  // `fromBase64` rejects empty or malformed input, so a peer that joined without a
+  // real public key surfaces here instead of producing a session nobody can read.
+  const peerPublicKey = await importPeerPublicKey(fromBase64(peerPublicKeyBase64).buffer)
+  const sharedSecret = await deriveSharedSecret(privateKey, peerPublicKey)
+
+  try {
+    const sessionKey = await deriveSessionKey(sharedSecret, sessionId)
+    const phraseBytes = await deriveSafetyPhraseBytes(sharedSecret, sessionId)
+    const phrase = bytesToPhrase(phraseBytes)
+    zeroBytes(phraseBytes)
+    return { sessionKey, phrase }
+  } finally {
+    zeroBytes(sharedSecret)
+  }
+}
+
+/**
+ * PLAN.md §8 Phase 2: the session advances to 'active' only once BOTH devices have
+ * confirmed the safety phrase; until then the overlay stays up and no item traffic
+ * flows. Pure so the gate can be pinned by a test without a React harness.
+ */
+export function nextPhaseForConfirmations(
+  phase: SessionPhase,
+  phraseConfirmed: boolean,
+  peerConfirmed: boolean,
+): SessionPhase {
+  return phase === 'pairing' && phraseConfirmed && peerConfirmed ? 'active' : phase
+}
+
 /**
  * The user-facing reason a session ends when the other device re-joins the code
  * after the host has already offered (ORCHESTRATION.md D4).
@@ -147,6 +217,16 @@ export interface UseSessionResult {
   localHello: string | null
   /** The greeting received from the peer. */
   peerHello: string | null
+  /** The three words both devices must see identically (PLAN.md §8 Phase 2). */
+  safetyPhrase: readonly [string, string, string] | null
+  /** This device's user has accepted the phrase. */
+  phraseConfirmed: boolean
+  /** The peer's encrypted phrase-confirm has arrived. */
+  peerConfirmed: boolean
+  /** Records this device's confirmation; the phrase-confirm follows once the channel is live. */
+  confirmPhrase: () => void
+  /** Tells the peer the session is over, then tears everything down. */
+  abort: () => void
   /** Tears the current attempt down and starts a fresh one. */
   restart: () => void
 }
@@ -159,20 +239,48 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
   const sessionCode = useSessionStore((state) => state.sessionCode)
   const connectionState = useSessionStore((state) => state.connectionState)
   const errorMessage = useSessionStore((state) => state.errorMessage)
+  const safetyPhrase = useSessionStore((state) => state.safetyPhrase)
+  const phraseConfirmed = useSessionStore((state) => state.phraseConfirmed)
+  const peerConfirmed = useSessionStore((state) => state.peerConfirmed)
 
   const startConnecting = useSessionStore((state) => state.startConnecting)
   const setSessionCode = useSessionStore((state) => state.setSessionCode)
   const setPhase = useSessionStore((state) => state.setPhase)
+  const setSafetyPhrase = useSessionStore((state) => state.setSafetyPhrase)
+  const setPeerConfirmed = useSessionStore((state) => state.setPeerConfirmed)
+  const confirmPhrase = useSessionStore((state) => state.confirmPhrase)
   const endSession = useSessionStore((state) => state.endSession)
   const reset = useSessionStore((state) => state.reset)
 
   const [localHello, setLocalHello] = useState<string | null>(null)
   const [peerHello, setPeerHello] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
+  /**
+   * The two conditions that make the encrypted channel usable. Both are tracked
+   * separately from the store because they gate *sends*, not what the UI shows.
+   */
+  const [channelOpen, setChannelOpen] = useState(false)
+  const [sessionKeyReady, setSessionKeyReady] = useState(false)
 
   const signalingRef = useRef<SignalingClient | null>(null)
   const roleRef = useRef<SessionRole | null>(null)
-  const sendRef = useRef<((message: HelloMessage) => void) | null>(null)
+  /** This device's ephemeral keypair. Its private half never leaves memory. */
+  const keypairRef = useRef<CryptoKeyPair | null>(null)
+  /** The 8-character code used as the HKDF salt (PLAN.md §11.2). */
+  const sessionCodeRef = useRef<string | null>(null)
+  /** Whether the ECDH exchange has already produced a session key this attempt. */
+  const keysExchangedRef = useRef(false)
+  /**
+   * The peer public key this attempt has completed a key exchange with.
+   *
+   * The Durable Object can send the peer-joined cue twice (a direct send plus a
+   * flushed buffered copy), and a genuine re-join of the same code arrives as a
+   * second cue carrying a new ephemeral key, so this is what tells the two apart
+   * (ORCHESTRATION.md D5).
+   */
+  const exchangedPeerKeyRef = useRef<string | null>(null)
+  const helloSentRef = useRef(false)
+  const confirmSentRef = useRef(false)
 
   const handleIceCandidate = useCallback((candidate: RTCIceCandidateInit): void => {
     try {
@@ -183,40 +291,65 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     }
   }, [])
 
-  const handlePeerMessage = useCallback((message: HelloMessage): void => {
-    setPeerHello(message.text)
-  }, [])
+  const handlePeerMessage = useCallback(
+    (message: Frame): void => {
+      switch (message.t) {
+        case 'hello': {
+          setPeerHello(message.text)
+          return
+        }
+        case 'phrase-confirm': {
+          // PLAN.md §8: the session may only proceed once BOTH devices confirm, so
+          // this flag alone never starts the session — see
+          // nextPhaseForConfirmations.
+          setPeerConfirmed(true)
+          return
+        }
+        case 'session-end': {
+          // The peer aborted on purpose. Its socket teardown closes this channel
+          // moments later, so all that is left is the ended state (PLAN.md §8 Phase 4).
+          endSession(null)
+          return
+        }
+      }
+    },
+    [endSession, setPeerConfirmed],
+  )
 
   const handleChannelOpen = useCallback((): void => {
-    const currentRole = roleRef.current
-    const send = sendRef.current
-    if (!currentRole || !send) return
+    setChannelOpen(true)
+  }, [])
 
-    setPhase('active')
-
-    const text = `Hello from the ${currentRole} device`
-    setLocalHello(text)
-
-    try {
-      send({ t: 'hello', from: currentRole, text })
-    } catch (error) {
+  /**
+   * Encryption and the channel write are asynchronous, so a send failure cannot be
+   * caught by the caller of `send()` (ORCHESTRATION.md D3). This is where it is
+   * reported instead of being swallowed.
+   */
+  const handleSendError = useCallback(
+    (error: unknown): void => {
       endSession(describeError(error))
-    }
-  }, [endSession, setPhase])
+    },
+    [endSession],
+  )
 
   const webRtc = useWebRTC({
     onIceCandidate: handleIceCandidate,
     onMessage: handlePeerMessage,
     onOpen: handleChannelOpen,
+    onSendError: handleSendError,
   })
 
-  const { createPeer, initAsHost, receiveOffer, receiveAnswer, addIceCandidate, send, close } = webRtc
-
-  // The channel-open handler is defined before the peer exists, so the send
-  // function is reached through a ref rather than closing over a stale value.
-  useEffect(() => {
-    sendRef.current = send
-  }, [send])
+  const {
+    createPeer,
+    initAsHost,
+    receiveOffer,
+    receiveAnswer,
+    addIceCandidate,
+    setSessionKey,
+    send,
+    drain,
+    close,
+  } = webRtc
 
   useEffect(() => {
     let cancelled = false
@@ -246,6 +379,44 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
       client.send({ type: 'offer', sdp: offer.sdp })
     }
 
+    /**
+     * Runs the ECDH exchange with the peer's public key and installs the result
+     * (PLAN.md §13/§11.1–§11.2). The peer's key arrives in the `pubkey` message,
+     * before any offer is created, so the session key exists before the DataChannel
+     * can open — that ordering is what makes it impossible to send a frame before it
+     * can be encrypted.
+     */
+    const performKeyExchange = async (peerPublicKey: string): Promise<void> => {
+      if (keysExchangedRef.current) return
+
+      const keypair = keypairRef.current
+      const activeCode = sessionCodeRef.current
+      if (!keypair || activeCode === null) {
+        throw new Error('the peer sent a public key before this device was ready')
+      }
+
+      // Claimed before the first await: the worker can deliver the cue twice, and both
+      // copies would otherwise start their own derivation.
+      keysExchangedRef.current = true
+      let material: { sessionKey: CryptoKey; phrase: [string, string, string] }
+      try {
+        material = await deriveSessionMaterial(keypair.privateKey, peerPublicKey, activeCode)
+      } catch (error) {
+        // Nothing was installed, so a later cue (or a restart) may derive again.
+        keysExchangedRef.current = false
+        throw error
+      }
+      if (isStale()) return
+
+      exchangedPeerKeyRef.current = peerPublicKey
+      setSessionKey(material.sessionKey)
+      setSessionKeyReady(true)
+      setSafetyPhrase(material.phrase)
+      // The peer has joined and the words are now on screen: PLAN.md §8's 'pairing'
+      // phase, which the overlay gates (the session is held until both confirm).
+      setPhase('pairing')
+    }
+
     const handleSignalingMessage = async (client: SignalingClient, message: SignalingMessage): Promise<void> => {
       if (isStale()) return
       try {
@@ -272,23 +443,33 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
             return
           }
           case 'paired': {
-            // PHASE 2 SEAM: the safety-phrase overlay is shown here and the
-            // session is held until both sides confirm. Phase 1 proceeds.
+            // The Durable Object has seen the offer and the answer. The safety-phrase
+            // gate is driven by the DataChannel and the phrase-confirms, not by this
+            // message, so there is nothing to do here (PLAN.md §8 Phase 2).
             return
           }
           case 'pubkey': {
             // 'pubkey' means 'peer joined' — it is the cue that this host may open the
-            // SDP exchange (see sendHostOffer and shouldHostSendOffer).
-            // PHASE 2 SEAM: this will also carry the peer's P-256 public key, used for
-            // ECDH key agreement, which is when the join cue becomes a real key.
-            if (isPeerRejoinedCue(message, roleRef.current, offerSent)) {
+            // SDP exchange (see sendHostOffer and shouldHostSendOffer) and it carries
+            // the peer's real P-256 public key (PLAN.md §13).
+            if (
+              isPeerRejoinedCue(
+                message,
+                roleRef.current,
+                offerSent,
+                exchangedPeerKeyRef.current,
+              )
+            ) {
               // The other device re-joined a code this host has already offered into,
               // so there is no second offer to send and no handshake to resume. Fail
               // fast rather than sitting on the cue until the TTL closes the sockets
-              // (ORCHESTRATION.md D4, PLAN.md §19 decision 10).
+              // (ORCHESTRATION.md D4, PLAN.md §19 decision 10). A duplicate copy of the
+              // cue carrying the key this host already exchanged with is not a re-join
+              // and falls through (ORCHESTRATION.md D5).
               endSession(PEER_REJOINED_REASON)
               return
             }
+            await performKeyExchange(message.publicKey)
             await sendHostOffer(client, message)
             return
           }
@@ -310,8 +491,16 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     const run = async (): Promise<void> => {
       const nextRole: SessionRole = code !== null && code !== '' ? 'guest' : 'host'
       roleRef.current = nextRole
+      keypairRef.current = null
+      keysExchangedRef.current = false
+      exchangedPeerKeyRef.current = null
+      sessionCodeRef.current = null
+      helloSentRef.current = false
+      confirmSentRef.current = false
       setLocalHello(null)
       setPeerHello(null)
+      setChannelOpen(false)
+      setSessionKeyReady(false)
       startConnecting(nextRole, code)
 
       try {
@@ -335,6 +524,17 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
 
         createPeer(peerOptions)
         if (isStale()) return
+
+        // PLAN.md §13: each device generates an ephemeral keypair before joining and
+        // publishes only the public half, base64-encoded, in its join message. The
+        // worker relays it and never sees a private key.
+        const keypair = await generateKeypair()
+        if (isStale()) return
+        keypairRef.current = keypair
+        const publicKey = toBase64(await exportPublicKey(keypair.publicKey))
+        if (isStale()) return
+
+        sessionCodeRef.current = activeCode
 
         const client = new SignalingClient(SIGNALING_WS_URL)
         signalingRef.current = client
@@ -365,7 +565,7 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
           void handleSignalingMessage(client, message)
         })
 
-        await client.connect(activeCode, nextRole, '')
+        await client.connect(activeCode, nextRole, publicKey)
         if (isStale()) return
 
         // The host's offer is deliberately not sent here. It waits for the peer to
@@ -395,6 +595,8 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
       signalingRef.current?.close()
       signalingRef.current = null
       roleRef.current = null
+      keypairRef.current = null
+      sessionCodeRef.current = null
       close()
     }
   }, [
@@ -405,11 +607,63 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     receiveOffer,
     receiveAnswer,
     addIceCandidate,
+    setSessionKey,
     close,
     startConnecting,
     setSessionCode,
+    setPhase,
+    setSafetyPhrase,
     endSession,
   ])
+
+  /**
+   * Sends the encrypted greeting once the channel is usable (PLAN.md §16 Phase 1's
+   * channel check, now inside the AES-GCM envelope).
+   *
+   * It waits for BOTH conditions: the DataChannel can open before the session key is
+   * installed, and `send()` refuses to run without a key, so opening the channel is
+   * not on its own permission to put a frame on the wire.
+   */
+  useEffect(() => {
+    const currentRole = roleRef.current
+    if (!currentRole || !channelOpen || !sessionKeyReady || helloSentRef.current) return
+    helloSentRef.current = true
+
+    const text = `Hello from the ${currentRole} device`
+    setLocalHello(text)
+
+    try {
+      send({ t: 'hello', from: currentRole, text })
+    } catch (error) {
+      endSession(describeError(error))
+    }
+  }, [channelOpen, sessionKeyReady, send, endSession])
+
+  /**
+   * Sends the encrypted phrase-confirm once this device has confirmed (PLAN.md §10).
+   *
+   * The user can read the three words and tap Confirmed while the WebRTC handshake is
+   * still finishing, so the send waits for an open channel with a session key rather
+   * than falling back to anything unencrypted.
+   */
+  useEffect(() => {
+    if (!phraseConfirmed || !channelOpen || !sessionKeyReady || confirmSentRef.current) return
+    confirmSentRef.current = true
+
+    try {
+      send({ t: 'phrase-confirm' })
+    } catch (error) {
+      endSession(describeError(error))
+    }
+  }, [phraseConfirmed, channelOpen, sessionKeyReady, send, endSession])
+
+  /** PLAN.md §8 Phase 2 gate: pairing → active only once both devices confirmed. */
+  useEffect(() => {
+    const next = nextPhaseForConfirmations(phase, phraseConfirmed, peerConfirmed)
+    if (next !== phase) {
+      setPhase(next)
+    }
+  }, [phase, phraseConfirmed, peerConfirmed, setPhase])
 
   // The signaling connection is closed on unmount so the worker's Durable Object
   // sees this device leave instead of waiting for its session to expire.
@@ -431,6 +685,31 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     setAttempt((current) => current + 1)
   }, [close, reset])
 
+  /**
+   * The overlay's Abort button (PLAN.md §8 Phase 2).
+   *
+   * Tells the peer the session is over, then tears the connection down. The frame is
+   * queued rather than written (ORCHESTRATION.md D3), so the teardown waits for
+   * `drain()` — closing the channel underneath its own queue would drop the
+   * session-end and leave the peer guessing. A channel that never opened has no peer
+   * to tell, so the send is skipped there.
+   */
+  const abort = useCallback((): void => {
+    try {
+      send({ t: 'session-end' })
+    } catch {
+      // The channel was not usable; there is nobody to notify.
+    }
+
+    void drain().then(() => {
+      signalingRef.current?.close()
+      signalingRef.current = null
+      close()
+      // A deliberate end, not a failure: PLAN.md §8 Phase 4's "Session ended".
+      endSession(null)
+    })
+  }, [send, drain, close, endSession])
+
   const roleLabel =
     role === 'host'
       ? 'Host — waiting for another device to scan your code'
@@ -448,6 +727,11 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     roleLabel,
     localHello,
     peerHello,
+    safetyPhrase,
+    phraseConfirmed,
+    peerConfirmed,
+    confirmPhrase,
+    abort,
     restart,
   }
 }

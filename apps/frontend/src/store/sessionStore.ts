@@ -89,6 +89,13 @@ export interface SessionState {
   sessionCode: string | null
   safetyPhrase: [string, string, string] | null
   phraseConfirmed: boolean
+  /**
+   * ADDITIVE to PLAN.md §9 (Phase 2). True once the *peer's* phrase-confirm has
+   * arrived over the (encrypted) data channel. Kept separate from
+   * `phraseConfirmed`, which only ever means "this device tapped Confirmed",
+   * because PLAN.md §8 blocks the session until both sides have confirmed.
+   */
+  peerConfirmed: boolean
   items: SessionItem[]
   connectionState: RTCPeerConnectionState
   /**
@@ -109,6 +116,7 @@ export const INITIAL_SESSION_STATE: SessionState = {
   sessionCode: null,
   safetyPhrase: null,
   phraseConfirmed: false,
+  peerConfirmed: false,
   items: [],
   connectionState: 'new',
   errorMessage: null,
@@ -125,6 +133,20 @@ export interface SessionActions {
   setSafetyPhrase: (phrase: [string, string, string] | null) => void
   /** Phase 2 calls this when the user confirms the phrase matches. */
   setPhraseConfirmed: (confirmed: boolean) => void
+  /**
+   * Phase 2 records this device's confirmation. Narrower than
+   * `setPhraseConfirmed`: confirmation is one-way, so there is no un-confirm
+   * path and callers cannot accidentally clear it.
+   */
+  confirmPhrase: () => void
+  /** Phase 2 sets this when the peer's phrase-confirm arrives (or is withdrawn). */
+  setPeerConfirmed: (value: boolean) => void
+  /**
+   * Derived, not stored: PLAN.md §8 lets the session proceed only once both
+   * sides have confirmed. Read it through the store so both flags are fresh —
+   * `useSessionStore((state) => state.bothConfirmed())` in a component.
+   */
+  bothConfirmed: () => boolean
   /** Phase 3 replaces the whole ordered board. */
   setItems: (items: SessionItem[]) => void
   /** Phase 3 updates one item in place as chunks and deltas arrive. */
@@ -143,7 +165,7 @@ export interface SessionActions {
 
 export type SessionStore = SessionState & SessionActions
 
-export const useSessionStore = create<SessionStore>()((set) => ({
+export const useSessionStore = create<SessionStore>()((set, get) => ({
   ...INITIAL_SESSION_STATE,
 
   reset: () => {
@@ -157,6 +179,7 @@ export const useSessionStore = create<SessionStore>()((set) => ({
       sessionCode,
       safetyPhrase: null,
       phraseConfirmed: false,
+      peerConfirmed: false,
       items: [],
       connectionState: 'new',
       errorMessage: null,
@@ -177,6 +200,19 @@ export const useSessionStore = create<SessionStore>()((set) => ({
 
   setPhraseConfirmed: (phraseConfirmed) => {
     set({ phraseConfirmed })
+  },
+
+  confirmPhrase: () => {
+    set({ phraseConfirmed: true })
+  },
+
+  setPeerConfirmed: (peerConfirmed) => {
+    set({ peerConfirmed })
+  },
+
+  bothConfirmed: () => {
+    const { phraseConfirmed, peerConfirmed } = get()
+    return phraseConfirmed && peerConfirmed
   },
 
   setItems: (items) => {
@@ -200,6 +236,8 @@ export const useSessionStore = create<SessionStore>()((set) => ({
   },
 
   endSession: (reason) => {
-    set({ phase: 'ended', errorMessage: reason })
+    // The peer flag is dropped with the session: a confirmation from a finished
+    // session must never count towards the next one.
+    set({ phase: 'ended', peerConfirmed: false, errorMessage: reason })
   },
 }))
