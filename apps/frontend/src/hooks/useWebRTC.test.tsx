@@ -30,10 +30,15 @@ class FakeDataChannel {
   binaryType: BinaryType = 'blob'
   closed = false
 
+  /** The pump threshold the wrapper's peer armed, and the queue it reads. */
+  bufferedAmountLowThreshold = 0
+  bufferedAmount = 0
+
   onopen: ((event: Event) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: ((event: Event) => void) | null = null
   onclose: ((event: Event) => void) | null = null
+  onbufferedamountlow: ((event: Event) => void) | null = null
 
   send(data: unknown): void {
     this.sent.push(data)
@@ -274,6 +279,146 @@ describe('useWebRTC encrypted send channel (ORCHESTRATION.md D3)', () => {
     const probe = renderHookProbe()
 
     await expect(probe.result().drain()).resolves.toBeUndefined()
+
+    probe.unmount()
+  })
+
+  it('refuses item frames until markActive() is called, and carries them afterwards', async () => {
+    const probe = renderHookProbe()
+    const channel = await openChannel(probe)
+    const key = await makeSessionKey()
+    act(() => {
+      probe.result().setSessionKey(key)
+    })
+
+    expect(() => {
+      probe.result().send({ t: 'text-delta', id: 'a', content: 'too early' })
+    }).toThrow(/marked active/)
+    // The control frames that gate the session itself are always allowed.
+    act(() => {
+      probe.result().send({ t: 'phrase-confirm' })
+    })
+    await act(async () => {
+      await probe.result().drain()
+    })
+    expect(channel.sent).toHaveLength(1)
+
+    act(() => {
+      probe.result().markActive()
+    })
+    act(() => {
+      void probe.result().sendAwaitable({ t: 'text-delta', id: 'a', content: 'now' })
+    })
+    await act(async () => {
+      await probe.result().drain()
+    })
+    expect(channel.sent).toHaveLength(2)
+
+    probe.unmount()
+  })
+
+  it('applies markActive() to a peer that is created afterwards', async () => {
+    const probe = renderHookProbe()
+
+    // The host builds its peer only once the worker issues TURN credentials, so the
+    // gate can be opened before there is anything to open it on.
+    act(() => {
+      probe.result().markActive()
+    })
+    await openChannel(probe)
+    const key = await makeSessionKey()
+    act(() => {
+      probe.result().setSessionKey(key)
+    })
+
+    expect(() => {
+      probe.result().send({ t: 'item-delete', id: 'a' })
+    }).not.toThrow()
+
+    probe.unmount()
+  })
+
+  it('resolves sendAwaitable() once the frame has been written', async () => {
+    const probe = renderHookProbe()
+    const channel = await openChannel(probe)
+    const key = await makeSessionKey()
+    act(() => {
+      probe.result().markActive()
+      probe.result().setSessionKey(key)
+    })
+
+    await act(async () => {
+      await probe.result().sendAwaitable({ t: 'file-done', id: 'a' })
+    })
+
+    expect(channel.sent).toHaveLength(1)
+    expect(channel.sent[0]).toBeInstanceOf(ArrayBuffer)
+
+    probe.unmount()
+  })
+
+  it('reports the channel backpressure to the pumps and waits for it to clear', async () => {
+    const probe = renderHookProbe()
+    const channel = await openChannel(probe)
+
+    // Below the threshold: nothing to wait for.
+    await expect(probe.result().waitForBackpressure()).resolves.toBeUndefined()
+
+    channel.bufferedAmount = channel.bufferedAmountLowThreshold + 1
+    let resumed = false
+    const waiting = probe.result().waitForBackpressure().then(() => {
+      resumed = true
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(resumed).toBe(false)
+
+    channel.bufferedAmount = 0
+    act(() => {
+      channel.onbufferedamountlow?.(new Event('bufferedamountlow'))
+    })
+    await act(async () => {
+      await waiting
+    })
+    expect(resumed).toBe(true)
+
+    probe.unmount()
+  })
+
+  it('wakes a pump waiting on backpressure when the peer is torn down', async () => {
+    const probe = renderHookProbe()
+    const channel = await openChannel(probe)
+    channel.bufferedAmount = channel.bufferedAmountLowThreshold + 1
+
+    const waiting = probe.result().waitForBackpressure()
+    act(() => {
+      probe.result().close()
+    })
+
+    await act(async () => {
+      await expect(waiting).resolves.toBeUndefined()
+    })
+
+    probe.unmount()
+  })
+
+  it('wakes a pump waiting on backpressure when the item work is stopped instead', async () => {
+    const probe = renderHookProbe()
+    const channel = await openChannel(probe)
+    channel.bufferedAmount = channel.bufferedAmountLowThreshold + 1
+
+    const waiting = probe.result().waitForBackpressure()
+    act(() => {
+      probe.result().releaseBackpressure()
+    })
+
+    await act(async () => {
+      await expect(waiting).resolves.toBeUndefined()
+    })
+    // The peer survives: this is what the peer's clean `session-end` path needs, where
+    // no close() runs.
+    expect(probe.result().connectionState).not.toBe('closed')
 
     probe.unmount()
   })

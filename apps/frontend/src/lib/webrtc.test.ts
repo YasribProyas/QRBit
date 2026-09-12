@@ -1,6 +1,6 @@
 /**
- * Unit tests for the WebRTC module and the Phase 2 encrypted seam (PLAN.md §10,
- * §11.3, §16 Phase 2).
+ * Unit tests for the WebRTC module and the encrypted item seam (PLAN.md §10,
+ * §11.3, §16 Phase 3).
  *
  * `RTCPeerConnection` does not exist in node or jsdom, so the global is replaced
  * with the fake below. The fake links two peers together, which is what lets the
@@ -11,20 +11,24 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { exportPublicKey, generateKeypair, toBase64 } from './crypto'
+import { encrypt, exportPublicKey, generateKeypair, toBase64 } from './crypto'
+import { CHUNK_SIZE } from './chunker'
+import type { WireMessage } from './protocol'
 import {
   DATA_CHANNEL_LABEL,
+  FILE_PUMP_BUFFER_THRESHOLD,
   PeerConnection,
   PendingIceCandidates,
   buildIceServers,
   decodeFrame,
   encodeFrame,
-  isFrame,
 } from './webrtc'
-import type { Frame, HelloMessage } from './webrtc'
 import { deriveSessionMaterial } from '../hooks/useSession'
 
 const SESSION_CODE = 'A7X3K9P2'
+
+/** PLAN.md §12's chunk size, used by the MessagePack size test. */
+const CHUNK_SIZED_BYTES = CHUNK_SIZE
 
 // ---------------------------------------------------------------------------
 // Test doubles.
@@ -47,10 +51,15 @@ class FakeDataChannel {
   binaryType: BinaryType = 'blob'
   closed = false
 
+  /** The pump threshold this fake reports back, as a real channel would. */
+  bufferedAmountLowThreshold = 0
+  bufferedAmount = 0
+
   onopen: ((event: Event) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: ((event: Event) => void) | null = null
   onclose: ((event: Event) => void) | null = null
+  onbufferedamountlow: ((event: Event) => void) | null = null
 
   constructor(label: string, options?: RTCDataChannelInit) {
     this.label = label
@@ -217,7 +226,7 @@ describe('buildIceServers (PLAN.md §12)', () => {
 // The Phase 2 seam: JSON → AES-GCM envelope → binary DataChannel frame.
 // ---------------------------------------------------------------------------
 
-describe('encodeFrame / decodeFrame (the Phase 2 encryption seam)', () => {
+describe('encodeFrame / decodeFrame (the encryption seam)', () => {
   async function makeKey(): Promise<CryptoKey> {
     const pair = await generateKeypair()
     const peer = await generateKeypair()
@@ -229,13 +238,33 @@ describe('encodeFrame / decodeFrame (the Phase 2 encryption seam)', () => {
     return toBase64(await exportPublicKey(pair.publicKey))
   }
 
-  it('round-trips every Phase 2 frame kind', async () => {
+  it('round-trips every kind of WireMessage the protocol defines', async () => {
     const key = await makeKey()
-    const frames: Frame[] = [
-      { t: 'hello', from: 'host', text: 'hello there' },
-      { t: 'hello', from: 'guest', text: '' },
+    const frames: WireMessage[] = [
       { t: 'phrase-confirm' },
       { t: 'session-end' },
+      { t: 'item-announce', id: 'a', type: 'text' },
+      {
+        t: 'item-announce',
+        id: 'b',
+        type: 'file',
+        fileName: 'holiday.png',
+        mimeType: 'image/png',
+        totalSize: 4096,
+        totalChunks: 1,
+      },
+      { t: 'text-delta', id: 'a', content: 'hello there' },
+      { t: 'richtext-delta', id: 'c', content: '{"type":"doc"}' },
+      { t: 'file-chunk', id: 'b', index: 0, data: new Uint8Array([1, 2, 3, 250]) },
+      { t: 'file-done', id: 'b' },
+      { t: 'item-delete', id: 'a' },
+      {
+        t: 'locked-payload',
+        id: 'd',
+        ciphertext: new Uint8Array([9, 9]),
+        iv: new Uint8Array(12),
+        salt: new Uint8Array(16),
+      },
     ]
 
     for (const frame of frames) {
@@ -243,9 +272,25 @@ describe('encodeFrame / decodeFrame (the Phase 2 encryption seam)', () => {
     }
   })
 
-  it('produces a binary [iv(12)][ciphertext + tag] envelope, not JSON text', async () => {
+  it('keeps a 16 KiB file chunk at its own size on the wire (PLAN.md §19 decision 7)', async () => {
     const key = await makeKey()
-    const frame: Frame = { t: 'hello', from: 'host', text: 'sensitive payload' }
+    const data = new Uint8Array(CHUNK_SIZED_BYTES)
+    for (let i = 0; i < data.byteLength; i += 1) data[i] = i % 251
+
+    const envelope = await encodeFrame({ t: 'file-chunk', id: 'f', index: 0, data }, key)
+
+    // MessagePack carries the bytes as `bin`; a JSON encoding would have to spell
+    // 16 384 numbers or a base64 string and this ceiling would be far higher.
+    expect(envelope.byteLength).toBeLessThan(CHUNK_SIZED_BYTES + 256)
+    const decoded = await decodeFrame(envelope, key)
+    expect(decoded.t).toBe('file-chunk')
+    if (decoded.t !== 'file-chunk') throw new Error('unreachable')
+    expect(decoded.data).toEqual(data)
+  })
+
+  it('produces a binary [iv(12)][ciphertext + tag] envelope, not readable text', async () => {
+    const key = await makeKey()
+    const frame: WireMessage = { t: 'text-delta', id: 'a', content: 'sensitive payload' }
 
     const envelope = await encodeFrame(frame, key)
 
@@ -254,12 +299,12 @@ describe('encodeFrame / decodeFrame (the Phase 2 encryption seam)', () => {
     // The plaintext must not be recoverable from the wire bytes.
     const asText = new TextDecoder().decode(new Uint8Array(envelope))
     expect(asText).not.toContain('sensitive payload')
-    expect(asText).not.toContain('hello')
+    expect(asText).not.toContain('text-delta')
   })
 
   it('uses a fresh IV per encryption so identical frames differ on the wire', async () => {
     const key = await makeKey()
-    const frame: Frame = { t: 'phrase-confirm' }
+    const frame: WireMessage = { t: 'phrase-confirm' }
 
     const first = new Uint8Array(await encodeFrame(frame, key))
     const second = new Uint8Array(await encodeFrame(frame, key))
@@ -286,42 +331,251 @@ describe('encodeFrame / decodeFrame (the Phase 2 encryption seam)', () => {
     await expect(decodeFrame(envelope.buffer, key)).rejects.toThrow()
   })
 
-  it('rejects a text frame outright — Phase 1 plaintext is no longer accepted', async () => {
+  it('rejects a text frame outright — plaintext is never accepted', async () => {
     const key = await makeKey()
 
-    await expect(decodeFrame(JSON.stringify({ t: 'hello', from: 'host', text: 'x' }), key)).rejects.toThrow(
+    await expect(decodeFrame(JSON.stringify({ t: 'session-end' }), key)).rejects.toThrow(
       /expected a binary encrypted envelope/,
     )
     await expect(decodeFrame(null, key)).rejects.toThrow(/expected a binary encrypted envelope/)
     await expect(decodeFrame(new ArrayBuffer(4), key)).rejects.toThrow()
   })
 
-  it('rejects decrypted JSON that is not a Phase 2 frame', async () => {
+  it('rejects a decrypted payload that is not a WireMessage', async () => {
+    const key = await makeKey()
+
+    // 0x80 is a valid, complete MessagePack empty map: the decoder succeeds and the
+    // schema check in protocol.ts is what rejects it.
+    const emptyMap = new Uint8Array([0x80])
+    await expect(decodeFrame(await encrypt(key, emptyMap), key)).rejects.toThrow(
+      /not a valid WireMessage/,
+    )
+  })
+
+  it('refuses to encode a value that is not a WireMessage at all', async () => {
     const key = await makeKey()
 
     await expect(
-      decodeFrame(await encodeFrame({ t: 'phantom' } as unknown as Frame, key), key),
-    ).rejects.toThrow(/not a Phase 2 Frame/)
+      encodeFrame({ t: 'phantom' } as unknown as WireMessage, key),
+    ).rejects.toThrow(/not a WireMessage/)
   })
 })
 
-describe('isFrame', () => {
-  it('accepts the Phase 2 frame kinds and both hello roles', () => {
-    expect(isFrame({ t: 'hello', from: 'host', text: 'a' })).toBe(true)
-    expect(isFrame({ t: 'hello', from: 'guest', text: '' })).toBe(true)
-    expect(isFrame({ t: 'phrase-confirm' })).toBe(true)
-    expect(isFrame({ t: 'session-end' })).toBe(true)
+describe('the item gate is the only way to send item traffic (PLAN.md §8)', () => {
+  const originalRtcPeerConnection = (globalThis as unknown as Record<string, unknown>)['RTCPeerConnection']
+
+  beforeEach(() => {
+    installFakeRtcPeerConnection()
   })
 
-  it('rejects unknown tags, wrong roles, wrong field types and non-objects', () => {
-    expect(isFrame({ t: 'hi', from: 'host', text: 'a' })).toBe(false)
-    expect(isFrame({ t: 'hello', from: 'peer', text: 'a' })).toBe(false)
-    expect(isFrame({ t: 'hello', from: 'host', text: 1 })).toBe(false)
-    expect(isFrame({ t: 'hello', from: 'host' })).toBe(false)
-    // Phase 3 message kinds are not part of the Phase 2 union.
-    expect(isFrame({ t: 'text-delta', id: 'x', content: 'y' })).toBe(false)
-    expect(isFrame(null)).toBe(false)
-    expect(isFrame('phrase-confirm')).toBe(false)
+  afterAll(() => {
+    ;(globalThis as unknown as Record<string, unknown>)['RTCPeerConnection'] = originalRtcPeerConnection
+  })
+
+  /** Every message that carries session items must be refused before markActive(). */
+  const ITEM_FRAMES: WireMessage[] = [
+    { t: 'item-announce', id: 'a', type: 'text' },
+    { t: 'text-delta', id: 'a', content: 'x' },
+    { t: 'richtext-delta', id: 'b', content: '{}' },
+    { t: 'file-chunk', id: 'c', index: 0, data: new Uint8Array([1]) },
+    { t: 'file-done', id: 'c' },
+    { t: 'item-delete', id: 'a' },
+    {
+      t: 'locked-payload',
+      id: 'd',
+      ciphertext: new Uint8Array([1]),
+      iv: new Uint8Array(12),
+      salt: new Uint8Array(16),
+    },
+  ]
+
+  async function openKeyedConnection(): Promise<{
+    connection: PeerConnection
+    channel: FakeDataChannel
+    key: CryptoKey
+  }> {
+    const connection = new PeerConnection()
+    await connection.initAsHost()
+    const fake = fakePeers[fakePeers.length - 1]
+    const channel = fake?.createdChannels[0]
+    if (!channel) throw new Error('test bug: no data channel')
+    channel.open()
+
+    const ours = await generateKeypair()
+    const peer = await generateKeypair()
+    const key = (
+      await deriveSessionMaterial(
+        ours.privateKey,
+        toBase64(await exportPublicKey(peer.publicKey)),
+        SESSION_CODE,
+      )
+    ).sessionKey
+    connection.setSessionKey(key)
+    return { connection, channel, key }
+  }
+
+  it('refuses every item-bearing frame until markActive() is called', async () => {
+    const { connection, channel } = await openKeyedConnection()
+    expect(connection.isActive).toBe(false)
+
+    for (const frame of ITEM_FRAMES) {
+      expect(() => {
+        connection.send(frame)
+      }).toThrow(/marked active/)
+      expect(() => {
+        void connection.sendAwaitable(frame)
+      }).toThrow(/marked active/)
+    }
+
+    await connection.drain()
+    // Nothing was encrypted and nothing reached the channel: the gate is structural,
+    // not a warning.
+    expect(channel.sent).toEqual([])
+  })
+
+  it('still carries the control frames before the session is active', async () => {
+    const { connection, channel, key } = await openKeyedConnection()
+
+    connection.send({ t: 'phrase-confirm' })
+    connection.send({ t: 'session-end' })
+    await connection.drain()
+
+    expect(channel.sent).toHaveLength(2)
+    await expect(decodeFrame(channel.sent[0], key)).resolves.toEqual({ t: 'phrase-confirm' })
+    await expect(decodeFrame(channel.sent[1], key)).resolves.toEqual({ t: 'session-end' })
+  })
+
+  it('carries item frames once markActive() has been called', async () => {
+    const { connection, channel, key } = await openKeyedConnection()
+
+    connection.markActive()
+    expect(connection.isActive).toBe(true)
+    connection.send({ t: 'text-delta', id: 'a', content: 'now allowed' })
+    await connection.drain()
+
+    await expect(decodeFrame(channel.sent[0], key)).resolves.toEqual({
+      t: 'text-delta',
+      id: 'a',
+      content: 'now allowed',
+    })
+  })
+
+  it('closes the gate again on teardown', async () => {
+    const { connection, channel } = await openKeyedConnection()
+    connection.markActive()
+
+    connection.close()
+
+    expect(connection.isActive).toBe(false)
+    // And the torn-down peer cannot be used as a second path either: the channel is
+    // gone, so even a control frame is refused.
+    expect(() => {
+      connection.send({ t: 'phrase-confirm' })
+    }).toThrow()
+    expect(channel.sent).toEqual([])
+  })
+})
+
+describe('backpressure for the file pumps (PLAN.md §9)', () => {
+  const originalRtcPeerConnection = (globalThis as unknown as Record<string, unknown>)['RTCPeerConnection']
+
+  beforeEach(() => {
+    installFakeRtcPeerConnection()
+  })
+
+  afterAll(() => {
+    ;(globalThis as unknown as Record<string, unknown>)['RTCPeerConnection'] = originalRtcPeerConnection
+  })
+
+  async function openChannel(): Promise<{ connection: PeerConnection; channel: FakeDataChannel }> {
+    const connection = new PeerConnection()
+    await connection.initAsHost()
+    const fake = fakePeers[fakePeers.length - 1]
+    const channel = fake?.createdChannels[0]
+    if (!channel) throw new Error('test bug: no data channel')
+    channel.open()
+    return { connection, channel }
+  }
+
+  it('arms the channel with the pump threshold', async () => {
+    const { channel } = await openChannel()
+
+    // The browser fires `bufferedamountlow` at this threshold; the pump parks on it.
+    expect(channel.bufferedAmountLowThreshold).toBe(FILE_PUMP_BUFFER_THRESHOLD)
+    expect(FILE_PUMP_BUFFER_THRESHOLD).toBe(256 * 1024)
+  })
+
+  it('resolves immediately when the channel is already below the threshold', async () => {
+    const { connection, channel } = await openChannel()
+    channel.bufferedAmount = FILE_PUMP_BUFFER_THRESHOLD
+
+    await expect(connection.waitForBackpressure()).resolves.toBeUndefined()
+  })
+
+  it('parks above the threshold and resumes on bufferedamountlow', async () => {
+    const { connection, channel } = await openChannel()
+    channel.bufferedAmount = FILE_PUMP_BUFFER_THRESHOLD + 1
+
+    let resumed = false
+    const waiting = connection.waitForBackpressure().then(() => {
+      resumed = true
+    })
+    await settle()
+    expect(resumed).toBe(false)
+
+    channel.bufferedAmount = 0
+    channel.onbufferedamountlow?.(new Event('bufferedamountlow'))
+    await waiting
+
+    expect(resumed).toBe(true)
+  })
+
+  it('wakes a parked pump on teardown instead of leaving it hanging', async () => {
+    const { connection, channel } = await openChannel()
+    channel.bufferedAmount = FILE_PUMP_BUFFER_THRESHOLD + 1
+    const waiting = connection.waitForBackpressure()
+
+    connection.close()
+
+    // A promise that could never settle would leave a pump's await alive for the life
+    // of the tab (the failure the teardown requirement is about).
+    await expect(waiting).resolves.toBeUndefined()
+  })
+
+  it('wakes a parked pump when the session work is stopped without a teardown', async () => {
+    const { connection, channel } = await openChannel()
+    channel.bufferedAmount = FILE_PUMP_BUFFER_THRESHOLD + 1
+    const waiting = connection.waitForBackpressure()
+
+    connection.releaseBackpressure()
+
+    await expect(waiting).resolves.toBeUndefined()
+    // Not a teardown: the channel was left exactly as it was, so the peer is still
+    // usable for the frames (control or otherwise) that follow.
+    expect(connection.bufferedAmount).toBe(FILE_PUMP_BUFFER_THRESHOLD + 1)
+    expect(channel.closed).toBe(false)
+  })
+
+  it('wakes a parked pump when the channel closes underneath it', async () => {
+    const { connection, channel } = await openChannel()
+    channel.bufferedAmount = FILE_PUMP_BUFFER_THRESHOLD + 1
+    const waiting = connection.waitForBackpressure()
+
+    channel.readyState = 'closed'
+    channel.onclose?.(new Event('close'))
+
+    await expect(waiting).resolves.toBeUndefined()
+    expect(connection.bufferedAmount).toBe(FILE_PUMP_BUFFER_THRESHOLD + 1)
+  })
+
+  it('reads a channel with no bufferedAmount property as zero', async () => {
+    const { connection, channel } = await openChannel()
+    // A test double (or an engine quirk) that never reports the counter must not make
+    // every pump wait forever.
+    delete (channel as unknown as Record<string, unknown>)['bufferedAmount']
+
+    expect(connection.bufferedAmount).toBe(0)
+    await expect(connection.waitForBackpressure()).resolves.toBeUndefined()
   })
 })
 
@@ -585,7 +839,7 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     // The guard must throw from send() itself (ORCHESTRATION.md D3): a rejected
     // promise could not be caught by the existing call sites.
     expect(() => {
-      connection.send({ t: 'hello', from: 'host', text: 'hi' })
+      connection.send({ t: 'phrase-confirm' })
     }).toThrow(/data channel is not open/)
   })
 
@@ -609,7 +863,7 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     connection.setSessionKey(key)
     expect(connection.hasSessionKey).toBe(true)
 
-    const message: Frame = { t: 'hello', from: 'host', text: 'hi' }
+    const message: WireMessage = { t: 'phrase-confirm' }
     connection.send(message)
 
     // send() is still synchronous and void: the envelope lands on the queue, not
@@ -626,15 +880,16 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     const { connection, channel } = await hostWithChannel()
     channel.open()
     connection.setSessionKey(await makeSessionKey())
+    connection.markActive()
 
-    connection.send({ t: 'hello', from: 'guest', text: 'TOP-SECRET-PLAINTEXT' })
+    connection.send({ t: 'text-delta', id: 'a', content: 'TOP-SECRET-PLAINTEXT' })
     await connection.drain()
 
     const envelope = channel.sent[0]
     expect(envelope).toBeInstanceOf(ArrayBuffer)
     const wire = new TextDecoder().decode(new Uint8Array(envelope as ArrayBuffer))
     expect(wire).not.toContain('TOP-SECRET-PLAINTEXT')
-    expect(wire).not.toContain('hello')
+    expect(wire).not.toContain('text-delta')
   })
 
   it('preserves send order through the asynchronous encrypt queue', async () => {
@@ -642,19 +897,23 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     channel.open()
     const key = await makeSessionKey()
     connection.setSessionKey(key)
+    connection.markActive()
 
     for (let i = 0; i < 20; i += 1) {
-      connection.send({ t: 'hello', from: 'host', text: `frame-${i}` })
+      connection.send({ t: 'text-delta', id: 'a', content: `frame-${i}` })
     }
 
     await connection.drain()
 
-    const decoded: Frame[] = []
+    const decoded: WireMessage[] = []
     for (const envelope of channel.sent) {
       decoded.push(await decodeFrame(envelope, key))
     }
     expect(decoded).toEqual(
-      Array.from({ length: 20 }, (_unused, i): Frame => ({ t: 'hello', from: 'host', text: `frame-${i}` })),
+      Array.from(
+        { length: 20 },
+        (_unused, i): WireMessage => ({ t: 'text-delta', id: 'a', content: `frame-${i}` }),
+      ),
     )
   })
 
@@ -696,11 +955,11 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     const { connection, channel } = await hostWithChannel()
     channel.open()
     connection.setSessionKey(key)
-    const received: Frame[] = []
+    const received: WireMessage[] = []
     connection.onMessage((message) => received.push(message))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
 
-    channel.receive(await encodeFrame({ t: 'hello', from: 'guest', text: 'hello back' }, key))
+    channel.receive(await encodeFrame({ t: 'text-delta', id: 'a', content: 'CANARY-PLAINTEXT' }, key))
     expect(() => {
       channel.receive('{ not json')
       channel.receive(new ArrayBuffer(4))
@@ -708,9 +967,9 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     }).not.toThrow()
     await settle()
 
-    expect(received).toEqual([{ t: 'hello', from: 'guest', text: 'hello back' }])
+    expect(received).toEqual([{ t: 'text-delta', id: 'a', content: 'CANARY-PLAINTEXT' }])
     // The dev-only note must never carry the frame or the plaintext.
-    expect(warn.mock.calls.flat().join(' ')).not.toContain('hello back')
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('CANARY-PLAINTEXT')
     warn.mockRestore()
   })
 
@@ -719,18 +978,18 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     const { connection, channel } = await hostWithChannel()
     channel.open()
     connection.setSessionKey(key)
-    const received: Frame[] = []
+    const received: WireMessage[] = []
     connection.onMessage(() => {
       throw new Error('subscriber blew up')
     })
     connection.onMessage((message) => received.push(message))
 
-    const envelope = await encodeFrame({ t: 'hello', from: 'guest', text: 'still fine' }, key)
+    const envelope = await encodeFrame({ t: 'file-done', id: 'stay' }, key)
     expect(() => {
       channel.receive(envelope)
     }).not.toThrow()
     await settle()
-    expect(received).toEqual([{ t: 'hello', from: 'guest', text: 'still fine' }])
+    expect(received).toEqual([{ t: 'file-done', id: 'stay' }])
   })
 
   it('preserves inbound order although decryption is asynchronous', async () => {
@@ -738,14 +997,14 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     const { connection, channel } = await hostWithChannel()
     channel.open()
     connection.setSessionKey(key)
-    const received: Frame[] = []
+    const received: WireMessage[] = []
     connection.onMessage((message) => received.push(message))
 
     // All envelopes are handed over in one synchronous burst; a non-serialised
     // decrypt could deliver a later frame first.
     const envelopes = await Promise.all(
       Array.from({ length: 10 }, (_unused, i) =>
-        encodeFrame({ t: 'hello', from: 'guest', text: `in-${i}` }, key),
+        encodeFrame({ t: 'text-delta', id: 'a', content: `in-${i}` }, key),
       ),
     )
     for (const envelope of envelopes) {
@@ -754,7 +1013,7 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     await settle()
 
     expect(received).toEqual(
-      Array.from({ length: 10 }, (_unused, i): Frame => ({ t: 'hello', from: 'guest', text: `in-${i}` })),
+      Array.from({ length: 10 }, (_unused, i): WireMessage => ({ t: 'text-delta', id: 'a', content: `in-${i}` })),
     )
   })
 
@@ -763,10 +1022,10 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     const { connection, channel } = await hostWithChannel()
     channel.open()
     connection.setSessionKey(key)
-    const received: Frame[] = []
+    const received: WireMessage[] = []
     const unsubscribe = connection.onMessage((message) => received.push(message))
 
-    const envelope = await encodeFrame({ t: 'hello', from: 'guest', text: 'ignored' }, key)
+    const envelope = await encodeFrame({ t: 'item-delete', id: 'ignored' }, key)
     unsubscribe()
     channel.receive(envelope)
     await settle()
@@ -794,10 +1053,10 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     const { connection, channel } = await hostWithChannel()
     channel.open()
     connection.setSessionKey(key)
-    const received: Frame[] = []
+    const received: WireMessage[] = []
     connection.onMessage((message) => received.push(message))
 
-    const envelope = await encodeFrame({ t: 'hello', from: 'guest', text: 'too late' }, key)
+    const envelope = await encodeFrame({ t: 'item-delete', id: 'too late' }, key)
     connection.close()
     channel.receive(envelope)
     await settle()
@@ -907,25 +1166,31 @@ describe('two peers over the Phase 2 encrypted seam (PLAN.md §10, §11, §16 Ph
 
   it('exchanges encrypted frames in both directions', async () => {
     const { pair } = await deriveBothEnds()
-    const hostReceived: Frame[] = []
-    const guestReceived: Frame[] = []
+    const hostReceived: WireMessage[] = []
+    const guestReceived: WireMessage[] = []
     pair.host.onMessage((message) => hostReceived.push(message))
     pair.guest.onMessage((message) => guestReceived.push(message))
 
-    pair.host.send({ t: 'hello', from: 'host', text: 'from the host' })
+    pair.host.send({ t: 'phrase-confirm' })
+    pair.host.markActive()
+    pair.host.send({ t: 'text-delta', id: 'a', content: 'from the host' })
     pair.guest.send({ t: 'phrase-confirm' })
     await pair.host.drain()
     await pair.guest.drain()
     await settle()
 
     expect(hostReceived).toEqual([{ t: 'phrase-confirm' }])
-    expect(guestReceived).toEqual([{ t: 'hello', from: 'host', text: 'from the host' }])
+    expect(guestReceived).toEqual([
+      { t: 'phrase-confirm' },
+      { t: 'text-delta', id: 'a', content: 'from the host' },
+    ])
   })
 
   it('puts only envelopes on the wire', async () => {
     const { pair } = await deriveBothEnds()
+    pair.host.markActive()
 
-    pair.host.send({ t: 'hello', from: 'host', text: 'PLAINTEXT-MARKER' })
+    pair.host.send({ t: 'text-delta', id: 'a', content: 'PLAINTEXT-MARKER' })
     await pair.host.drain()
 
     const wire = pair.hostChannel.sent[0]
@@ -938,7 +1203,7 @@ describe('two peers over the Phase 2 encrypted seam (PLAN.md §10, §11, §16 Ph
   it('drops a frame the receiver cannot authenticate and keeps working afterwards', async () => {
     const { pair, guestMaterial } = await deriveBothEnds()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const received: Frame[] = []
+    const received: WireMessage[] = []
     pair.guest.onMessage((message) => received.push(message))
 
     // A third keypair stands in for a guest holding a session key the host never
@@ -952,13 +1217,14 @@ describe('two peers over the Phase 2 encrypted seam (PLAN.md §10, §11, §16 Ph
     )
     pair.guest.setSessionKey(wrongMaterial.sessionKey)
 
-    pair.host.send({ t: 'hello', from: 'host', text: 'cannot be read' })
+    pair.host.markActive()
+    pair.host.send({ t: 'text-delta', id: 'a', content: 'CANNOT-BE-READ' })
     await pair.host.drain()
     await settle()
 
     // Dropped silently: no throw, no partial plaintext, no delivered message.
     expect(received).toEqual([])
-    expect(warn.mock.calls.flat().join(' ')).not.toContain('cannot be read')
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('CANNOT-BE-READ')
 
     // The real key still works, so one bad frame does not poison the channel.
     pair.guest.setSessionKey(guestMaterial.sessionKey)
@@ -982,17 +1248,18 @@ describe('two peers over the Phase 2 encrypted seam (PLAN.md §10, §11, §16 Ph
     expect(errors).toHaveLength(1)
   })
 
-  it('carries a hello greeting that the receiving end reads as a HelloMessage', async () => {
+  it('carries an item frame that the receiving end reads as a text-delta', async () => {
     const { pair } = await deriveBothEnds()
-    const received: HelloMessage[] = []
+    const received: WireMessage[] = []
     pair.guest.onMessage((message) => {
-      if (message.t === 'hello') received.push(message)
+      if (message.t === 'text-delta') received.push(message)
     })
 
-    pair.host.send({ t: 'hello', from: 'host', text: 'Hello from the host device' })
+    pair.host.markActive()
+    pair.host.send({ t: 'text-delta', id: 'item-1', content: 'typed on the host' })
     await pair.host.drain()
     await settle()
 
-    expect(received).toEqual([{ t: 'hello', from: 'host', text: 'Hello from the host device' }])
+    expect(received).toEqual([{ t: 'text-delta', id: 'item-1', content: 'typed on the host' }])
   })
 })

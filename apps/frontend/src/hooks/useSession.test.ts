@@ -7,6 +7,7 @@
 
 import {
   PEER_REJOINED_REASON,
+  itemFromAnnounce,
   deriveSessionMaterial,
   describeError,
   describeSessionStatus,
@@ -230,5 +231,79 @@ describe('nextPhaseForConfirmations (PLAN.md §8 Phase 2)', () => {
     expect(nextPhaseForConfirmations('idle', true, true)).toBe('idle')
     expect(nextPhaseForConfirmations('ended', true, true)).toBe('ended')
     expect(nextPhaseForConfirmations('active', true, true)).toBe('active')
+  })
+})
+
+describe('itemFromAnnounce (PLAN.md §9/§10)', () => {
+  const createdAt = 1_700_000_000_000
+
+  it('maps a text and a rich-text announce to an empty, complete item', () => {
+    expect(itemFromAnnounce({ t: 'item-announce', id: 'a', type: 'text' }, createdAt)).toEqual({
+      id: 'a',
+      type: 'text',
+      status: 'complete',
+      createdAt,
+      content: '',
+    })
+    expect(
+      itemFromAnnounce({ t: 'item-announce', id: 'b', type: 'richtext' }, createdAt),
+    ).toEqual({ id: 'b', type: 'richtext', status: 'complete', createdAt, content: '' })
+  })
+
+  it('maps a file announce with every transfer field', () => {
+    expect(
+      itemFromAnnounce(
+        {
+          t: 'item-announce',
+          id: 'c',
+          type: 'image',
+          fileName: 'photo.png',
+          mimeType: 'image/png',
+          totalSize: 40000,
+          totalChunks: 3,
+        },
+        createdAt,
+      ),
+    ).toEqual({
+      id: 'c',
+      type: 'image',
+      status: 'pending',
+      createdAt,
+      fileName: 'photo.png',
+      mimeType: 'image/png',
+      totalSize: 40000,
+      totalChunks: 3,
+      progress: 0,
+    })
+  })
+
+  it('defaults the optional announce fields instead of trusting them', () => {
+    // PLAN.md §10 makes every field but id/type optional, and the announce comes from a
+    // peer that holds the key but is not trusted (PLAN.md §2).
+    expect(itemFromAnnounce({ t: 'item-announce', id: 'd', type: 'file' }, createdAt)).toMatchObject({
+      fileName: 'file',
+      mimeType: '',
+      totalSize: 0,
+      totalChunks: 0,
+      progress: 0,
+    })
+  })
+
+  it('derives the chunk count from totalSize when the announce omits it', () => {
+    const item = itemFromAnnounce(
+      { t: 'item-announce', id: 'e', type: 'file', totalSize: 16 * 1024 * 2 + 5 },
+      createdAt,
+    )
+
+    expect(item).toMatchObject({ totalSize: 16 * 1024 * 2 + 5, totalChunks: 3 })
+  })
+
+  it('returns null for a locked announce, which Phase 4 owns', () => {
+    expect(
+      itemFromAnnounce(
+        { t: 'item-announce', id: 'f', type: 'locked', label: 'Uni portal', innerType: 'text' },
+        createdAt,
+      ),
+    ).toBe(null)
   })
 })

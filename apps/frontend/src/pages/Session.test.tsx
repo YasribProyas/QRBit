@@ -5,7 +5,9 @@
  * `useSession` is mocked so the page can be rendered in each phase directly; the
  * hook's real behaviour is covered by useSession.test.tsx. What matters here is the
  * gating contract: the safety-phrase overlay is mounted only while the store is in
- * 'pairing', it carries both confirmation flags, and Abort is wired through.
+ * 'pairing', it carries both confirmation flags, Abort is wired through, and the
+ * session board (PLAN.md §8 Phase 3) is the active view — with the add bar on the
+ * sender only, and the Phase 1/2 channel-check panel gone for good.
  */
 
 import { act } from 'react'
@@ -14,9 +16,17 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { UseSessionResult } from '../hooks/useSession'
+import type { ItemsApi } from '../components/session/SessionBoard'
+import { useSessionStore } from '../store/sessionStore'
+
+/**
+ * The items API is part of what `useSession` returns, so the stand-in result carries
+ * it too — the page hands it straight to the board and the add bar.
+ */
+type MockedSession = UseSessionResult & ItemsApi
 
 const mocked = vi.hoisted(() => ({
-  current: null as UseSessionResult | null,
+  current: null as MockedSession | null,
   confirmPhrase: vi.fn(),
   abort: vi.fn(),
   restart: vi.fn(),
@@ -30,7 +40,7 @@ const { Session } = await import('./Session')
 
 const PHRASE: [string, string, string] = ['RIVER', 'COPPER', 'EIGHT']
 
-function makeResult(overrides: Partial<UseSessionResult> = {}): UseSessionResult {
+function makeResult(overrides: Partial<MockedSession> = {}): MockedSession {
   return {
     role: 'guest',
     phase: 'connecting',
@@ -39,8 +49,6 @@ function makeResult(overrides: Partial<UseSessionResult> = {}): UseSessionResult
     errorMessage: null,
     status: { label: 'Connecting…', tone: 'warn' },
     roleLabel: 'Guest — you opened the other device’s session',
-    localHello: null,
-    peerHello: null,
     safetyPhrase: null,
     phraseConfirmed: false,
     peerConfirmed: false,
@@ -53,6 +61,12 @@ function makeResult(overrides: Partial<UseSessionResult> = {}): UseSessionResult
     restart: () => {
       mocked.restart()
     },
+    addTextItem: () => 'text-id',
+    addRichTextItem: () => 'rich-id',
+    addFileItem: () => 'file-id',
+    updateTextItem: vi.fn(),
+    updateRichTextItem: vi.fn(),
+    deleteItem: vi.fn(),
     ...overrides,
   }
 }
@@ -86,6 +100,7 @@ function queryButton(element: HTMLElement, label: string): HTMLButtonElement | n
 beforeEach(() => {
   ;(globalThis as unknown as Record<string, unknown>)['IS_REACT_ACT_ENVIRONMENT'] = true
   vi.clearAllMocks()
+  useSessionStore.getState().reset()
 })
 
 afterEach(() => {
@@ -180,6 +195,48 @@ describe('Session page phase gating (PLAN.md §8)', () => {
 
     expect(mocked.confirmPhrase).toHaveBeenCalledTimes(1)
     expect(mocked.abort).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Session page in the active phase (PLAN.md §8 Phase 3)', () => {
+  it('renders the board for the sender, with the add bar and no channel check', () => {
+    mocked.current = makeResult({
+      role: 'guest',
+      phase: 'active',
+      connectionState: 'connected',
+      status: { label: 'Connected', tone: 'ok' },
+    })
+
+    const element = renderSession()
+
+    expect(element.querySelector('.session-board')).not.toBe(null)
+    expect(element.querySelector('.add-item-bar')).not.toBe(null)
+    // The Phase 1/2 greeting panel has been retired by Phase 3.
+    expect(element.textContent).not.toContain('Channel check')
+    expect(element.textContent).not.toContain('Waiting for the data channel')
+  })
+
+  it('renders the board for the receiver but no add bar (PLAN.md §9: sender only)', () => {
+    mocked.current = makeResult({
+      role: 'host',
+      phase: 'active',
+      connectionState: 'connected',
+      status: { label: 'Connected', tone: 'ok' },
+    })
+
+    const element = renderSession()
+
+    expect(element.querySelector('.session-board')).not.toBe(null)
+    expect(element.querySelector('.add-item-bar')).toBe(null)
+  })
+
+  it('shows no board before the session is active', () => {
+    mocked.current = makeResult({ phase: 'connecting' })
+
+    const element = renderSession()
+
+    expect(element.querySelector('.session-board')).toBe(null)
+    expect(element.querySelector('.add-item-bar')).toBe(null)
   })
 })
 

@@ -1,5 +1,7 @@
 import { Link, useSearchParams } from 'react-router-dom'
+import { AddItemBar } from '../components/session/AddItemBar'
 import { SafetyPhraseOverlay } from '../components/session/SafetyPhraseOverlay'
+import { SessionBoard, isSenderRole } from '../components/session/SessionBoard'
 import { useSession } from '../hooks/useSession'
 
 /**
@@ -70,24 +72,22 @@ export function Session() {
       ) : null}
 
       {/*
-        Phase 1's acceptance criterion (PLAN.md §16) is that the data channel
-        opens and greets both ways. That greeting is inside the Phase 2 AES-GCM
-        envelope, so a value arriving here proves the encrypted path works. Phase 3
-        replaces this panel with the session board (PLAN.md §9).
+        PLAN.md §8 Phase 3: the board *is* the active session. The Phase 1/2
+        channel-check panel is gone with it — the both-sides encrypted
+        phrase-confirm already proved the channel, so a hello exchange would prove
+        nothing new about it.
+
+        The add bar is sender-only (PLAN.md §9), but both devices render the board:
+        the receiver's copy fills in as items and chunks arrive, which is the
+        symmetric view PLAN.md §1 asks for. 'verified' is deliberately not handled:
+        the phase sequence is connecting → pairing → active → ended.
       */}
-      <section className="panel">
-        <h2 className="panel__title">Channel check</h2>
-        <dl className="kv">
-          <dt>Sent</dt>
-          <dd>{session.localHello ?? 'Waiting for the data channel…'}</dd>
-          <dt>Received</dt>
-          <dd>{session.peerHello ?? 'Waiting for the other device…'}</dd>
-        </dl>
-        <p className="muted">
-          Every frame is encrypted with the session key both devices derive from
-          the ECDH exchange — nothing crosses the channel in the clear.
-        </p>
-      </section>
+      {session.phase === 'active' ? (
+        <>
+          {isSenderRole(session.role) ? <AddItemBar api={session} /> : null}
+          <SessionBoard api={session} role={session.role} />
+        </>
+      ) : null}
 
       {/*
         PLAN.md §8 Phase 2: the full-screen overlay is up from the moment the phrase

@@ -9,14 +9,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PeerConnection } from '../lib/webrtc'
-import type { Frame, PeerConnectionOptions } from '../lib/webrtc'
+import type { PeerConnectionOptions } from '../lib/webrtc'
+import type { WireMessage } from '../lib/protocol'
 import { useSessionStore } from '../store/sessionStore'
 
 export interface UseWebRTCHandlers {
   /** A local ICE candidate to relay to the peer over signaling. */
   onIceCandidate: (candidate: RTCIceCandidateInit) => void
   /** A message arrived on the DataChannel (already decrypted and authenticated). */
-  onMessage: (message: Frame) => void
+  onMessage: (message: WireMessage) => void
   /** The DataChannel is open; the session can start exchanging items. */
   onOpen: () => void
   /**
@@ -40,7 +41,25 @@ export interface UseWebRTCResult {
    * to send, so no plaintext application frame can reach the channel.
    */
   setSessionKey: (key: CryptoKey) => void
-  send: (message: Frame) => void
+  send: (message: WireMessage) => void
+  /**
+   * `send()` for the file pumps: resolves once the frame has been written to the
+   * channel, so a pump can wait for the channel between chunks (PLAN.md §9).
+   */
+  sendAwaitable: (message: WireMessage) => Promise<void>
+  /** Resolves when the channel's queued bytes are back under the pump threshold. */
+  waitForBackpressure: () => Promise<void>
+  /**
+   * Wakes every pump parked on `waitForBackpressure()`. Used when item work is
+   * stopped without tearing the peer down (the peer's `session-end` path), so a
+   * cancelled pump does not hold its `File` until the channel closes.
+   */
+  releaseBackpressure: () => void
+  /**
+   * Opens the item gate (PLAN.md §8). Until this is called the peer refuses every
+   * item-bearing frame, whatever the call site does.
+   */
+  markActive: () => void
   /** Resolves once every accepted frame has left the channel. Never rejects. */
   drain: () => Promise<void>
   /** Tears down the peer. Idempotent. */
@@ -67,6 +86,14 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
   const sessionKeyRef = useRef<CryptoKey | null>(null)
 
   /**
+   * Same reason as `sessionKeyRef`: the both-confirms gate can land before the peer
+   * is constructed (the host builds its peer only when the worker issues the TURN
+   * credentials), and a gate that is lost there would lock every item frame out of
+   * the session.
+   */
+  const activeRef = useRef(false)
+
+  /**
    * Handlers are kept in a ref so a re-render with fresh closures never rebuilds
    * the peer connection — recreating it would drop the DataChannel mid-session.
    */
@@ -90,6 +117,9 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
     const sessionKey = sessionKeyRef.current
     if (sessionKey) {
       peer.setSessionKey(sessionKey)
+    }
+    if (activeRef.current) {
+      peer.markActive()
     }
     peerRef.current = peer
     unsubscribersRef.current = [
@@ -126,6 +156,7 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
     const peer = peerRef.current
     peerRef.current = null
     sessionKeyRef.current = null
+    activeRef.current = false
     peer?.close()
 
     setConnectionState('closed')
@@ -158,11 +189,31 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
   )
 
   const send = useCallback(
-    (message: Frame): void => {
+    (message: WireMessage): void => {
       requirePeer().send(message)
     },
     [requirePeer],
   )
+
+  const sendAwaitable = useCallback(
+    (message: WireMessage): Promise<void> => {
+      return requirePeer().sendAwaitable(message)
+    },
+    [requirePeer],
+  )
+
+  const waitForBackpressure = useCallback(async (): Promise<void> => {
+    await peerRef.current?.waitForBackpressure()
+  }, [])
+
+  const releaseBackpressure = useCallback((): void => {
+    peerRef.current?.releaseBackpressure()
+  }, [])
+
+  const markActive = useCallback((): void => {
+    activeRef.current = true
+    peerRef.current?.markActive()
+  }, [])
 
   const drain = useCallback(async (): Promise<void> => {
     await peerRef.current?.drain()
@@ -185,6 +236,10 @@ export function useWebRTC(handlers: UseWebRTCHandlers): UseWebRTCResult {
     addIceCandidate,
     setSessionKey,
     send,
+    sendAwaitable,
+    waitForBackpressure,
+    releaseBackpressure,
+    markActive,
     drain,
     close,
   }

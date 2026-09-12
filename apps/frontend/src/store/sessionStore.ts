@@ -46,7 +46,11 @@ export interface ImageItem extends BaseItem {
   totalChunks: number
   /** 0–100. */
   progress: number
-  /** Assembled on the receiver. */
+  /**
+   * The sender's copied source `File`, or the Blob assembled from chunks on the
+   * receiver. The transport never sets `objectURL`: components own the URLs they
+   * create (and revoke) from this Blob.
+   */
   blob?: Blob
   objectURL?: string
 }
@@ -59,6 +63,7 @@ export interface FileItem extends BaseItem {
   totalChunks: number
   /** 0–100. */
   progress: number
+  /** The sender's copied source `File`, or the Blob assembled from chunks on the receiver. */
   blob?: Blob
 }
 
@@ -151,6 +156,17 @@ export interface SessionActions {
   setItems: (items: SessionItem[]) => void
   /** Phase 3 updates one item in place as chunks and deltas arrive. */
   upsertItem: (item: SessionItem) => void
+  /**
+   * Phase 3 updates one item in place through a returns-the-same-item-or-a-new-one
+   * function. Additive to PLAN.md §9, which does not describe the transport's
+   * write path: a content delta, a throttled progress tick and a completed file's
+   * `blob` are all "replace this item", and a typed patch object cannot express
+   * that across the `SessionItem` union. A missing id is a no-op, so a delta that
+   * raced ahead of its announce cannot resurrect an item nobody created.
+   */
+  updateItem: (id: string, update: (item: SessionItem) => SessionItem) => void
+  /** Phase 3 removes one item (a local delete, or the peer's item-delete). */
+  removeItem: (id: string) => void
   setConnectionState: (connectionState: RTCPeerConnectionState) => void
   /**
    * Ends the session. Pass a reason to mark it a failure — the UI then shows
@@ -227,6 +243,29 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       }
       const items = state.items.slice()
       items[index] = item
+      return { items }
+    })
+  },
+
+  updateItem: (id, update) => {
+    set((state) => {
+      const index = state.items.findIndex((existing) => existing.id === id)
+      if (index === -1) return state
+
+      const current = state.items[index]
+      if (current === undefined) return state
+
+      const items = state.items.slice()
+      items[index] = update(current)
+      return { items }
+    })
+  },
+
+  removeItem: (id) => {
+    set((state) => {
+      const items = state.items.filter((item) => item.id !== id)
+      // Identity when nothing matched: a no-op must not re-render the board.
+      if (items.length === state.items.length) return state
       return { items }
     })
   },

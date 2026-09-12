@@ -18,6 +18,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { INITIAL_SESSION_STATE, useSessionStore } from './sessionStore'
+import type { SessionItem } from './sessionStore'
 
 const PHRASE: [string, string, string] = ['river', 'copper', 'eight']
 
@@ -179,5 +180,78 @@ describe('bothConfirmed() as a live selector (PLAN.md §8)', () => {
     expect(probe.text()).toBe('waiting')
 
     probe.unmount()
+  })
+})
+
+describe('session store item helpers (PLAN.md §9, §16 Phase 3)', () => {
+  function textItem(id: string, content = ''): SessionItem {
+    return { id, type: 'text', status: 'complete', createdAt: 1, content }
+  }
+
+  function fileItem(id: string): SessionItem {
+    return {
+      id,
+      type: 'file',
+      status: 'pending',
+      createdAt: 2,
+      fileName: `${id}.bin`,
+      mimeType: 'application/octet-stream',
+      totalSize: 32,
+      totalChunks: 2,
+      progress: 0,
+    }
+  }
+
+  it('appends new items in announcement order and updates an existing id in place', () => {
+    const store = useSessionStore.getState()
+    store.upsertItem(textItem('a'))
+    store.upsertItem(fileItem('b'))
+    store.upsertItem(textItem('a', 'updated'))
+
+    const items = useSessionStore.getState().items
+    expect(items.map((item) => item.id)).toEqual(['a', 'b'])
+    expect(items[0]).toMatchObject({ content: 'updated' })
+  })
+
+  it('updates one item through the updater and leaves the others untouched', () => {
+    const store = useSessionStore.getState()
+    store.upsertItem(textItem('a'))
+    const file = fileItem('b')
+    store.upsertItem(file)
+
+    useSessionStore.getState().updateItem('b', (item) => {
+      if (item.type !== 'file') return item
+      return { ...item, progress: 50, status: 'transferring' }
+    })
+
+    const items = useSessionStore.getState().items
+    expect(items[0]).toEqual(textItem('a'))
+    expect(items[1]).toMatchObject({ progress: 50, status: 'transferring' })
+  })
+
+  it('keeps the array identity when an update targets an unknown id', () => {
+    const store = useSessionStore.getState()
+    store.upsertItem(textItem('a'))
+    const before = useSessionStore.getState().items
+
+    // A delta that raced ahead of its announce must not resurrect an item, and must
+    // not re-render the board for nothing.
+    useSessionStore.getState().updateItem('missing', (item) => item)
+
+    expect(useSessionStore.getState().items).toBe(before)
+  })
+
+  it('removes exactly one item and is a no-op for an unknown id', () => {
+    const store = useSessionStore.getState()
+    store.upsertItem(textItem('a'))
+    store.upsertItem(textItem('b'))
+    store.upsertItem(textItem('c'))
+
+    useSessionStore.getState().removeItem('b')
+    expect(useSessionStore.getState().items.map((item) => item.id)).toEqual(['a', 'c'])
+
+    const before = useSessionStore.getState().items
+    useSessionStore.getState().removeItem('missing')
+    expect(useSessionStore.getState().items).toBe(before)
   })
 })

@@ -1,52 +1,65 @@
 /**
- * WebRTC peer connection over a single DataChannel (PLAN.md §12).
+ * WebRTC peer connection over a single DataChannel (PLAN.md §10, §12).
  *
  * Host = the device whose QR code was scanned; it creates the offer and the
  * DataChannel. Guest = the device that scanned; it answers and receives the
  * channel. Both sides then exchange messages symmetrically.
  *
- * PHASE 2 SCOPE: every frame crossing the channel is an AES-256-GCM envelope
- * (`[iv: 12 bytes][ciphertext + GCM tag]`, PLAN.md §10) produced by the session
- * key from `lib/crypto.ts`. No plaintext application data can reach the channel:
+ * Every frame crossing the channel is the PLAN.md §10 `WireMessage` set from
+ * `lib/protocol.ts`, MessagePack-encoded and then wrapped in an AES-256-GCM
+ * envelope (`[iv: 12 bytes][ciphertext + GCM tag]`) produced by the session key
+ * from `lib/crypto.ts`. No plaintext application data can reach the channel:
  * `send()` refuses to run until `setSessionKey()` has been called, and the
  * DataChannel only ever carries binary envelopes.
+ *
+ * Item traffic is gated a second time: every item-bearing frame is rejected until
+ * `markActive()` runs, which `useSession` does once both devices have confirmed
+ * the safety phrase (PLAN.md §8). That gate lives here, in the single `send()`
+ * path — call sites do not repeat it, so a new call site cannot forget it.
+ *
+ * The Phase 1 `hello` greeting is RETIRED (PLAN.md §16 Phase 3): the encrypted
+ * both-sides `phrase-confirm` already proves the channel in both directions, so a
+ * separate liveness frame would prove nothing new about it.
  */
 
 import { decrypt, encrypt } from './crypto'
-import type { SessionRole } from './signaling'
+import { decodeWire, encodeWire } from './protocol'
+import type { WireMessage } from './protocol'
 
 /**
- * The liveness greeting both devices exchange once the channel is up. It is the
- * Phase 1 "channel check" (PLAN.md §16) and still the simplest proof that the
- * encrypted bidirectional path works.
- */
-export type HelloMessage = { t: 'hello'; from: SessionRole; text: string }
-
-/**
- * Sent by both devices when the user accepts the safety phrase (PLAN.md §10).
+ * The only frames that may cross the channel *before* the session is active: the
+ * two control messages. Everything else carries session items and is gated.
  *
- * It carries no payload on purpose: its only meaning is "this human compared the
- * three words and they matched", and it is authenticated by the session key, so
- * an off-path attacker cannot forge it.
+ * Written as an allow-list rather than a list of item kinds on purpose: a message
+ * kind added by a later phase is item-bearing until it is explicitly classified
+ * as control here, so forgetting to update this cannot open the gate.
  */
-export type PhraseConfirmMessage = { t: 'phrase-confirm' }
-
-/** A device leaving the session deliberately (the overlay's Abort button). */
-export type SessionEndMessage = { t: 'session-end' }
+const CONTROL_MESSAGE_TYPES = new Set<WireMessage['t']>(['phrase-confirm', 'session-end'])
 
 /**
- * The Phase 2 wire payload.
+ * Whether a frame carries session items (PLAN.md §8/§9) rather than the two control
+ * frames that may always cross.
  *
- * PHASE 3 SEAM: PLAN.md §16 replaces this union wholesale with the full
- * `protocol.ts` `WireMessage` set (items, chunks, deltas) and swaps the JSON
- * serialisation inside `encodeFrame` / `decodeFrame` for MessagePack. Both the
- * union and the serialisation live behind those two functions, so call sites
- * (`send` / `onMessage`) do not change when that happens. Phase 3 must also send
- * item frames only while the session is 'active': PLAN.md §8 holds the session in
- * 'pairing' until both devices confirm the safety phrase, and the union here is
- * deliberately too small to carry an item before that.
+ * Exported so the receive-side gate in `useSession` classifies frames exactly as the
+ * send gate below does: one spelling of "this frame carries items", so a message kind
+ * added by a later phase cannot be gated on one direction and not the other.
  */
-export type Frame = HelloMessage | PhraseConfirmMessage | SessionEndMessage
+export function isItemMessage(message: WireMessage): boolean {
+  return !CONTROL_MESSAGE_TYPES.has(message.t)
+}
+
+/**
+ * How many bytes a file pump may leave queued in the DataChannel before it waits
+ * for the channel to drain (PLAN.md §9: "a large file in-flight does not block
+ * text items added after it").
+ *
+ * 256 KiB was chosen as the threshold: it is small enough that a text-delta never
+ * sits behind more than a fraction of a second of a relayed transfer (16 KiB
+ * chunks), and large enough that the pump is not woken for every chunk. Without
+ * it, enqueueing a whole file's chunks at once would put a `text-delta` behind up
+ * to 65k frames on a 1 GiB transfer.
+ */
+export const FILE_PUMP_BUFFER_THRESHOLD = 256 * 1024
 
 export interface PeerConnectionOptions {
   /** Short-lived TURN credential issued by the signaling worker (PLAN.md §13). */
@@ -94,64 +107,40 @@ export function buildIceServers(options: PeerConnectionOptions = {}): RTCIceServ
 }
 
 /**
- * PHASE 2 SEAM — outbound (PLAN.md §10, §11.3).
+ * The single outbound seam (PLAN.md §10, §11.3).
  *
- * Every outbound frame passes through here. The payload is JSON-encoded (Phase 3
- * swaps that for MessagePack), encrypted with the session key, and returned as
- * the `[iv: 12 bytes][ciphertext + GCM tag]` envelope that `send()` hands to the
- * DataChannel as a binary frame.
+ * Every outbound frame passes through here. The message is MessagePack-encoded by
+ * `protocol.ts` and encrypted with the session key, and the result is the
+ * `[iv: 12 bytes][ciphertext + GCM tag]` envelope that the DataChannel carries as
+ * a binary frame.
  *
- * The caller must never fall back to sending the JSON bytes when encryption is
+ * A caller must never fall back to sending the encoded bytes when encryption is
  * unavailable: `PeerConnection.send()` throws instead, so plaintext application
  * data cannot reach the wire.
  */
-export async function encodeFrame(message: Frame, sessionKey: CryptoKey): Promise<ArrayBuffer> {
-  const plaintext = new TextEncoder().encode(JSON.stringify(message))
-  return encrypt(sessionKey, plaintext)
+export async function encodeFrame(message: WireMessage, sessionKey: CryptoKey): Promise<ArrayBuffer> {
+  return encrypt(sessionKey, encodeWire(message))
 }
 
 /**
- * PHASE 2 SEAM — inbound.
+ * The single inbound seam.
  *
- * Reverses `encodeFrame`: authenticates and decrypts the envelope, then parses
- * the JSON payload. Throws on anything it cannot decrypt or decode, including
- * the GCM authentication failure of a wrong key or a tampered frame; callers
- * must treat a throw as "drop this frame" (PLAN.md §17). Because the throw can
- * happen after the tag check only, no partial plaintext is ever produced.
+ * Reverses `encodeFrame`: authenticates and decrypts the envelope, then the
+ * MessagePack payload is validated by `protocol.ts`. Throws on anything it cannot
+ * decrypt or decode, including the GCM authentication failure of a wrong key or a
+ * tampered frame; callers must treat a throw as "drop this frame" (PLAN.md §17).
+ * Because the payload is parsed only after the tag check has passed, no partial
+ * plaintext is ever produced.
  */
-export async function decodeFrame(raw: unknown, sessionKey: CryptoKey): Promise<Frame> {
+export async function decodeFrame(raw: unknown, sessionKey: CryptoKey): Promise<WireMessage> {
   if (!(raw instanceof ArrayBuffer)) {
     // The channel is configured for `arraybuffer` (see attachDataChannel), so
-    // anything else is either a protocol violation or a Phase 1 text frame.
+    // anything else is a protocol violation.
     throw new Error('webrtc: expected a binary encrypted envelope')
   }
 
   const plaintext = await decrypt(sessionKey, raw)
-  const parsed: unknown = JSON.parse(new TextDecoder().decode(plaintext))
-
-  if (!isFrame(parsed)) {
-    throw new Error('webrtc: decrypted frame is not a Phase 2 Frame')
-  }
-  return parsed
-}
-
-/** Validates a decrypted payload as one of the Phase 2 frames. */
-export function isFrame(value: unknown): value is Frame {
-  if (typeof value !== 'object' || value === null) return false
-  const record = value as Record<string, unknown>
-
-  switch (record['t']) {
-    case 'hello':
-      return (
-        (record['from'] === 'host' || record['from'] === 'guest') &&
-        typeof record['text'] === 'string'
-      )
-    case 'phrase-confirm':
-    case 'session-end':
-      return true
-    default:
-      return false
-  }
+  return decodeWire(plaintext)
 }
 
 /**
@@ -204,6 +193,21 @@ export class PeerConnection {
   private closed = false
 
   /**
+   * Whether the session has been explicitly marked active (PLAN.md §8: both
+   * devices confirmed the safety phrase). Item-bearing frames are refused until
+   * this is true — see `send()`. Reset by `close()`: a torn-down peer must never be
+   * able to carry items into a new attempt.
+   */
+  private active = false
+
+  /**
+   * Pumps parked on `waitForBackpressure()` (one per in-flight file). Resolved by
+   * the channel's `bufferedamountlow` event, or by teardown — a promise that can
+   * never settle would leave a pump's `await` hanging for the life of the tab.
+   */
+  private readonly backpressureWaiters = new Set<() => void>()
+
+  /**
    * The AES-GCM session key (PLAN.md §11.2). Null until the ECDH exchange has
    * completed, which is what keeps plaintext off the wire: `send()` refuses to
    * queue anything while it is null.
@@ -228,7 +232,7 @@ export class PeerConnection {
 
   private readonly iceCandidateHandlers = new Set<(candidate: RTCIceCandidateInit) => void>()
   private readonly dataChannelOpenHandlers = new Set<() => void>()
-  private readonly messageHandlers = new Set<(message: Frame) => void>()
+  private readonly messageHandlers = new Set<(message: WireMessage) => void>()
   private readonly stateChangeHandlers = new Set<(state: RTCPeerConnectionState) => void>()
   private readonly sendErrorHandlers = new Set<(error: unknown) => void>()
 
@@ -268,6 +272,71 @@ export class PeerConnection {
   /** Whether application frames can be encrypted and decrypted yet. */
   get hasSessionKey(): boolean {
     return this.sessionKey !== null
+  }
+
+  /**
+   * Opens the item gate (PLAN.md §8). Called once, by `useSession`, when both
+   * devices have confirmed the safety phrase.
+   *
+   * Deliberately one-way and explicit: there is no timeout, no implicit "the peer
+   * confirmed" path, and no way for a call site to send around it, because the
+   * gate is enforced in `send()` itself.
+   */
+  markActive(): void {
+    this.active = true
+  }
+
+  /** Whether item-bearing frames may be sent yet. */
+  get isActive(): boolean {
+    return this.active
+  }
+
+  /**
+   * How many bytes the DataChannel still has queued. Always a number: a channel
+   * that is gone (or a test double without the property) reads as zero rather than
+   * `undefined`, which would make a pump wait for an event that never comes.
+   */
+  get bufferedAmount(): number {
+    const amount = this.dataChannel?.bufferedAmount
+    return typeof amount === 'number' && Number.isFinite(amount) ? amount : 0
+  }
+
+  /**
+   * Resolves when the channel's queue has fallen back to
+   * `FILE_PUMP_BUFFER_THRESHOLD` or below (PLAN.md §9).
+   *
+   * Resolves immediately when there is no usable channel, so a torn-down session
+   * cannot park a pump forever on an event that will never fire again.
+   */
+  waitForBackpressure(): Promise<void> {
+    const channel = this.dataChannel
+    if (this.closed || !channel || channel.readyState !== 'open') {
+      return Promise.resolve()
+    }
+    if (this.bufferedAmount <= FILE_PUMP_BUFFER_THRESHOLD) {
+      return Promise.resolve()
+    }
+
+    return new Promise((resolve) => {
+      const settle = (): void => {
+        this.backpressureWaiters.delete(settle)
+        resolve()
+      }
+      this.backpressureWaiters.add(settle)
+    })
+  }
+
+  /**
+   * Wakes every pump parked on `waitForBackpressure()`.
+   *
+   * `close()` already does this, but not every teardown is a close: when the peer
+   * ends the session the pumps are cancelled while the channel is still open, and a
+   * pump left parked on an event that will not fire again keeps its closure — and the
+   * `File` it holds — alive until the channel closes. `useSession`'s `stopItemWork`
+   * calls this so a cancelled pump exits on the next microtask instead.
+   */
+  releaseBackpressure(): void {
+    this.releaseBackpressureWaiters()
   }
 
   /**
@@ -353,7 +422,7 @@ export class PeerConnection {
     }
   }
 
-  onMessage(handler: (message: Frame) => void): () => void {
+  onMessage(handler: (message: WireMessage) => void): () => void {
     this.messageHandlers.add(handler)
     return () => {
       this.messageHandlers.delete(handler)
@@ -386,12 +455,31 @@ export class PeerConnection {
    * Encrypts and sends a frame (PLAN.md §10).
    *
    * The guards are deliberately synchronous: a caller that sends before the
-   * channel is open, or before the session key exists, gets an immediate throw
-   * instead of a frame that silently disappears — or worse, goes out in
-   * plaintext. Only the encryption and the write are deferred to the internal
+   * channel is open, before the session key exists, or before the session has been
+   * marked active gets an immediate throw instead of a frame that silently
+   * disappears — or worse, goes out in plaintext or before the human compared the
+   * safety phrase. Only the encryption and the write are deferred to the internal
    * queue, which keeps `void` (ORCHESTRATION.md D3) while preserving send order.
    */
-  send(message: Frame): void {
+  send(message: WireMessage): void {
+    void this.enqueue(message)
+  }
+
+  /**
+   * `send()` for a caller that must know when the frame has actually been written:
+   * the file pumps (PLAN.md §9), which feed one chunk at a time and must observe
+   * the channel between chunks.
+   *
+   * Same guards, same single ordered queue as `send()` — a pump frame can never
+   * overtake an announce or a delta. The returned promise carries the same
+   * no-rejection contract as `drain()` (a write that fails is reported through
+   * `onSendError`), so a pump awaiting it cannot surface an unhandled rejection.
+   */
+  sendAwaitable(message: WireMessage): Promise<void> {
+    return this.enqueue(message)
+  }
+
+  private enqueue(message: WireMessage): Promise<void> {
     const channel = this.dataChannel
     if (!channel || channel.readyState !== 'open') {
       throw new Error('webrtc: data channel is not open')
@@ -400,8 +488,11 @@ export class PeerConnection {
     if (!key) {
       throw new Error('webrtc: session key is not ready — refusing to send an unencrypted frame')
     }
+    if (isItemMessage(message) && !this.active) {
+      throw new Error('webrtc: refusing to send an item frame before the channel is marked active')
+    }
 
-    this.outbound = this.outbound.then(async (): Promise<void> => {
+    const pending = this.outbound.then(async (): Promise<void> => {
       try {
         const frame = await encodeFrame(message, key)
         // Teardown can win the race against the encryption; there is nothing
@@ -417,6 +508,8 @@ export class PeerConnection {
         this.emitSendError(error)
       }
     })
+    this.outbound = pending
+    return pending
   }
 
   /**
@@ -431,6 +524,8 @@ export class PeerConnection {
     this.pendingCandidates.clear()
     this.channelOpen = false
     this.sessionKey = null
+    this.active = false
+    this.releaseBackpressureWaiters()
 
     this.iceCandidateHandlers.clear()
     this.dataChannelOpenHandlers.clear()
@@ -445,6 +540,7 @@ export class PeerConnection {
       channel.onmessage = null
       channel.onerror = null
       channel.onclose = null
+      channel.onbufferedamountlow = null
       try {
         channel.close()
       } catch {
@@ -465,6 +561,9 @@ export class PeerConnection {
   private attachDataChannel(channel: RTCDataChannel): void {
     this.dataChannel = channel
     channel.binaryType = 'arraybuffer'
+    // The pump parks when the queue is above the threshold; the channel reports
+    // when it has drained back down to it (PLAN.md §9).
+    channel.bufferedAmountLowThreshold = FILE_PUMP_BUFFER_THRESHOLD
 
     channel.onopen = (): void => {
       this.channelOpen = true
@@ -477,6 +576,10 @@ export class PeerConnection {
       this.handleInbound(event.data)
     }
 
+    channel.onbufferedamountlow = (): void => {
+      this.releaseBackpressureWaiters()
+    }
+
     channel.onerror = (): void => {
       // Fail-safe by design (PLAN.md §17): a dropped frame must never crash the
       // session, and nothing about the frame may be logged in production.
@@ -484,6 +587,19 @@ export class PeerConnection {
 
     channel.onclose = (): void => {
       this.channelOpen = false
+      // A closed channel will never report a low buffer again, so any parked pump
+      // is woken here; it then sees the session is no longer live and stops.
+      this.releaseBackpressureWaiters()
+    }
+  }
+
+  /**
+   * Wakes every pump parked on `waitForBackpressure()`. Called from the channel's
+   * `bufferedamountlow` event and from every teardown path.
+   */
+  private releaseBackpressureWaiters(): void {
+    for (const settle of [...this.backpressureWaiters]) {
+      settle()
     }
   }
 
@@ -513,7 +629,7 @@ export class PeerConnection {
     }
 
     this.enqueueInbound(async (): Promise<void> => {
-      let message: Frame
+      let message: WireMessage
       try {
         message = await decodeFrame(raw, key)
       } catch {

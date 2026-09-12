@@ -16,12 +16,14 @@
  */
 
 import { createRoot } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { CHUNK_SIZE, FileAssembler, chunkFile } from '../lib/chunker'
 import { exportPublicKey, generateKeypair, toBase64 } from '../lib/crypto'
+import type { WireMessage } from '../lib/protocol'
 import { PeerConnection } from '../lib/webrtc'
-import type { Frame } from '../lib/webrtc'
 import { useSessionStore } from '../store/sessionStore'
+import type { ItemStatus } from '../store/sessionStore'
 import { PEER_REJOINED_REASON, deriveSessionMaterial, useSession } from './useSession'
 import type { UseSessionResult } from './useSession'
 
@@ -98,10 +100,22 @@ class FakeDataChannel {
   binaryType: BinaryType = 'blob'
   closed = false
 
+  /** The pump threshold the PeerConnection armed, echoed back like a real channel. */
+  bufferedAmountLowThreshold = 0
+  bufferedAmount = 0
+
+  /**
+   * While true, every frame handed to this channel leaves 1 MiB queued behind it and
+   * only `releaseBackpressure()` drains it. That is how a test parks a file pump at a
+   * known point instead of racing a whole transfer.
+   */
+  holdBackpressure = false
+
   onopen: ((event: Event) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: ((event: Event) => void) | null = null
   onclose: ((event: Event) => void) | null = null
+  onbufferedamountlow: ((event: Event) => void) | null = null
 
   constructor(label: string, options?: RTCDataChannelInit) {
     this.label = label
@@ -110,7 +124,13 @@ class FakeDataChannel {
 
   send(data: unknown): void {
     this.sent.push(data)
+    if (this.holdBackpressure) this.bufferedAmount += 1024 * 1024
     this.remote?.receive(data)
+  }
+
+  releaseBackpressure(): void {
+    this.bufferedAmount = 0
+    this.onbufferedamountlow?.(new Event('bufferedamountlow'))
   }
 
   close(): void {
@@ -249,13 +269,19 @@ interface PairedDevices {
   host: PeerConnection
   hostChannel: FakeDataChannel
   hostMaterial: { sessionKey: CryptoKey; phrase: [string, string, string] }
-  hostReceived: Frame[]
+  hostReceived: WireMessage[]
 }
 
 /**
  * Brings a real pairing up: the guest hook joins with a real public key, the host
- * derives from it, the offer/answer crosses, both channels open, and the guest's
- * encrypted greeting is read by the host.
+ * derives from it, the offer/answer crosses, and both channels open. The session is
+ * left in 'pairing' — call `activatePairing()` for the 'active' phase.
+ *
+ * The channel is up and the guest's session key was installed before its safety
+ * phrase appeared (see `performKeyExchange`), so this is the point at which
+ * `useSession` would put a frame on the wire. That the encrypted path really works in
+ * both directions is proven by `activatePairing()`, which crosses a phrase-confirm
+ * each way.
  */
 async function pairDevices(): Promise<PairedDevices> {
   renderSessionProbe(SESSION_CODE)
@@ -284,7 +310,7 @@ async function pairDevices(): Promise<PairedDevices> {
   if (!guestFake || !hostFake) throw new Error('test bug: expected a peer on each side')
   linkChannel(hostFake, guestFake)
 
-  const hostReceived: Frame[] = []
+  const hostReceived: WireMessage[] = []
   host.onMessage((message) => hostReceived.push(message))
 
   const offer = await host.initAsHost()
@@ -306,14 +332,31 @@ async function pairDevices(): Promise<PairedDevices> {
   hostChannel.open()
   guestChannel.open()
 
-  // Proves the whole chain at once: the guest's channel opened, its session key was
-  // installed, its greeting was encrypted and the host authenticated and decrypted it.
-  await waitFor(
-    () => hostReceived.some((message) => message.t === 'hello'),
-    'the encrypted guest greeting',
-  )
+  await waitFor(() => useSessionStore.getState().phase === 'pairing', 'the pairing phase')
+  await settle()
 
   return { guestSocket, guestChannel, host, hostChannel, hostMaterial, hostReceived }
+}
+
+/**
+ * Takes a paired session through the both-confirms gate (PLAN.md §8) using the real
+ * encrypted `phrase-confirm` in each direction, and returns in the 'active' phase.
+ *
+ * This is also the proof that the encrypted channel carries traffic both ways: the
+ * guest's confirm is decrypted by the host, and the host's confirm is decrypted by
+ * the hook.
+ */
+async function activatePairing(devices: PairedDevices): Promise<void> {
+  session().confirmPhrase()
+  await waitFor(() => useSessionStore.getState().phraseConfirmed, 'the local confirmation')
+
+  devices.host.send({ t: 'phrase-confirm' })
+  await devices.host.drain()
+  await waitFor(() => useSessionStore.getState().phase === 'active', 'the active phase')
+  await waitFor(
+    () => devices.hostReceived.some((message) => message.t === 'phrase-confirm'),
+    'the guest phrase-confirm frame',
+  )
 }
 
 beforeEach(() => {
@@ -336,6 +379,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   root?.unmount()
   for (const socket of sockets) {
     socket.onmessage = null
@@ -348,40 +392,43 @@ afterEach(() => {
 
 describe('useSession Phase 2 pairing (PLAN.md §8, §10, §13)', () => {
   it('exchanges real public keys and derives the same three words as the peer', async () => {
-    const { hostMaterial, hostReceived, host } = await pairDevices()
+    const devices = await pairDevices()
 
     const state = useSessionStore.getState()
     expect(state.phase).toBe('pairing')
-    expect(state.safetyPhrase).toEqual(hostMaterial.phrase)
+    expect(state.safetyPhrase).toEqual(devices.hostMaterial.phrase)
     expect(state.phraseConfirmed).toBe(false)
     expect(state.peerConfirmed).toBe(false)
 
-    // The greeting crossed in both directions as an encrypted frame.
-    expect(hostReceived).toContainEqual({
-      t: 'hello',
-      from: 'guest',
-      text: 'Hello from the guest device',
-    })
+    // The encrypted phrase-confirm now crosses both ways, and only then is the
+    // session active — which is the retired hello greeting's job and more.
+    await activatePairing(devices)
 
-    host.send({ t: 'hello', from: 'host', text: 'Hello from the host device' })
-    await host.drain()
-    await waitFor(
-      () => session().peerHello === 'Hello from the host device',
-      'the decrypted host greeting',
-    )
+    expect(useSessionStore.getState().phase).toBe('active')
+    expect(devices.hostReceived).toContainEqual({ t: 'phrase-confirm' })
   })
 
   it('never lets a plaintext frame reach the channel', async () => {
-    const { guestChannel, hostChannel } = await pairDevices()
+    const devices = await pairDevices()
+    await activatePairing(devices)
 
-    const wire = [...guestChannel.sent, ...hostChannel.sent]
+    // Real item traffic on top of the handshake, so the whole wire is exercised.
+    const id = session().addTextItem()
+    session().updateTextItem(id, 'PLAINTEXT-MARKER')
+    await waitFor(
+      () => devices.hostReceived.some((message) => message.t === 'text-delta'),
+      'the delta frame',
+    )
+
+    const wire = [...devices.guestChannel.sent, ...devices.hostChannel.sent]
     expect(wire.length).toBeGreaterThan(0)
     for (const frame of wire) {
       expect(frame).toBeInstanceOf(ArrayBuffer)
       const text = new TextDecoder().decode(new Uint8Array(frame as ArrayBuffer))
       expect(text).not.toContain('hello')
       expect(text).not.toContain('"t"')
-      expect(text).not.toContain('Hello from the guest')
+      expect(text).not.toContain('PLAINTEXT-MARKER')
+      expect(text).not.toContain('item-announce')
     }
   })
 
@@ -566,5 +613,903 @@ describe('useSession as the host (ORCHESTRATION.md D2, D4 and D5)', () => {
 
     expect(useSessionStore.getState().errorMessage).not.toBe(null)
     expect(socket.sentOfType('offer')).toBe(null)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Item transport (PLAN.md §9, §10, §12, §16 Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic bytes, so a reassembled file can be compared exactly.
+ *
+ * The `ArrayBuffer` backing is explicit because `new File([bytes], …)` accepts only a
+ * view over an `ArrayBuffer`, not over an `ArrayBufferLike`.
+ */
+function patternedBytes(length: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(new ArrayBuffer(length))
+  for (let index = 0; index < length; index += 1) {
+    bytes[index] = (index * 31 + 7) % 251
+  }
+  return bytes
+}
+
+/** One readable label per frame, for wire-order assertions. */
+function describeFrame(message: WireMessage): string {
+  return message.t === 'file-chunk' ? `file-chunk:${message.index}` : message.t
+}
+
+function framesOf<K extends WireMessage['t']>(
+  frames: readonly WireMessage[],
+  type: K,
+): Extract<WireMessage, { t: K }>[] {
+  return frames.filter((frame): frame is Extract<WireMessage, { t: K }> => frame.t === type)
+}
+
+interface ReceivingDevices {
+  /** The hook under test. It is the host here, so it is the receiving side. */
+  hostChannel: FakeDataChannel
+  /** A real guest-side transport that feeds the hook real frames. */
+  guest: PeerConnection
+  guestChannel: FakeDataChannel
+}
+
+/**
+ * Brings a real pairing up with the hook as the HOST — the receiving side of the
+ * item path — and a raw `PeerConnection` as the guest that sends into it.
+ *
+ * A second hook instance cannot stand in for the sender: `useSessionStore` holds one
+ * session (PLAN.md §9), so two hooks in one test would share the board and fight over
+ * the phase. The raw peer is the same transport the hook uses, with the real key
+ * derivation, so the frames crossing are genuinely encrypted and genuinely decoded.
+ */
+async function pairDevicesAsReceiver(): Promise<ReceivingDevices> {
+  renderSessionProbe(null)
+
+  await waitFor(() => sockets.length === 1, 'the host signaling socket')
+  const hostSocket = latestSocket()
+  hostSocket.fireOpen()
+  await waitFor(() => hostSocket.sentOfType('join') !== null, 'the host join frame')
+
+  const join = hostSocket.sentOfType('join')
+  const hostPublicKey = join?.['publicKey']
+  if (typeof hostPublicKey !== 'string') throw new Error('test bug: the host sent no public key')
+
+  const hookFake = fakePeers[0]
+  if (!hookFake) throw new Error('test bug: the hook built no peer')
+
+  const guestKeys = await generateKeypair()
+  const guest = new PeerConnection()
+  const guestFake = fakePeers[1]
+  if (!guestFake) throw new Error('test bug: the guest built no peer')
+  linkChannel(hookFake, guestFake)
+
+  // The guest holds the same session key the hook derives from the guest's real key.
+  guest.setSessionKey(
+    (await deriveSessionMaterial(guestKeys.privateKey, hostPublicKey, SESSION_CODE)).sessionKey,
+  )
+
+  hostSocket.deliver({
+    type: 'pubkey',
+    publicKey: toBase64(await exportPublicKey(guestKeys.publicKey)),
+  })
+  await waitFor(() => hostSocket.sentOfType('offer') !== null, 'the host offer frame')
+  const offer = hostSocket.sentOfType('offer')
+
+  const answer = await guest.receiveOffer({ type: 'offer', sdp: offer?.['sdp'] as string })
+  hostSocket.deliver({ type: 'answer', sdp: answer.sdp })
+
+  await waitFor(() => guestFake.receivedChannels.length === 1, 'the guest data channel')
+  const hostChannel = hookFake.createdChannels[0]
+  const guestChannel = guestFake.receivedChannels[0]
+  if (!hostChannel || !guestChannel) throw new Error('test bug: the data channel was not linked')
+  hostChannel.open()
+  guestChannel.open()
+  await settle()
+
+  return { hostChannel, guest, guestChannel }
+}
+
+/** Takes the receiver-side pair through the both-confirms gate. */
+async function activateReceiverPairing(devices: ReceivingDevices): Promise<void> {
+  session().confirmPhrase()
+  await waitFor(() => useSessionStore.getState().phraseConfirmed, 'the local confirmation')
+
+  devices.guest.send({ t: 'phrase-confirm' })
+  await devices.guest.drain()
+  await waitFor(() => useSessionStore.getState().phase === 'active', 'the active phase')
+
+  // The guest stands in for a sender, so it needs the same open gate `useSession`
+  // opens on its own side.
+  devices.guest.markActive()
+}
+
+/** Sends a whole file the way `useSession`'s pump does: announce → chunks → done. */
+async function sendWholeFile(guest: PeerConnection, id: string, file: File): Promise<void> {
+  for await (const frame of chunkFile(id, file)) {
+    guest.send(frame)
+  }
+  await guest.drain()
+}
+
+describe('useSession items — the sender side (PLAN.md §9, §10, §12)', () => {
+  it('is a no-op before both devices confirmed, and no item frame reaches the wire', async () => {
+    const devices = await pairDevices()
+
+    // The retired Phase 2 hello means nothing at all crosses before the phrase is
+    // confirmed, so the whole channel is still empty here.
+    expect(devices.guestChannel.sent).toEqual([])
+
+    expect(session().addTextItem('early')).toBe('')
+    expect(session().addRichTextItem('{}')).toBe('')
+    expect(session().addFileItem(new File([patternedBytes(8)], 'early.bin'))).toBe('')
+    expect(() => {
+      session().updateTextItem('x', 'y')
+    }).not.toThrow()
+    expect(() => {
+      session().updateRichTextItem('x', 'y')
+    }).not.toThrow()
+    expect(() => {
+      session().deleteItem('x')
+    }).not.toThrow()
+
+    await waitFor(() => useSessionStore.getState().phase === 'pairing', 'the pairing phase')
+    await settle()
+
+    expect(useSessionStore.getState().items).toEqual([])
+    expect(devices.guestChannel.sent).toEqual([])
+    expect(devices.hostReceived).toEqual([])
+  })
+
+  it('announces a text item and streams one debounced delta for a burst of keystrokes', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const id = session().addTextItem()
+    expect(id).not.toBe('')
+    expect(useSessionStore.getState().items.map((item) => item.id)).toContain(id)
+
+    await waitFor(
+      () => devices.hostReceived.some((message) => message.t === 'item-announce' && message.id === id),
+      'the announce frame',
+    )
+    expect(framesOf(devices.hostReceived, 'item-announce')[0]).toEqual({
+      t: 'item-announce',
+      id,
+      type: 'text',
+    })
+
+    const startedAt = Date.now()
+    session().updateTextItem(id, 'h')
+    session().updateTextItem(id, 'he')
+    session().updateTextItem(id, 'hey')
+
+    // The sender's own row follows the keyboard immediately; the wire does not — the
+    // debounce timer has not fired yet.
+    expect(useSessionStore.getState().items.find((item) => item.id === id)).toMatchObject({
+      content: 'hey',
+    })
+    expect(framesOf(devices.hostReceived, 'text-delta')).toEqual([])
+
+    await waitFor(() => framesOf(devices.hostReceived, 'text-delta').length === 1, 'one delta')
+    // Measured from the last keystroke: the delta waits out PLAN.md §19 decision 8
+    // rather than going out on the next tick. Asserted as a floor, never a ceiling, so
+    // a loaded machine can only make this later.
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(90)
+    expect(framesOf(devices.hostReceived, 'text-delta')).toEqual([
+      { t: 'text-delta', id, content: 'hey' },
+    ])
+  })
+
+  it('announces an initial text content instead of waiting for a keystroke', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const id = session().addTextItem('typed before the item existed')
+
+    expect(useSessionStore.getState().items.find((item) => item.id === id)).toMatchObject({
+      content: 'typed before the item existed',
+    })
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'text-delta').length === 1,
+      'the initial delta',
+    )
+    expect(framesOf(devices.hostReceived, 'text-delta')[0]).toEqual({
+      t: 'text-delta',
+      id,
+      content: 'typed before the item existed',
+    })
+  })
+
+  it('streams a rich-text item as its Tiptap JSON', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const id = session().addRichTextItem()
+    const first = JSON.stringify({ type: 'doc', content: [] })
+    const second = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] })
+
+    session().updateRichTextItem(id, first)
+    session().updateRichTextItem(id, second)
+    expect(useSessionStore.getState().items.find((item) => item.id === id)).toMatchObject({
+      type: 'richtext',
+      content: second,
+    })
+
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'richtext-delta').length === 1,
+      'the debounced richtext delta',
+    )
+    expect(framesOf(devices.hostReceived, 'richtext-delta')).toEqual([
+      { t: 'richtext-delta', id, content: second },
+    ])
+    // No text-delta ever crosses for a rich-text item: the two kinds stay apart.
+    expect(framesOf(devices.hostReceived, 'text-delta')).toEqual([])
+  })
+
+  it('chunks a file in order, completes its row, and classifies images by MIME type', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const imageBytes = patternedBytes(CHUNK_SIZE * 2 + 7)
+    const imageFile = new File([imageBytes], 'photo.png', { type: 'image/png' })
+    const imageId = session().addFileItem(imageFile)
+
+    expect(useSessionStore.getState().items.find((item) => item.id === imageId)).toMatchObject({
+      type: 'image',
+      status: 'pending',
+      fileName: 'photo.png',
+      mimeType: 'image/png',
+      totalSize: imageFile.size,
+      totalChunks: 3,
+      progress: 0,
+    })
+
+    // The sender's row carries the source File itself — a `File` IS a `Blob`, so this
+    // is the same object, not a copy or a read. That one field is what puts the image
+    // preview and the file download link up before a single chunk has crossed
+    // (PLAN.md §9), and it is the half of the pipeline the component tests inject by
+    // hand.
+    const pendingRow = useSessionStore.getState().items.find((item) => item.id === imageId)
+    if (pendingRow?.type !== 'image') throw new Error('test bug: the sender item is not an image')
+    expect(pendingRow.blob).toBe(imageFile)
+
+    await waitFor(
+      () => devices.hostReceived.some((message) => message.t === 'file-done'),
+      'file-done',
+    )
+
+    // The sender's own type and the announced type are decided by the same rule.
+    expect(framesOf(devices.hostReceived, 'item-announce')[0]).toMatchObject({
+      t: 'item-announce',
+      id: imageId,
+      type: 'image',
+      fileName: 'photo.png',
+      mimeType: 'image/png',
+      totalSize: imageFile.size,
+      totalChunks: 3,
+    })
+
+    const chunks = framesOf(devices.hostReceived, 'file-chunk')
+    expect(chunks.map((chunk) => chunk.index)).toEqual([0, 1, 2])
+    expect(chunks.every((chunk) => chunk.id === imageId)).toBe(true)
+
+    // Reassembled with the real assembler the receiver uses: byte-identical.
+    const assembler = new FileAssembler()
+    for (const chunk of chunks) assembler.addChunk(chunk.index, chunk.data)
+    expect(assembler.isComplete(3)).toBe(true)
+    const assembled = await assembler.assemble('image/png').arrayBuffer()
+    expect(new Uint8Array(assembled)).toEqual(imageBytes)
+
+    await waitFor(() => {
+      const item = useSessionStore.getState().items.find((candidate) => candidate.id === imageId)
+      return item?.type === 'image' && item.status === 'complete' && item.progress === 100
+    }, 'the sender row to complete')
+
+    // The receive path never writes an item this device created (no assembler exists
+    // for it), and the sender's own progress/completion writes spread the item, so the
+    // source file survives the whole transfer untouched.
+    const completedRow = useSessionStore.getState().items.find((item) => item.id === imageId)
+    if (completedRow?.type !== 'image') throw new Error('test bug: the sender item is not an image')
+    expect(completedRow.blob).toBe(imageFile)
+    expect(completedRow.status).toBe('complete')
+
+    // Every frame that left this device — announces, 16 KiB chunks and the done frame
+    // alike — was an encrypted binary envelope, never a readable one.
+    expect(devices.guestChannel.sent.length).toBeGreaterThan(4)
+    for (const envelope of devices.guestChannel.sent) {
+      expect(envelope).toBeInstanceOf(ArrayBuffer)
+      const text = new TextDecoder().decode(new Uint8Array(envelope as ArrayBuffer))
+      expect(text).not.toContain('photo.png')
+      expect(text).not.toContain('file-chunk')
+    }
+
+    // A file with no image MIME type announces as a plain file, locally and on the wire.
+    const plainId = session().addFileItem(new File([patternedBytes(4)], 'notes.bin', { type: '' }))
+    expect(useSessionStore.getState().items.find((item) => item.id === plainId)).toMatchObject({
+      type: 'file',
+    })
+    await waitFor(
+      () =>
+        framesOf(devices.hostReceived, 'item-announce').some(
+          (announce) => announce.id === plainId && announce.type === 'file',
+        ),
+      'the plain-file announce',
+    )
+  })
+
+  it('does not let a file starve a text item, and runs a second file alongside the first', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    // Hold the channel full: the pump may write one frame and then has to wait for the
+    // buffer, which is exactly the state a 1 GiB transfer is in for most of its life.
+    devices.guestChannel.holdBackpressure = true
+
+    const firstBytes = patternedBytes(CHUNK_SIZE * 3 + 100)
+    const firstId = session().addFileItem(new File([firstBytes], 'first.bin', { type: '' }))
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'item-announce').some((m) => m.id === firstId),
+      'the first announce',
+    )
+
+    // One release lets exactly one chunk through; the pump parks again after it.
+    devices.guestChannel.releaseBackpressure()
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'file-chunk').some((chunk) => chunk.index === 0),
+      'chunk 0',
+    )
+
+    // A text item typed while the file is in flight, and a second small file.
+    const textId = session().addTextItem()
+    session().updateTextItem(textId, 'typed mid-transfer')
+    const secondId = session().addFileItem(new File([patternedBytes(10)], 'second.bin', { type: '' }))
+
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'text-delta').length === 1,
+      'the delta sent during the transfer',
+    )
+
+    const order = devices.hostReceived.map(describeFrame)
+    expect(order.indexOf('text-delta')).toBeGreaterThan(order.indexOf('file-chunk:0'))
+    expect(order).not.toContain('file-done')
+
+    // Let both pumps finish: the second file must complete without the first blocking it.
+    devices.guestChannel.holdBackpressure = false
+    devices.guestChannel.releaseBackpressure()
+    await waitFor(() => {
+      const done = new Set(framesOf(devices.hostReceived, 'file-done').map((frame) => frame.id))
+      return done.has(firstId) && done.has(secondId)
+    }, 'both files to finish')
+
+    // The second file's single chunk arrived after the first file's, but neither waited
+    // for the other to complete: that is the async independence PLAN.md §9 asks for.
+    expect(describeFrame(devices.hostReceived[devices.hostReceived.length - 1]!)).toBe('file-done')
+    for (const id of [firstId, secondId]) {
+      const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+      expect(item?.type === 'file' && item.status === 'complete' && item.progress === 100).toBe(true)
+    }
+  })
+
+  it('sends item-delete and removes the item on both sides', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    const id = session().addTextItem()
+    await waitFor(
+      () => useSessionStore.getState().items.some((item) => item.id === id),
+      'the local item',
+    )
+
+    session().deleteItem(id)
+
+    expect(useSessionStore.getState().items).toEqual([])
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'item-delete').some((frame) => frame.id === id),
+      'the item-delete frame',
+    )
+  })
+
+  it('stops a transfer at teardown: no further frame, no completed row, no pending write', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    devices.guestChannel.holdBackpressure = true
+    const id = session().addFileItem(
+      new File([patternedBytes(CHUNK_SIZE * 4)], 'doomed.bin', { type: '' }),
+    )
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'item-announce').some((frame) => frame.id === id),
+      'the announce frame',
+    )
+    const framesBeforeAbort = devices.guestChannel.sent.length
+
+    session().abort()
+    await waitFor(() => useSessionStore.getState().phase === 'ended', 'the ended phase')
+    await settle()
+
+    // Unpark the channel: a pump still watching it would write its next chunk now. It
+    // must not, and nothing may escape as an unhandled rejection (vitest fails this
+    // file if it does).
+    devices.guestChannel.holdBackpressure = false
+    devices.guestChannel.releaseBackpressure()
+    await settle()
+
+    expect(devices.guestChannel.sent.length).toBe(framesBeforeAbort + 1)
+    expect(framesOf(devices.hostReceived, 'file-chunk')).toEqual([])
+    expect(framesOf(devices.hostReceived, 'file-done')).toEqual([])
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+    expect(item?.status).not.toBe('complete')
+    expect(useSessionStore.getState().errorMessage).toBe(null)
+  })
+
+  it('wakes a cancelled pump parked on backpressure when the peer ends the session', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    // Record whether each backpressure wait ever settles, without changing what it
+    // does. The parked promise is the evidence: a pump that never wakes keeps its
+    // closure and its File alive for the life of the tab.
+    const original = PeerConnection.prototype.waitForBackpressure
+    const settled: boolean[] = []
+    vi.spyOn(PeerConnection.prototype, 'waitForBackpressure').mockImplementation(
+      function (this: PeerConnection) {
+        const index = settled.length
+        settled.push(false)
+        const waiting = original.call(this)
+        void waiting.then(() => {
+          settled[index] = true
+        })
+        return waiting
+      },
+    )
+
+    // Hold the channel full: the pump writes its announce and then parks before its
+    // first chunk, which is where a large transfer spends most of its life.
+    devices.guestChannel.holdBackpressure = true
+    const id = session().addFileItem(
+      new File([patternedBytes(CHUNK_SIZE * 2)], 'parked.bin', { type: '' }),
+    )
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'item-announce').some((frame) => frame.id === id),
+      'the announce frame',
+    )
+    await waitFor(() => settled.length > 0, 'the pump to park')
+    await settle()
+    expect(settled).toEqual([false])
+
+    // A clean end from the peer: no close() runs on this path, so the channel that
+    // would normally wake the pump stays open.
+    devices.host.send({ t: 'session-end' })
+    await devices.host.drain()
+    await waitFor(() => useSessionStore.getState().phase === 'ended', 'the ended phase')
+    await waitFor(() => settled[0] === true, 'the parked pump to be released')
+    await settle()
+
+    // Woken, the pump re-checks and exits: the session-end did not let a chunk out.
+    expect(framesOf(devices.hostReceived, 'file-chunk')).toEqual([])
+  })
+})
+
+describe('useSession items — the receive path (PLAN.md §9, §10, §12)', () => {
+  it('upserts an announce and streams deltas into the store', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const textId = crypto.randomUUID()
+    devices.guest.send({ t: 'item-announce', id: textId, type: 'text' })
+    devices.guest.send({ t: 'text-delta', id: textId, content: 'first' })
+    devices.guest.send({ t: 'text-delta', id: textId, content: 'first and second' })
+
+    const richId = crypto.randomUUID()
+    const doc = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] })
+    devices.guest.send({ t: 'item-announce', id: richId, type: 'richtext' })
+    devices.guest.send({ t: 'richtext-delta', id: richId, content: doc })
+    await devices.guest.drain()
+
+    await waitFor(
+      () => useSessionStore.getState().items.length === 2,
+      'both announced items',
+    )
+    await waitFor(() => {
+      const text = useSessionStore.getState().items.find((item) => item.id === textId)
+      return text?.type === 'text' && text.content === 'first and second'
+    }, 'the live text content')
+    await waitFor(() => {
+      const rich = useSessionStore.getState().items.find((item) => item.id === richId)
+      return rich?.type === 'richtext' && rich.content === doc
+    }, 'the live richtext content')
+
+    // Deltas for an id this session does not carry are dropped, not invented.
+    devices.guest.send({ t: 'text-delta', id: crypto.randomUUID(), content: 'ghost' })
+    await devices.guest.drain()
+    await settle()
+    expect(useSessionStore.getState().items).toHaveLength(2)
+  })
+
+  it('assembles a multi-chunk file byte-identically and reports 100%', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const bytes = patternedBytes(CHUNK_SIZE * 2 + 123)
+    const file = new File([bytes], 'movie.bin', { type: 'application/octet-stream' })
+    const id = crypto.randomUUID()
+
+    // Watch the store while the file crosses. Both halves of the pipeline used to be
+    // tested with a hand-injected blob, which is exactly why the partial-blob wiring
+    // could be missing without a red test: these are the assertions that pin it.
+    const captured: Array<{ size: number; status: ItemStatus; blob: Blob }> = []
+    const unsubscribe = useSessionStore.subscribe((state) => {
+      const item = state.items.find((candidate) => candidate.id === id)
+      if (item?.type !== 'file' || item.blob === undefined) return
+      if (captured[captured.length - 1]?.blob === item.blob) return
+      captured.push({ size: item.blob.size, status: item.status, blob: item.blob })
+    })
+
+    try {
+      await sendWholeFile(devices.guest, id, file)
+
+      await waitFor(() => {
+        const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+        return item?.status === 'complete'
+      }, 'the received file to complete')
+    } finally {
+      unsubscribe()
+    }
+
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+    if (item?.type !== 'file') throw new Error('test bug: the item is not a file')
+    expect(item.progress).toBe(100)
+    expect(item.totalChunks).toBe(3)
+    expect(item.totalSize).toBe(bytes.byteLength)
+    expect(item.fileName).toBe('movie.bin')
+    const blob = item.blob
+    if (!blob) throw new Error('the assembled blob is missing')
+
+    expect(blob).toBeInstanceOf(Blob)
+    expect(blob.type).toBe('application/octet-stream')
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes)
+
+    // The transport publishes the Blob alone. Object URLs belong to the components
+    // that build and revoke them, so an URL written here would be a double-revoke
+    // hazard the moment a row re-rendered or unmounted.
+    expect('objectURL' in item).toBe(false)
+
+    // The item's blob grew DURING the transfer, before file-done, at the same 10%
+    // boundaries the progress ring uses: 3 chunks mean one partial blob per boundary
+    // crossed, and each one is the file's own bytes from index 0.
+    const midTransfer = captured.filter((entry) => entry.size > 0 && entry.size < file.size)
+    expect(midTransfer.map((entry) => entry.size)).toEqual([CHUNK_SIZE, CHUNK_SIZE * 2])
+    expect(midTransfer.every((entry) => entry.status === 'transferring')).toBe(true)
+
+    const firstPartial = midTransfer[0]
+    if (!firstPartial) throw new Error('test bug: no partial blob was published')
+    const prefix = new Uint8Array(await firstPartial.blob.arrayBuffer())
+    expect(prefix.byteLength).toBe(CHUNK_SIZE)
+    expect(prefix).toEqual(bytes.subarray(0, CHUNK_SIZE))
+
+    // And the completed blob is the whole file, byte-identically — the partial writes
+    // were replaced, never truncated the final result.
+    expect(captured[captured.length - 1]?.size).toBe(file.size)
+    expect(captured[captured.length - 1]?.status).toBe('complete')
+  })
+
+  it('ignores item frames from a peer until BOTH devices confirmed the phrase (PLAN.md §8)', async () => {
+    const devices = await pairDevicesAsReceiver()
+
+    // Only this device has confirmed so far.
+    session().confirmPhrase()
+    await waitFor(() => useSessionStore.getState().phraseConfirmed, 'the local confirmation')
+    await settle()
+    expect(useSessionStore.getState().bothConfirmed()).toBe(false)
+
+    // The peer's own send gate is open — it believes the session is live — which is
+    // the state the phase-based gate would miss.
+    devices.guest.markActive()
+    const id = crypto.randomUUID()
+    devices.guest.send({ t: 'item-announce', id, type: 'text' })
+    devices.guest.send({ t: 'text-delta', id, content: 'arrived before the phrase' })
+    await devices.guest.drain()
+    await settle()
+
+    // Holding the session key does not let the peer populate the board while the human
+    // is still comparing the words: nothing is stored to appear when the phase flips.
+    expect(useSessionStore.getState().items).toEqual([])
+
+    // The same announce once both have confirmed is accepted — the gate drops frames
+    // during pairing, it does not blacklist the peer.
+    devices.guest.send({ t: 'phrase-confirm' })
+    await devices.guest.drain()
+    await waitFor(() => useSessionStore.getState().phase === 'active', 'the active phase')
+
+    devices.guest.send({ t: 'item-announce', id, type: 'text' })
+    devices.guest.send({ t: 'text-delta', id, content: 'arrived after the phrase' })
+    await devices.guest.drain()
+    await waitFor(() => {
+      const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+      return item?.type === 'text' && item.content === 'arrived after the phrase'
+    }, 'the item from after both confirmations')
+  })
+
+  it('writes progress in 10% steps rather than once per chunk', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const chunkCount = 25
+    const id = crypto.randomUUID()
+    const seen = new Set<number>()
+    const unsubscribe = useSessionStore.subscribe((state) => {
+      const item = state.items.find((candidate) => candidate.id === id)
+      if (item?.type === 'file') seen.add(item.progress)
+    })
+
+    try {
+      await sendWholeFile(
+        devices.guest,
+        id,
+        new File([patternedBytes(CHUNK_SIZE * chunkCount)], 'big.bin', { type: '' }),
+      )
+      await waitFor(() => {
+        const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+        return item?.status === 'complete'
+      }, 'the transfer to complete')
+    } finally {
+      unsubscribe()
+    }
+
+    // 25 chunks must not mean 25 store writes (a 1 GiB transfer is ~65k chunks).
+    expect(seen.size).toBeGreaterThan(1)
+    expect(seen.size).toBeLessThanOrEqual(12)
+    expect(Math.max(...seen)).toBe(100)
+  })
+
+  it('drops a chunk that arrives before its announce instead of buffering it', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    devices.guest.send({ t: 'file-chunk', id, index: 0, data: new Uint8Array([1, 2, 3]) })
+    await devices.guest.drain()
+    await settle()
+
+    // Nothing was announced, so there is no item and no assembler to fill.
+    expect(useSessionStore.getState().items).toEqual([])
+
+    // The later announce cannot recover the dropped chunk: a file is never assembled
+    // from a hole.
+    devices.guest.send({
+      t: 'item-announce',
+      id,
+      type: 'file',
+      fileName: 'late.bin',
+      mimeType: '',
+      totalSize: 3,
+      totalChunks: 1,
+    })
+    devices.guest.send({ t: 'file-done', id })
+    await devices.guest.drain()
+    await settle()
+
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+    if (item?.type !== 'file') throw new Error('test bug: the item is not a file')
+    expect(item.status).not.toBe('complete')
+    expect(item.blob).toBeUndefined()
+  })
+
+  it('bounds a hostile announce and ignores a chunk past its declared total', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const hostileId = crypto.randomUUID()
+    devices.guest.send({
+      t: 'item-announce',
+      id: hostileId,
+      type: 'file',
+      fileName: 'huge.bin',
+      mimeType: '',
+      totalSize: Number.MAX_SAFE_INTEGER,
+      totalChunks: Number.MAX_SAFE_INTEGER,
+    })
+    // A chunk that claims to be inside the declared range, and one past it.
+    devices.guest.send({ t: 'file-chunk', id: hostileId, index: 0, data: new Uint8Array([7]) })
+    await devices.guest.drain()
+    await settle()
+
+    // The announce preallocated nothing, so this finished instantly; the item exists
+    // but is nowhere near complete and has no blob.
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === hostileId)
+    if (item?.type !== 'file') throw new Error('test bug: the item is not a file')
+    expect(item.status).not.toBe('complete')
+    expect(item.blob).toBeUndefined()
+
+    // `file-done` with a count nowhere near the declared total must not walk 10^15
+    // indices, and must not assemble anything.
+    devices.guest.send({ t: 'file-done', id: hostileId })
+    await devices.guest.drain()
+    await settle()
+    const afterDone = useSessionStore.getState().items.find((candidate) => candidate.id === hostileId)
+    expect(afterDone?.status).not.toBe('complete')
+    expect(afterDone?.type === 'file' && afterDone.blob).toBeUndefined()
+
+    // And the session is not poisoned: a real file still transfers.
+    const goodId = crypto.randomUUID()
+    await sendWholeFile(devices.guest, goodId, new File([patternedBytes(24)], 'small.bin', { type: '' }))
+    await waitFor(() => {
+      const good = useSessionStore.getState().items.find((candidate) => candidate.id === goodId)
+      return good?.status === 'complete'
+    }, 'the good file to complete')
+  })
+
+  it('ignores a duplicate chunk and still assembles byte-identically', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    const first = new Uint8Array(CHUNK_SIZE).fill(1)
+    const second = new Uint8Array(32).fill(2)
+    const totalSize = first.byteLength + second.byteLength
+
+    devices.guest.send({
+      t: 'item-announce',
+      id,
+      type: 'file',
+      fileName: 'dup.bin',
+      mimeType: 'application/octet-stream',
+      totalSize,
+      totalChunks: 2,
+    })
+    devices.guest.send({ t: 'file-chunk', id, index: 0, data: first })
+    // A replayed index with different bytes: the first copy wins, or the file would
+    // silently change under the receiver.
+    devices.guest.send({ t: 'file-chunk', id, index: 0, data: new Uint8Array(CHUNK_SIZE).fill(9) })
+    devices.guest.send({ t: 'file-chunk', id, index: 1, data: second })
+    devices.guest.send({ t: 'file-done', id })
+    await devices.guest.drain()
+
+    await waitFor(() => {
+      const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+      return item?.status === 'complete'
+    }, 'the file to complete')
+
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+    if (item?.type !== 'file' || !item.blob) throw new Error('test bug: no assembled blob')
+    const assembled = new Uint8Array(await item.blob.arrayBuffer())
+    expect(assembled.byteLength).toBe(totalSize)
+    expect(assembled.subarray(0, CHUNK_SIZE)).toEqual(first)
+    expect(assembled.subarray(CHUNK_SIZE)).toEqual(second)
+  })
+
+  it('drops a chunk outside the announced range, so an announce bounds the assembler', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    const first = new Uint8Array(CHUNK_SIZE).fill(1)
+    const second = new Uint8Array(32).fill(2)
+    const totalSize = first.byteLength + second.byteLength
+
+    devices.guest.send({
+      t: 'item-announce',
+      id,
+      type: 'file',
+      fileName: 'bounded.bin',
+      mimeType: 'application/octet-stream',
+      totalSize,
+      totalChunks: 2,
+    })
+    devices.guest.send({ t: 'file-chunk', id, index: 0, data: first })
+    devices.guest.send({ t: 'file-chunk', id, index: 1, data: second })
+    // Chunks the announce never promised: holding them would let a peer grow this
+    // device's memory past the size it declared.
+    devices.guest.send({ t: 'file-chunk', id, index: 5, data: new Uint8Array(1024).fill(9) })
+    devices.guest.send({ t: 'file-chunk', id, index: 6, data: new Uint8Array(1024).fill(9) })
+    devices.guest.send({ t: 'file-done', id })
+    await devices.guest.drain()
+
+    await waitFor(() => {
+      const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+      return item?.status === 'complete'
+    }, 'the declared file to complete')
+
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+    if (item?.type !== 'file' || !item.blob) throw new Error('test bug: no assembled blob')
+    const assembled = new Uint8Array(await item.blob.arrayBuffer())
+    // Exactly the declared bytes: the out-of-range chunks were not stored at all.
+    expect(assembled.byteLength).toBe(totalSize)
+    expect(assembled.subarray(0, CHUNK_SIZE)).toEqual(first)
+    expect(assembled.subarray(CHUNK_SIZE)).toEqual(second)
+  })
+
+  it('keeps the first announce for an id, so a re-announce cannot wipe the item', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    devices.guest.send({ t: 'item-announce', id, type: 'text' })
+    devices.guest.send({ t: 'text-delta', id, content: 'already typing' })
+    await devices.guest.drain()
+    await waitFor(() => {
+      const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+      return item?.type === 'text' && item.content === 'already typing'
+    }, 'the first content')
+
+    // A hostile peer re-announces the same id. Replacing the item here would clear the
+    // content that is already on the board (and, for a file, its transfer state).
+    devices.guest.send({ t: 'item-announce', id, type: 'file', fileName: 'swapped.bin' })
+    await devices.guest.drain()
+    await settle()
+
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+    expect(useSessionStore.getState().items).toHaveLength(1)
+    expect(item?.type).toBe('text')
+    expect(item?.type === 'text' && item.content).toBe('already typing')
+  })
+
+  it('ignores a locked announce — Phase 4 owns locked items', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    devices.guest.send({
+      t: 'item-announce',
+      id: crypto.randomUUID(),
+      type: 'locked',
+      label: 'Uni portal password',
+      innerType: 'text',
+    })
+    devices.guest.send({
+      t: 'locked-payload',
+      id: crypto.randomUUID(),
+      ciphertext: new Uint8Array([1, 2, 3]),
+      iv: new Uint8Array(12),
+      salt: new Uint8Array(16),
+    })
+    await devices.guest.drain()
+    await settle()
+
+    expect(useSessionStore.getState().items).toEqual([])
+    expect(useSessionStore.getState().errorMessage).toBe(null)
+  })
+
+  it('keeps a received file in memory only, never in web storage', async () => {
+    // AGENTS.md: session data and its Blobs never touch IndexedDB, the Cache API or
+    // localStorage. jsdom ships no IndexedDB or Cache API at all here, so the one
+    // reachable sink is web storage — and a transfer must not touch even that.
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    await sendWholeFile(
+      devices.guest,
+      id,
+      new File([patternedBytes(CHUNK_SIZE + 5)], 'memo.bin', { type: '' }),
+    )
+    await waitFor(() => {
+      const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+      return item?.status === 'complete'
+    }, 'the received file to complete')
+
+    const item = useSessionStore.getState().items.find((candidate) => candidate.id === id)
+    expect(item?.type === 'file' && item.blob).toBeInstanceOf(Blob)
+    expect(setItem).not.toHaveBeenCalled()
+  })
+
+  it('removes a received item on item-delete without echoing it back', async () => {
+    const devices = await pairDevicesAsReceiver()
+    await activateReceiverPairing(devices)
+
+    const id = crypto.randomUUID()
+    devices.guest.send({ t: 'item-announce', id, type: 'text' })
+    devices.guest.send({ t: 'text-delta', id, content: 'to be removed' })
+    await devices.guest.drain()
+    await waitFor(() => useSessionStore.getState().items.length === 1, 'the item to arrive')
+
+    const sentBeforeDelete = devices.hostChannel.sent.length
+    devices.guest.send({ t: 'item-delete', id })
+    await devices.guest.drain()
+    await waitFor(() => useSessionStore.getState().items.length === 0, 'the item to be removed')
+
+    // An echo would make two devices delete the same id at each other forever.
+    expect(devices.hostChannel.sent.length).toBe(sentBeforeDelete)
   })
 })
