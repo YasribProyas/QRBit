@@ -73,18 +73,22 @@ export const DATA_CHANNEL_LABEL = 'qrdrop-main'
 const STUN_SERVERS: readonly RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }]
 
 /**
- * TURN fallback endpoints from PLAN.md §12.
+ * TURN fallback endpoints from PLAN.md §12, ordered best-effort first.
  *
- * TODO (Phase 7): PLAN.md §17 requires TURN over TCP 443 for hostile/DPI
- * networks. The spec annotates `turns:turn.cloudflare.com:5349` as "TCP 443", but
- * 5349 is the conventional TURNS port. Phase 7 must confirm the real endpoint
- * and likely add `turns:turn.cloudflare.com:443?transport=tcp`. Tracked in
- * TODO.md.
+ * `turns:turn.cloudflare.com:5349` is the standards-compliant TURNS port; PLAN.md
+ * §12 annotates it "TCP 443" but 5349 is what the convention (and the spec's own
+ * port number) actually means. §17 separately requires "TURN over TCP 443 — works
+ * on captive portals and DPI networks", which is a DIFFERENT endpoint: a captive
+ * portal that only passes port 443 drops 5349 before TLS even starts. Both are
+ * kept — 5349 for standards-compliant TURNS, `443?transport=tcp` as the last
+ * resort for hostile firewalls. Order matters: ICE tries the list in order, so the
+ * narrowest-reach entry stays last (TODO.md item resolved in Phase 7).
  */
 const TURN_URLS: readonly string[] = [
   'turn:turn.cloudflare.com:3478?transport=udp',
   'turn:turn.cloudflare.com:3478?transport=tcp',
   'turns:turn.cloudflare.com:5349',
+  'turns:turn.cloudflare.com:443?transport=tcp',
 ]
 
 /**

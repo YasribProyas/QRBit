@@ -1,5 +1,5 @@
 /**
- * Tests for the E2EE core (PLAN.md §11.1–§11.4, §10, §17).
+ * Tests for the E2EE core (PLAN.md §11.1–§11.5, §10, §17).
  *
  * The interoperability test is the one that matters most: it proves that two
  * independent devices, each holding only their own private key and the peer's
@@ -8,7 +8,8 @@
  *
  * Locked items are at the bottom: PBKDF2 at 600,000 iterations costs ~300ms per
  * call by design (PLAN.md §19.9), so those tests share work where they can and
- * stay in the low tens of derivations rather than the hundreds.
+ * stay in the low tens of derivations rather than the hundreds. Export encryption
+ * (§11.5) uses the same derivation and is grouped with them for that reason.
  *
  * Runs in the default node environment: Node 20+ exposes `globalThis.crypto`.
  */
@@ -21,8 +22,10 @@ import {
   deriveSessionKey,
   deriveSharedSecret,
   decrypt,
+  decryptExport,
   decryptItem,
   encrypt,
+  encryptExport,
   encryptItem,
   exportPublicKey,
   fromBase64,
@@ -486,6 +489,92 @@ describe('locked items (PLAN.md §11.4, §6.2)', () => {
     // PLAN.md §6.2/§19.3 — the item key is re-derived on every unlock and can
     // never be read back out to be stored anywhere.
     await expect(globalThis.crypto.subtle.exportKey('raw', key)).rejects.toThrow()
+  })
+})
+
+describe('export encryption (PLAN.md §11.5)', () => {
+  const PASSWORD = 'a whole library under one password'
+  const WRONG_PASSWORD = 'a whole library under one passwrd'
+
+  it('round-trips a JSON payload, a 64 KiB payload and an empty one', async () => {
+    const payloads = [utf8('{"version":1,"folders":[]}'), patternedBytes(64 * 1024), new Uint8Array(0)]
+    for (const plaintext of payloads) {
+      const envelope = await encryptExport(PASSWORD, plaintext)
+      const decrypted = await decryptExport(PASSWORD, envelope)
+      expect(decrypted.byteLength).toBe(plaintext.byteLength)
+      expect(firstDifference(decrypted, plaintext)).toBe(-1)
+    }
+  })
+
+  it('prepends a 16-byte salt and a 12-byte IV, and nothing else', async () => {
+    const plaintext = utf8('an export is one self-contained file')
+    const envelope = await encryptExport(PASSWORD, plaintext)
+
+    // The layout is the contract between this module and `lib/export.ts`: the
+    // salt, then the IV, then ciphertext plus the 16-byte GCM tag. Anything else
+    // would make the file unopenable by a later version.
+    expect(envelope.byteLength).toBe(16 + 12 + plaintext.byteLength + 16)
+
+    const bytes = bytesOf(envelope)
+    const salt = bytes.slice(0, 16)
+    const iv = bytes.slice(16, 28)
+    const ciphertext = bytes.slice(28)
+
+    // Recomputing the plaintext by hand from exactly those slices proves where
+    // each field sits: re-derive the key from the leading salt, decrypt the tail.
+    const key = await deriveItemKey(PASSWORD, salt)
+    const reopened = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
+    expect(firstDifference(new Uint8Array(reopened), plaintext)).toBe(-1)
+  })
+
+  it('rejects the wrong password with an OperationError, and does not swallow it', async () => {
+    const plaintext = utf8('only the right password opens this file')
+    const envelope = await encryptExport(PASSWORD, plaintext)
+
+    const failure = await decryptExport(WRONG_PASSWORD, envelope).then(
+      () => null,
+      (error: unknown) => error,
+    )
+    if (failure === null) throw new Error('test: a wrong password decrypted an export')
+    if (!(failure instanceof DOMException)) {
+      throw new Error(`test: expected a DOMException, received ${String(failure)}`)
+    }
+    // `export.ts` turns exactly this failure into 'Wrong password or corrupted file'.
+    expect(failure.name).toBe('OperationError')
+
+    // The rejection is per-call: it may not poison the envelope for the right one.
+    expect(firstDifference(await decryptExport(PASSWORD, envelope), plaintext)).toBe(-1)
+  })
+
+  it('draws a fresh salt and IV per call, so the same library never encrypts alike', async () => {
+    const plaintext = utf8('same bytes twice')
+    const first = await encryptExport(PASSWORD, plaintext)
+    const second = await encryptExport(PASSWORD, plaintext)
+
+    expect([...bytesOf(first).slice(0, 16)]).not.toEqual([...bytesOf(second).slice(0, 16)])
+    expect([...bytesOf(first).slice(16, 28)]).not.toEqual([...bytesOf(second).slice(16, 28)])
+    expect([...bytesOf(first)]).not.toEqual([...bytesOf(second)])
+
+    // The fresh salt seeds the derivation, so the first envelope must not open
+    // once its salt is replaced by the second call's salt.
+    const withOtherSalt = bytesOf(first).slice()
+    withOtherSalt.set(bytesOf(second).slice(0, 16), 0)
+    await expect(decryptExport(PASSWORD, withOtherSalt.buffer)).rejects.toBeInstanceOf(DOMException)
+  })
+
+  it('rejects an envelope too short to hold its own salt and IV', async () => {
+    // A truncated file must fail with something that names the problem, not with
+    // a DOMException that a caller would report as "wrong password".
+    const failure = await decryptExport(PASSWORD, new ArrayBuffer(27)).then(
+      () => null,
+      (error: unknown) => error,
+    )
+    if (!(failure instanceof Error)) {
+      throw new Error(`test: expected an Error, received ${String(failure)}`)
+    }
+    expect(failure).not.toBeInstanceOf(DOMException)
+    expect(failure.message).toMatch(/27 bytes/)
+    expect(failure.message).toMatch(/16-byte salt/)
   })
 })
 

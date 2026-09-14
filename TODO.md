@@ -82,3 +82,10 @@ Items the agent cannot complete autonomously. Per AGENTS.md, work continues past
       it. Full capture requires a custom SW (injecting a `fetch` handler via
       `vite-plugin-pwa`'s `injectManifest` strategy or a separate sw.ts) — that is a
       parent config decision. Block on Phase 8 or treat as a known limitation.
+
+- [ ] **Export memory usage for large libraries.** `exportLibrary` serializes all
+      blobs to base64 in-memory (3 bytes → 4 chars at a time) before writing the
+      file. For a library with many large files this will stall the main thread and
+      may OOM on constrained devices. A streaming approach (ReadableStream + Blob
+      constructor) or chunked base64 conversion would fix this; low priority until
+      users hit it in practice (Phase 8 polish or post-launch).

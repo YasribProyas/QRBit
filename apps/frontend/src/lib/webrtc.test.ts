@@ -175,7 +175,21 @@ const TURN_URLS = [
   'turn:turn.cloudflare.com:3478?transport=udp',
   'turn:turn.cloudflare.com:3478?transport=tcp',
   'turns:turn.cloudflare.com:5349',
+  'turns:turn.cloudflare.com:443?transport=tcp',
 ]
+/** PLAN.md §17: the TCP-443 entry a captive portal or DPI network will pass. */
+const TURN_TCP_443_URL = 'turns:turn.cloudflare.com:443?transport=tcp'
+
+/**
+ * The URL list of the TURN entry in a built server list.
+ *
+ * Empty when there is no TURN entry at all, so a missing entry fails the
+ * expectations below instead of silently passing them.
+ */
+function turnUrls(servers: RTCIceServer[]): string[] {
+  const urls = servers[1]?.urls
+  return Array.isArray(urls) ? urls : []
+}
 
 describe('DATA_CHANNEL_LABEL', () => {
   it('is the label both peers agree on', () => {
@@ -194,7 +208,18 @@ describe('buildIceServers (PLAN.md §12)', () => {
 
     expect(servers).toHaveLength(2)
     expect(servers[0]?.urls).toBe(STUN_URL)
+    // PLAN.md §12: UDP, TCP, standard TURNS, and the §17 TCP-443 last resort.
     expect(servers[1]?.urls).toEqual(TURN_URLS)
+    expect(servers[1]?.urls).toHaveLength(4)
+    expect(servers[1]?.username).toBe('user')
+    expect(servers[1]?.credential).toBe('cred')
+  })
+
+  it('puts the TURN credentials on the TURN entry and nowhere else', () => {
+    const servers = buildIceServers({ turnUsername: 'user', turnCredential: 'cred' })
+
+    expect(servers[0]?.username).toBeUndefined()
+    expect(servers[0]?.credential).toBeUndefined()
     expect(servers[1]?.username).toBe('user')
     expect(servers[1]?.credential).toBe('cred')
   })
@@ -209,8 +234,23 @@ describe('buildIceServers (PLAN.md §12)', () => {
   })
 
   it('covers UDP, TCP and TLS transports for hostile networks (PLAN.md §17)', () => {
-    const servers = buildIceServers({ turnUsername: 'user', turnCredential: 'cred' })
-    expect(servers[1]?.urls).toEqual(TURN_URLS)
+    const urls = turnUrls(buildIceServers({ turnUsername: 'user', turnCredential: 'cred' }))
+
+    expect(urls).toEqual(TURN_URLS)
+    expect(urls).toContain('turn:turn.cloudflare.com:3478?transport=udp')
+    expect(urls).toContain('turn:turn.cloudflare.com:3478?transport=tcp')
+    expect(urls).toContain('turns:turn.cloudflare.com:5349')
+    expect(urls).toContain(TURN_TCP_443_URL)
+  })
+
+  it('tries the TCP-443 relay last, as the hostile-network last resort (§17)', () => {
+    const urls = turnUrls(buildIceServers({ turnUsername: 'user', turnCredential: 'cred' }))
+
+    // §12 orders the list best-effort first, so the entry with the narrowest reach
+    // must not pre-empt the standard ports. ICE prioritises by list order.
+    expect(urls).toHaveLength(4)
+    expect(urls[urls.length - 1]).toBe(TURN_TCP_443_URL)
+    expect(urls.filter((url) => url === TURN_TCP_443_URL)).toHaveLength(1)
   })
 
   it('returns a fresh array each call so callers cannot corrupt shared state', () => {
@@ -670,6 +710,13 @@ describe('PeerConnection (against a fake RTCPeerConnection)', () => {
     expect(fake.config.iceServers).toEqual(
       buildIceServers({ turnUsername: 'user', turnCredential: 'cred' }),
     )
+
+    // The TURN credentials the worker issued must reach the real RTCPeerConnection
+    // configuration — including the §17 TCP-443 relay — not merely buildIceServers.
+    const turn = fake.config.iceServers?.[1]
+    expect(turn?.username).toBe('user')
+    expect(turn?.credential).toBe('cred')
+    expect(turn?.urls).toContain(TURN_TCP_443_URL)
   })
 
   it('creates the correctly-labelled ordered channel and an offer as host', async () => {

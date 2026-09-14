@@ -29,10 +29,12 @@ import {
   moveItem,
   renameFolder,
   ROOT_FOLDER_ID,
+  saveFolder,
   saveFromSession,
   saveItem,
   updateItem,
   type LibraryFileItem,
+  type LibraryFolder,
   type LibraryImageItem,
   type LibraryItem,
   type LibraryLockedItem,
@@ -344,6 +346,108 @@ describe('folders', () => {
     expect(await getItem(items[3]!.id)).toBeDefined()
     expect(await getItem(items[4]!.id)).toBeDefined()
     expect(await getItemsInFolder(bystander.id)).toHaveLength(1)
+  })
+
+  it('saves a folder under the id it was given, which is what an import needs', async () => {
+    // PLAN.md §14's manifest carries folder ids and every item's `folderId`, so a
+    // restored folder has to keep its id or its items cannot be saved at all.
+    const folder: LibraryFolder = {
+      id: 'exported-folder-id',
+      name: 'Uni Stuff',
+      parentId: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }
+
+    await saveFolder(folder)
+
+    expect(await getFolders()).toEqual([folder])
+  })
+
+  it('saves a folder under a parent that is already stored, preserving the tree', async () => {
+    const parent = await createFolder('Uni', null)
+    // Created after its parent, like any folder a user makes — `getFolders` lists
+    // oldest first, so this is also what pins the restored order.
+    const child: LibraryFolder = {
+      id: 'exported-child-id',
+      name: 'Thesis',
+      parentId: parent.id,
+      createdAt: parent.createdAt + 1,
+      updatedAt: parent.updatedAt + 1,
+    }
+
+    await saveFolder(child)
+
+    expect(await getFolders()).toEqual([parent, child])
+  })
+
+  it('writes an unknown parent as the root rather than a dangling reference', async () => {
+    // A subset export can name a subfolder without its parent (§14 exports only the
+    // chosen folders). A folder whose parent is missing is invisible in the tree, so
+    // it lands at the top level, where the user can see it.
+    const folder: LibraryFolder = {
+      id: 'exported-child-id',
+      name: 'Thesis',
+      parentId: 'parent-not-in-this-export',
+      createdAt: NOW,
+      updatedAt: NOW,
+    }
+
+    await saveFolder(folder)
+
+    expect(await getFolders()).toEqual([{ ...folder, parentId: null }])
+  })
+
+  it('treats the root id as an alias for a null parent, like createFolder', async () => {
+    await saveFolder({
+      id: 'exported-id',
+      name: 'Work',
+      parentId: ROOT_FOLDER_ID,
+      createdAt: NOW,
+      updatedAt: NOW,
+    })
+
+    expect((await getFolders())[0]?.parentId).toBeNull()
+  })
+
+  it('is a no-op for an id that is already stored, so a re-import changes nothing', async () => {
+    const exported: LibraryFolder = {
+      id: 'exported-folder-id',
+      name: 'Uni Stuff',
+      parentId: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }
+    await saveFolder(exported)
+
+    await saveFolder({ ...exported, name: 'Renamed by a second import', updatedAt: NOW + 1 })
+
+    expect(await getFolders()).toEqual([exported])
+  })
+
+  it('rejects the virtual root and a folder that is not validly shaped', async () => {
+    await expect(
+      saveFolder({ id: ROOT_FOLDER_ID, name: 'Root', parentId: null, createdAt: NOW, updatedAt: NOW }),
+    ).rejects.toThrow(/root folder is virtual/)
+    await expect(
+      saveFolder({ id: 'exported-id', name: '   ', parentId: null, createdAt: NOW, updatedAt: NOW }),
+    ).rejects.toThrow(/non-empty name/)
+  })
+
+  it('lets an item be saved into a folder that arrived with it in the same import', async () => {
+    const folder: LibraryFolder = {
+      id: 'exported-folder-id',
+      name: 'Uni Stuff',
+      parentId: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }
+    const item = textItem({ folderId: folder.id, name: 'in the restored folder' })
+
+    await saveFolder(folder)
+    await saveItem(item)
+
+    expect(await getItemsInFolder(folder.id)).toEqual([item])
   })
 })
 

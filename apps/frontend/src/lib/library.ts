@@ -507,6 +507,49 @@ export async function renameFolder(id: string, name: string): Promise<void> {
 }
 
 /**
+ * Writes a folder as given, preserving the id it carries (ADDITIVE to PLAN.md §6.3).
+ *
+ * `createFolder` mints its own uuid, which is right for a folder the user just made
+ * and wrong for one being restored: a `.qrdrop` export carries `folders[]` and every
+ * item's `folderId` (PLAN.md §14), so an import has to put a folder back under its own
+ * id or the items pointing at it cannot be saved at all (`putItem` refuses a
+ * `folderId` with no folder behind it).
+ *
+ * Skip-by-id: an id that is already stored is left exactly as it is and the call is a
+ * no-op, which is what makes re-importing the same export harmless. The whole library
+ * is imported this way — folders first, then items — so that check and the items'
+ * own duplicate skip are one rule rather than two.
+ *
+ * A `parentId` with no row here is written as the root instead of left dangling. A
+ * subset export can name a subfolder without its parent, and a folder whose parent
+ * does not exist is invisible in the tree (§6.4 renders the tree by walking down from
+ * the root), so the folder would be stored but unreachable. Folders are imported
+ * parent-first for the same reason; this is the backstop for when they cannot be.
+ */
+export async function saveFolder(folder: LibraryFolder): Promise<void> {
+  const parsed = parseFolder(folder)
+  if (parsed.id === ROOT_FOLDER_ID) {
+    // The root is virtual (§6.1): it has no row, and one would make `getFolders()`
+    // return a phantom folder that cannot be renamed or deleted.
+    throw new Error('library: the root folder is virtual and cannot be stored')
+  }
+
+  const parentId = normaliseParentId(parsed.parentId)
+  const db = await getDatabase()
+  const tx = db.transaction('folders', 'readwrite')
+  const store = tx.objectStore('folders')
+
+  if ((await store.get(parsed.id)) !== undefined) {
+    await tx.done
+    return
+  }
+
+  const parentExists = parentId !== null && (await store.get(parentId)) !== undefined
+  await store.put({ ...parsed, parentId: parentExists ? parentId : null })
+  await tx.done
+}
+
+/**
  * Deletes a folder, every folder beneath it and every item inside them — a
  * folder tree dies whole (PLAN.md §6.3), because an item whose folder is gone
  * would be unreachable. Items in the root and in unrelated folders are untouched.

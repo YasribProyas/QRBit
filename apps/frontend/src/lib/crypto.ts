@@ -1,6 +1,6 @@
 /**
- * QRDrop crypto core — key exchange, key derivation, session encryption and
- * locked-item encryption (PLAN.md §11.1–§11.4, §2, §6.2, §10, §17).
+ * QRDrop crypto core — key exchange, key derivation, session encryption,
+ * locked-item encryption and export encryption (PLAN.md §11.1–§11.5, §2, §6.2, §10, §17).
  *
  * Everything here is native Web Crypto (`globalThis.crypto.subtle`). No
  * third-party crypto library is used or permitted (AGENTS.md, PLAN.md §8).
@@ -29,8 +29,13 @@
  *   - Only `{ ciphertext, iv, salt }` ever leaves this module, which is exactly
  *     the tuple PLAN.md §6.2 stores (in Phase 5) and sends (in Phase 4).
  *
- * NOT YET IMPLEMENTED (leave the seams alone):
- *   - §11.5 `encryptExport` / `decryptExport` — Phase 7.
+ * Export-encryption rules (§11.5, at the bottom of this file):
+ *   - A whole-library `.qrdrop` file is encrypted with the same PBKDF2 + AES-GCM
+ *     primitives as a locked item (§11.5: "same pattern as encryptItem"), but its
+ *     salt travels inside the envelope because the file is self-contained.
+ *   - Locked items are NOT decrypted on the way out of the library (PLAN.md §14,
+ *     §19.4): their tuple is copied as it is, so an unencrypted export still
+ *     holds them as opaque ciphertext and an encrypted export double-locks them.
  */
 
 const ECDH_CURVE: EcKeyGenParams = { name: 'ECDH', namedCurve: 'P-256' }
@@ -355,6 +360,77 @@ export async function decryptItem(
     key,
     toBufferSourceView(ciphertext),
   )
+  return new Uint8Array(plaintext)
+}
+
+/**
+ * Encrypts a whole library export under a user password (PLAN.md §11.5).
+ *
+ * Same derivation and cipher as `encryptItem` — PBKDF2-SHA256 at
+ * `PBKDF2_ITERATIONS` over a fresh 16-byte salt, then AES-256-GCM under a
+ * non-extractable key with a fresh 12-byte IV — because §11.5 asks for the same
+ * pattern. Only the envelope layout differs, and only because it must be: this
+ * output is a self-contained file with nowhere else to put the salt.
+ *
+ * Layout: `[salt: 16 bytes][iv: 12 bytes][ciphertext || GCM tag: 16 bytes]`.
+ * `lib/export.ts` prepends its own 4-byte 'QRDE' magic so an import can tell an
+ * encrypted export from a JSON one; that header is not part of this envelope and
+ * is stripped before the bytes reach `decryptExport`.
+ *
+ * The password is imported as non-extractable key material and dropped with the
+ * derived key when this function returns; nothing here caches either (PLAN.md
+ * §6.2, §19.3 — the same rule as a locked item, because the export password is
+ * just as unrecoverable).
+ */
+export async function encryptExport(password: string, data: Uint8Array): Promise<ArrayBuffer> {
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(ITEM_SALT_BYTE_LENGTH))
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTE_LENGTH))
+  const key = await deriveItemKey(password, salt)
+  const ciphertext = await globalThis.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    toBufferSourceView(data),
+  )
+
+  const envelope = new Uint8Array(ITEM_SALT_BYTE_LENGTH + IV_BYTE_LENGTH + ciphertext.byteLength)
+  envelope.set(salt, 0)
+  envelope.set(iv, ITEM_SALT_BYTE_LENGTH)
+  envelope.set(new Uint8Array(ciphertext), ITEM_SALT_BYTE_LENGTH + IV_BYTE_LENGTH)
+  return envelope.buffer
+}
+
+/**
+ * Decrypts a PLAN.md §11.5 export envelope produced by `encryptExport`.
+ *
+ * The caller must have stripped `lib/export.ts`'s 'QRDE' magic already: the first
+ * 16 bytes here are the salt, the next 12 the IV, and the rest is ciphertext plus
+ * GCM tag.
+ *
+ * The GCM failure is deliberately NOT caught, for the same reason `decryptItem`
+ * does not catch it: the caller tells "this password did not open this file"
+ * from "here is the JSON" by catching the `OperationError` DOMException, which is
+ * also what a tampered ciphertext raises. An envelope too short to hold a salt
+ * and an IV is rejected up front with a plain `Error` naming the problem, instead
+ * of reaching `deriveItemKey` as a truncated salt.
+ */
+export async function decryptExport(
+  password: string,
+  data: ArrayBuffer,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const headerByteLength = ITEM_SALT_BYTE_LENGTH + IV_BYTE_LENGTH
+  if (data.byteLength < headerByteLength) {
+    throw new Error(
+      `crypto: encrypted export is ${data.byteLength} bytes; expected at least a ` +
+        `${ITEM_SALT_BYTE_LENGTH}-byte salt and a ${IV_BYTE_LENGTH}-byte IV`,
+    )
+  }
+
+  const salt = data.slice(0, ITEM_SALT_BYTE_LENGTH)
+  const iv = data.slice(ITEM_SALT_BYTE_LENGTH, headerByteLength)
+  const ciphertext = data.slice(headerByteLength)
+
+  const key = await deriveItemKey(password, new Uint8Array(salt))
+  const plaintext = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
   return new Uint8Array(plaintext)
 }
 
