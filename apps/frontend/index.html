@@ -11,11 +11,8 @@
     <meta name="description" content="Scan a QR code. Files appear. No login. No cloud. No trace." />
     <meta name="referrer" content="no-referrer" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <!--
-      PWA assets are Phase 6 work (PLAN.md §15/§16): vite-plugin-pwa will emit
-      manifest.webmanifest and the 192/512 PNG icons. They are deliberately NOT
-      linked yet — referencing files that do not exist 404s on every page load.
-    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <title>QRDrop</title>
   </head>
   <body>

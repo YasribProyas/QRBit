@@ -134,6 +134,7 @@ function renderBrowser(overrides: Partial<LibraryBrowserProps> = {}) {
     onMoveItem: vi.fn(),
     onDeleteItem: vi.fn(),
     onSendItems: vi.fn(),
+    onSelectionChange: vi.fn(),
     ...overrides,
   }
 
@@ -404,6 +405,29 @@ describe('LibraryBrowser — multi-select (PLAN.md §6.4, §7)', () => {
 
     expect(props.onSendItems).not.toHaveBeenCalled()
     expect(harness.element.querySelector('.library-item__checkbox')).toBe(null)
+  })
+
+  it('reports every selection change upward, including the clear (PLAN.md §7 Flow A)', () => {
+    const { harness, props } = renderBrowser({ currentFolderId: 'f1' })
+
+    // Nothing is selected to begin with, so the page starts from a known empty selection.
+    expect(props.onSelectionChange).toHaveBeenLastCalledWith([])
+
+    click(button(harness.element, '.library-browser__select'))
+    const checkboxes = [
+      ...harness.element.querySelectorAll<HTMLInputElement>('.library-item__checkbox'),
+    ]
+    const first = checkboxes[0]
+    if (first === undefined) throw new Error('test bug: missing checkbox')
+    click(first)
+
+    // Most recently updated first, so the first row is i2.
+    expect(props.onSelectionChange).toHaveBeenLastCalledWith(['i2'])
+
+    // Cancelling clears it, and the page has to hear about that or its own "Scan & Send"
+    // would queue an item the user just deselected.
+    click(button(harness.element, '.library-browser__selection-cancel'))
+    expect(props.onSelectionChange).toHaveBeenLastCalledWith([])
   })
 })
 

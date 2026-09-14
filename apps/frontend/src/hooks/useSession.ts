@@ -62,7 +62,7 @@ export interface SessionStatus {
   tone: StatusTone
 }
 
-interface TurnCredentials {
+export interface TurnCredentials {
   username: string
   credential: string
 }
@@ -70,6 +70,44 @@ interface TurnCredentials {
 interface NewSessionResponse {
   code: string
   turnCredentials?: TurnCredentials
+}
+
+/**
+ * A host session this device ALREADY minted through `/session/new` (PLAN.md §16 Phase 6).
+ *
+ * The Home screen mints so its QR can show a live code; handing the same bundle to this
+ * hook is what keeps one user intent to ONE session. Without it the host page would mint
+ * a second code and the peer that scanned the first one would wait on a session nobody
+ * ever joins. The bundle carries the TURN credentials that came with the code, because
+ * they were issued for that session and are not re-obtainable without minting again.
+ */
+export interface HostSession {
+  code: string
+  turnCredentials?: TurnCredentials | null
+}
+
+/**
+ * The Phase 1 session-code alphabet, mirrored from the worker's `codes.ts`
+ * (`SESSION_CODE_ALPHABET`) and from the URL-scoped twin in `lib/barcode.ts`. The frontend
+ * does not depend on the worker package, so the rule is restated: 30 symbols, with the
+ * glyphs a human misreads (0, 1, I, L, O, U) left out.
+ *
+ * The match below is EXACT — no case folding and no character repair. The worker issues
+ * codes from this uppercase alphabet and does not normalise a lookup, so a repaired code
+ * would address a session that does not exist.
+ */
+export const SESSION_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+/** `SESSION_CODE_LENGTH` in the worker's `codes.ts`. */
+export const SESSION_CODE_LENGTH = 8
+
+/** A well-formed session code: 8 characters, all from the alphabet, exactly as issued. */
+export function isValidSessionCode(value: string): boolean {
+  if (value.length !== SESSION_CODE_LENGTH) return false
+  for (const character of value) {
+    if (!SESSION_CODE_ALPHABET.includes(character)) return false
+  }
+  return true
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -417,12 +455,50 @@ async function requestNewSession(): Promise<NewSessionResponse> {
   return parseNewSessionResponse(payload)
 }
 
+/**
+ * Mints a host session through the worker's `/session/new` route (PLAN.md §13, §16
+ * Phase 6), for the Home screen's live QR.
+ *
+ * The WHOLE bundle is returned — the code and the TURN credentials that came with it — so
+ * the page can hand both to `useSession` (`hostSession`) when the user opens the session.
+ * That is the point of this seam: the code is created once, on the screen that displays it,
+ * and the session page joins it instead of creating another one.
+ */
+export async function mintHostSession(): Promise<HostSession> {
+  const created = await requestNewSession()
+  return created.turnCredentials === undefined
+    ? { code: created.code }
+    : { code: created.code, turnCredentials: created.turnCredentials }
+}
+
 /** Normalises anything thrown into a message safe to show the user. */
+/**
+ * WebSocket close codes from `apps/signaling-worker/src/session.ts`.
+ * Translated here so the user never sees the raw integers.
+ */
+const SIGNALING_CLOSE_MESSAGES: Readonly<Record<number, string>> = {
+  4404: 'Session not found or already ended. Scan a new QR code or ask the sender to refresh theirs.',
+  4409: 'Someone else joined the session first. Ask the sender to tap “New code” and share the fresh QR.',
+  4410: 'Session code has expired (codes last 5 minutes). The sender needs to tap “New code” to refresh.',
+}
+
+/** Returns a human-readable error string from the close code embedded in a signaling error. */
+function translateSignalingCloseCode(message: string): string | null {
+  const match = /\bcode (\d+)\b/.exec(message)
+  if (match === null || match[1] === undefined) return null
+  const code = parseInt(match[1], 10)
+  return SIGNALING_CLOSE_MESSAGES[code] ?? null
+}
+
 export function describeError(error: unknown): string {
   if (error instanceof Error && error.message.trim() !== '') {
+    const translated = translateSignalingCloseCode(error.message)
+    if (translated !== null) return translated
     return error.message
   }
   if (typeof error === 'string' && error.trim() !== '') {
+    const translated = translateSignalingCloseCode(error)
+    if (translated !== null) return translated
     return error
   }
   return 'Something went wrong starting the session'
@@ -456,6 +532,16 @@ let queuedLibrarySends: LibraryItem[] = []
 /** Adds items to the pending-send queue, in the order they should be announced. */
 export function queueLibrarySends(items: readonly LibraryItem[]): void {
   queuedLibrarySends = [...queuedLibrarySends, ...items]
+}
+
+/**
+ * Discards everything in the pending-send queue.
+ *
+ * Call this when the user cancels a scan or starts a new scan selection so items
+ * chosen for one scan attempt do not silently leak into a later one.
+ */
+export function clearLibrarySends(): void {
+  queuedLibrarySends = []
 }
 
 /**
@@ -570,6 +656,14 @@ export function describeSessionStatus(
 export interface UseSessionOptions {
   /** The `code` URL param. Present means guest; absent means host (PLAN.md §8). */
   code: string | null
+  /**
+   * A host code this device already minted (PLAN.md §16 Phase 6). Used ONLY when `code`
+   * is absent, and only on the first attempt: the host joins this code instead of
+   * creating a second session. `restart()` is a new session (PLAN.md §19 decision 10)
+   * and mints fresh like every other host. An absent or malformed code falls back to
+   * minting fresh rather than connecting to a code the worker will reject.
+   */
+  hostSession?: HostSession | null
 }
 
 export interface UseSessionResult {
@@ -663,7 +757,7 @@ export interface UseSessionResult {
 }
 
 export function useSession(options: UseSessionOptions): UseSessionResult {
-  const { code } = options
+  const { code, hostSession } = options
 
   const role = useSessionStore((state) => state.role)
   const phase = useSessionStore((state) => state.phase)
@@ -693,6 +787,15 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
   const removeItem = useSessionStore((state) => state.removeItem)
 
   const [attempt, setAttempt] = useState(0)
+  /**
+   * The pre-minted host bundle, read through a ref so the run effect's dependency list
+   * stays exactly what it was. Only the first attempt consumes it; `attempt` is already
+   * a dependency, so a restart re-runs the effect and this ref is simply ignored there.
+   */
+  const hostSessionRef = useRef<HostSession | null>(null)
+  useEffect(() => {
+    hostSessionRef.current = hostSession ?? null
+  }, [hostSession])
   /**
    * The two conditions that make the encrypted channel usable. Both are tracked
    * separately from the store because they gate *sends*, not what the UI shows.
@@ -1681,16 +1784,39 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
         let peerOptions: PeerConnectionOptions | undefined
 
         if (activeCode === null || activeCode === '') {
-          // Host: create the session, then display its code for the guest to scan.
-          const created = await requestNewSession()
-          if (isStale()) return
-          activeCode = created.code
-          setSessionCode(created.code)
+          /*
+           * PLAN.md §16 Phase 6: the Home screen mints this session's code so its QR can
+           * display it, and hands the bundle over when the user opens this page. Joining
+           * that code is what keeps one user intent to one session — minting again here
+           * would leave the peer that scanned the QR waiting on a code nobody ever joins.
+           *
+           * A malformed code is never produced by the worker; it can only arrive through
+           * a hand-crafted navigation, and minting fresh is the honest response (the
+           * alternative, connecting to it, would be rejected by the worker anyway).
+           */
+          const preMinted = attempt === 0 ? hostSessionRef.current : null
+          if (preMinted !== null && isValidSessionCode(preMinted.code)) {
+            activeCode = preMinted.code
+            setSessionCode(preMinted.code)
 
-          if (created.turnCredentials) {
-            peerOptions = {
-              turnUsername: created.turnCredentials.username,
-              turnCredential: created.turnCredentials.credential,
+            if (preMinted.turnCredentials) {
+              peerOptions = {
+                turnUsername: preMinted.turnCredentials.username,
+                turnCredential: preMinted.turnCredentials.credential,
+              }
+            }
+          } else {
+            // Host: create the session, then display its code for the guest to scan.
+            const created = await requestNewSession()
+            if (isStale()) return
+            activeCode = created.code
+            setSessionCode(created.code)
+
+            if (created.turnCredentials) {
+              peerOptions = {
+                turnUsername: created.turnCredentials.username,
+                turnCredential: created.turnCredentials.credential,
+              }
             }
           }
         }

@@ -72,3 +72,13 @@ Items the agent cannot complete autonomously. Per AGENTS.md, work continues past
 - [ ] PLAN.md §6.1 stores `Blob` directly in IndexedDB for library image/file
       items. Works in IDB, but Phase 5 should confirm Safari's IDB Blob
       handling and add a fallback if needed.
+
+- [ ] **Share-target file capture needs a custom service worker.** The manifest
+      declares a `share_target` POST to `/session` (PLAN.md §15). The Workbox-generated
+      SW has no handler for this POST: the browser will deliver the share to a SW `fetch`
+      event, but without a custom network-first cache-and-redirect handler the POST body
+      is lost and the user lands on `/session` in the default (host) mode. Session.tsx
+      handles `?share=1` with an honest "not captured" hint rather than silently ignoring
+      it. Full capture requires a custom SW (injecting a `fetch` handler via
+      `vite-plugin-pwa`'s `injectManifest` strategy or a separate sw.ts) — that is a
+      parent config decision. Block on Phase 8 or treat as a known limitation.

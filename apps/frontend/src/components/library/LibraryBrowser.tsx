@@ -55,6 +55,16 @@ export interface LibraryBrowserProps {
   onDeleteItem: (id: string) => void
   /** The one send entry point (PLAN.md §6.4/§7): the selected library item ids. */
   onSendItems: (ids: string[]) => void
+  /**
+   * The current selection, reported on EVERY change (PLAN.md §7 Flow A, §16 Phase 6).
+   *
+   * The selection is owned here because it is not library state, but Phase 6's other
+   * Flow A entry point — the page's "Scan & Send" button — lives outside this component
+   * and has to know what to queue before it opens the camera. Every transition is
+   * reported, including the clears (cancel, Escape, opening a row menu), so the page can
+   * never hold an id the user has since deselected.
+   */
+  onSelectionChange?: (ids: readonly string[]) => void
   /** True while the store is still loading, so the empty state is not a lie. */
   loading?: boolean
   /** The store's error surface; PLAN.md §17 keeps it out of the render path. */
@@ -104,12 +114,22 @@ export function LibraryBrowser({
   onMoveItem,
   onDeleteItem,
   onSendItems,
+  onSelectionChange,
   loading = false,
   error = null,
 }: LibraryBrowserProps) {
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [newFolderOpen, setNewFolderOpen] = useState(false)
+
+  /*
+   * Reports the selection upward on every change, including the empty ones
+   * (PLAN.md §7 Flow A, §16 Phase 6). `selectedIds` is state, so its identity is stable
+   * between changes and the page can store it without a render loop.
+   */
+  useEffect(() => {
+    onSelectionChange?.(selectedIds)
+  }, [selectedIds, onSelectionChange])
 
   /*
    * Escape leaves selection mode (PLAN.md §6.4). A document listener rather than a

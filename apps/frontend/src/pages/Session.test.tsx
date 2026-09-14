@@ -23,7 +23,7 @@ import { createRoot } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { UseSessionResult } from '../hooks/useSession'
+import type { UseSessionResult, HostSession } from '../hooks/useSession'
 import type { ItemsApi } from '../components/session/SessionBoard'
 import { closeLibraryDatabase, createFolder, getItemsInFolder } from '../lib/library'
 import { useLibraryStore } from '../store/libraryStore'
@@ -38,13 +38,19 @@ type MockedSession = UseSessionResult & ItemsApi
 
 const mocked = vi.hoisted(() => ({
   current: null as MockedSession | null,
+  options: null as { code: string | null; hostSession?: HostSession | null } | null,
   confirmPhrase: vi.fn(),
   abort: vi.fn(),
   restart: vi.fn(),
 }))
 
 vi.mock('../hooks/useSession', () => ({
-  useSession: () => mocked.current,
+  useSession: (options: { code: string | null; hostSession?: HostSession | null }) => {
+    // The page's whole contract with the hook is the source it names: a `?code=` URL is a
+    // guest, and a host session may come pre-minted from Home (PLAN.md §8, §16 Phase 6).
+    mocked.options = options
+    return mocked.current
+  },
 }))
 
 const { Session } = await import('./Session')
@@ -90,13 +96,15 @@ function makeResult(overrides: Partial<MockedSession> = {}): MockedSession {
 let container: HTMLDivElement | null = null
 let root: ReturnType<typeof createRoot> | null = null
 
-function renderSession(): HTMLDivElement {
+function renderSession(
+  entry: string | { pathname: string; search?: string; state?: unknown } = '/session?code=A7X3K9P2',
+): HTMLDivElement {
   const element = document.createElement('div')
   document.body.append(element)
   const created = createRoot(element)
   act(() => {
     created.render(
-      <MemoryRouter initialEntries={['/session?code=A7X3K9P2']}>
+      <MemoryRouter initialEntries={[entry]}>
         <Session />
       </MemoryRouter>,
     )
@@ -116,6 +124,7 @@ function queryButton(element: HTMLElement, label: string): HTMLButtonElement | n
 beforeEach(async () => {
   ;(globalThis as unknown as Record<string, unknown>)['IS_REACT_ACT_ENVIRONMENT'] = true
   vi.clearAllMocks()
+  mocked.options = null
   useSessionStore.getState().reset()
   useLibraryStore.setState({ folders: [], items: [], loading: false, error: null })
   await freshLibraryDatabase()
@@ -225,6 +234,79 @@ describe('Session page phase gating (PLAN.md §8)', () => {
 
     expect(mocked.confirmPhrase).toHaveBeenCalledTimes(1)
     expect(mocked.abort).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
+  it('treats a ?code= URL as the guest (PLAN.md §7 flow B)', () => {
+    mocked.current = makeResult({ role: 'guest', sessionCode: 'A7X3K9P2' })
+
+    const element = renderSession('/session?code=A7X3K9P2')
+
+    expect(mocked.options?.code).toBe('A7X3K9P2')
+    expect(mocked.options?.hostSession).toBe(null)
+    expect(element.querySelector('.badge')?.textContent).toBe('guest')
+  })
+
+  it('joins the pre-minted host code Home handed over in router state', () => {
+    const hostSession = { code: 'ABCDEFGH', turnCredentials: { username: 'u', credential: 'c' } }
+    mocked.current = makeResult({ role: 'host', sessionCode: 'ABCDEFGH' })
+
+    renderSession({ pathname: '/session', state: { hostSession } })
+
+    // One user intent, one session: the hook is told which code to join, so it never mints
+    // a second one behind the QR the peer already scanned.
+    expect(mocked.options?.code).toBe(null)
+    expect(mocked.options?.hostSession).toEqual(hostSession)
+  })
+
+  it('ignores a host bundle on a ?code= (guest) navigation', () => {
+    mocked.current = makeResult({ role: 'guest' })
+
+    renderSession({
+      pathname: '/session',
+      search: '?code=A7X3K9P2',
+      state: { hostSession: { code: 'ABCDEFGH' } },
+    })
+
+    expect(mocked.options?.code).toBe('A7X3K9P2')
+    expect(mocked.options?.hostSession).toBe(null)
+  })
+
+  it('ignores router state that is not a host bundle', () => {
+    mocked.current = makeResult({ role: 'host' })
+
+    renderSession({ pathname: '/session', state: { hostSession: { code: 42 } } })
+
+    expect(mocked.options?.hostSession).toBe(null)
+  })
+
+  it('drops TURN credentials that are not a pair of strings', () => {
+    mocked.current = makeResult({ role: 'host' })
+
+    renderSession({
+      pathname: '/session',
+      state: { hostSession: { code: 'ABCDEFGH', turnCredentials: { username: 7 } } },
+    })
+
+    expect(mocked.options?.hostSession).toEqual({ code: 'ABCDEFGH' })
+  })
+
+  it('shows the share landing hint when a shared file was not captured (PLAN.md §15)', () => {
+    mocked.current = makeResult({ role: 'host' })
+
+    const element = renderSession('/session?share=1')
+
+    expect(element.querySelector('.session-share')).not.toBe(null)
+    expect(element.textContent).toContain('was not captured')
+    expect(element.textContent).toContain('add it from the board')
+    expect(mocked.options?.code).toBe(null)
+  })
+
+  it('does not show the share hint on an ordinary session URL', () => {
+    mocked.current = makeResult({ role: 'guest' })
+
+    expect(renderSession('/session?code=A7X3K9P2').querySelector('.session-share')).toBe(null)
   })
 })
 

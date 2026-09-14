@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { AddItemBar } from '../components/session/AddItemBar'
 import { SafetyPhraseOverlay } from '../components/session/SafetyPhraseOverlay'
 import { SessionBoard, isSenderRole } from '../components/session/SessionBoard'
@@ -7,7 +7,7 @@ import { SaveToLibraryModal } from '../components/library/SaveToLibraryModal'
 import { ITEM_TYPE_ICONS } from '../components/library/LibraryItemRow'
 import type { SaveableSessionItem } from '../components/library/SaveToLibraryModal'
 import { useSession } from '../hooks/useSession'
-import type { UseSessionResult } from '../hooks/useSession'
+import type { HostSession, UseSessionResult } from '../hooks/useSession'
 import { LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from '../lib/crypto'
 import { useLibraryStore } from '../store/libraryStore'
 import type { SessionItem } from '../store/sessionStore'
@@ -23,11 +23,29 @@ import type { SessionItem } from '../store/sessionStore'
  */
 export function Session() {
   const [searchParams] = useSearchParams()
+  const location = useLocation()
 
   const rawCode = searchParams.get('code')
   const code = rawCode !== null && rawCode.trim() !== '' ? rawCode.trim() : null
 
-  const session = useSession({ code })
+  /*
+   * The host bundle Home minted and carried in router state (PLAN.md §16 Phase 6). Only
+   * the host path uses it: a `?code=` URL is always the guest (PLAN.md §8), whatever else
+   * the navigation carried. If the code is absent or malformed, `useSession` mints fresh.
+   */
+  const hostSession = code === null ? hostSessionFromState(location.state) : null
+
+  const session = useSession({ code, hostSession })
+
+  /*
+   * PLAN.md §15's share target POSTs to `/session` with the file as multipart form data,
+   * and only a service worker of our own can read that body. This build ships
+   * vite-plugin-pwa's generated worker, which has no share-target handler, so a share
+   * that lands here (the browser redirecting to a GET after the POST) must not look like
+   * a session that silently dropped the file: the hint below says what happened and what
+   * to do about it.
+   */
+  const sharedFileNotCaptured = searchParams.get('share') === '1'
 
   return (
     <main className="page">
@@ -42,6 +60,17 @@ export function Session() {
         <span className="status__dot" aria-hidden="true" />
         <span>{session.status.label}</span>
       </div>
+
+      {sharedFileNotCaptured ? (
+        <section className="panel panel--error session-share" role="status">
+          <h2 className="panel__title">Your shared file was not captured</h2>
+          <p className="muted">
+            This build cannot read a shared file: capturing one needs a service worker of
+            its own, and this app uses the default one. The file is still where you shared
+            it from — add it from the board once the session is open.
+          </p>
+        </section>
+      ) : null}
 
       <p className="muted">{session.roleLabel}</p>
 
@@ -59,9 +88,14 @@ export function Session() {
         <section className="panel panel--error">
           <h2 className="panel__title">Error</h2>
           <p>{session.errorMessage}</p>
-          <button type="button" className="button" onClick={session.restart}>
-            Try again
-          </button>
+          <div className="session-error__actions">
+            <button type="button" className="button" onClick={session.restart}>
+              Try again
+            </button>
+            <Link className="link" to="/">
+              Go to home
+            </Link>
+          </div>
         </section>
       ) : null}
 
@@ -121,6 +155,32 @@ export function Session() {
       ) : null}
     </main>
   )
+}
+
+/**
+ * The host session bundle Home handed over in router state (PLAN.md §16 Phase 6), or
+ * `null` when this navigation did not carry one.
+ *
+ * Router state is same-document data, so it cannot be addressed from a URL the way
+ * `?code=` can, but it is still untrusted input to this render: the code is returned for
+ * `useSession` to validate (an invalid one falls back to minting fresh), and the TURN
+ * credentials are only carried across when both halves are strings.
+ */
+function hostSessionFromState(state: unknown): HostSession | null {
+  if (typeof state !== 'object' || state === null) return null
+
+  const bundle = (state as { hostSession?: unknown }).hostSession
+  if (typeof bundle !== 'object' || bundle === null) return null
+
+  const { code, turnCredentials } = bundle as { code?: unknown; turnCredentials?: unknown }
+  if (typeof code !== 'string') return null
+
+  if (typeof turnCredentials !== 'object' || turnCredentials === null) return { code }
+
+  const { username, credential } = turnCredentials as { username?: unknown; credential?: unknown }
+  if (typeof username !== 'string' || typeof credential !== 'string') return { code }
+
+  return { code, turnCredentials: { username, credential } }
 }
 
 /**

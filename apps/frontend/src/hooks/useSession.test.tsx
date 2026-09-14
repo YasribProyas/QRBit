@@ -17,6 +17,7 @@
 
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Mock } from 'vitest'
 
 // The library store and its IndexedDB are NOT part of a session; `fake-indexeddb` is
 // here to prove that a session never writes to them (see the boundary describe below).
@@ -44,8 +45,10 @@ import { useSessionStore } from '../store/sessionStore'
 import type { ItemStatus, LockedItem } from '../store/sessionStore'
 import { PEER_REJOINED_REASON, deriveSessionMaterial, useSession } from './useSession'
 import { queueLibrarySends, takeQueuedLibrarySends } from './useSession'
-import type { UseSessionResult } from './useSession'
+import type { HostSession, UseSessionResult } from './useSession'
 const SESSION_CODE = 'A7X3K9P2'
+/** A code the Home screen minted and handed to the session page (PLAN.md §16 Phase 6). */
+const HOME_MINTED_CODE = 'ABCDEFGH'
 
 // ---------------------------------------------------------------------------
 // Fake WebSocket: replaces the global the default SignalingClient factory uses.
@@ -170,6 +173,9 @@ class FakeRTCPeerConnection {
   readonly createdChannels: FakeDataChannel[] = []
   readonly receivedChannels: FakeDataChannel[] = []
 
+  /** The configuration `PeerConnection` handed over — where the ICE servers are visible. */
+  readonly config: RTCConfiguration | undefined
+
   onDataChannelCreated: ((channel: FakeDataChannel) => void) | null = null
 
   connectionState: RTCPeerConnectionState = 'new'
@@ -181,7 +187,8 @@ class FakeRTCPeerConnection {
   ondatachannel: ((event: RTCDataChannelEvent) => void) | null = null
   onconnectionstatechange: ((event: Event) => void) | null = null
 
-  constructor() {
+  constructor(config?: RTCConfiguration) {
+    this.config = config
     fakePeers.push(this)
   }
 
@@ -239,10 +246,12 @@ function linkChannel(host: FakeRTCPeerConnection, guest: FakeRTCPeerConnection):
 
 let latest: UseSessionResult | null = null
 let root: ReturnType<typeof createRoot> | null = null
+/** The worker's `/session/new` route, as this suite sees it. */
+let mintFetch: Mock
 
-function renderSessionProbe(code: string | null): void {
+function renderSessionProbe(code: string | null, hostSession: HostSession | null = null): void {
   function Probe() {
-    latest = useSession({ code })
+    latest = useSession({ code, hostSession })
     return null
   }
 
@@ -387,11 +396,14 @@ beforeEach(() => {
   ;(globalThis as unknown as Record<string, unknown>)['WebSocket'] = FakeWebSocket
   ;(globalThis as unknown as Record<string, unknown>)['RTCPeerConnection'] = FakeRTCPeerConnection
   // The host flow creates its session through the worker's /session/new route.
-  ;(globalThis as unknown as Record<string, unknown>)['fetch'] = async (): Promise<unknown> => ({
-    ok: true,
-    status: 200,
-    json: async (): Promise<unknown> => ({ code: SESSION_CODE }),
-  })
+  mintFetch = vi.fn(
+    async (): Promise<unknown> => ({
+      ok: true,
+      status: 200,
+      json: async (): Promise<unknown> => ({ code: SESSION_CODE }),
+    }),
+  )
+  ;(globalThis as unknown as Record<string, unknown>)['fetch'] = mintFetch
 
   useSessionStore.getState().reset()
   // The pending-send queue is module-scoped memory, so a leftover selection from another
@@ -637,6 +649,88 @@ describe('useSession as the host (ORCHESTRATION.md D2, D4 and D5)', () => {
   })
 })
 
+describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase 6)', () => {
+  it('joins the pre-minted code instead of minting a second session', async () => {
+    renderSessionProbe(null, { code: HOME_MINTED_CODE })
+
+    await waitFor(() => sockets.length === 1, 'the host signaling socket')
+    const socket = latestSocket()
+    socket.fireOpen()
+    await waitFor(() => socket.sentOfType('join') !== null, 'the host join frame')
+
+    // The socket URL is the code the QR already showed. The worker addresses the Durable
+    // Object by it, so a second mint here would strand the peer that scanned the first one.
+    expect(socket.url).toContain(HOME_MINTED_CODE)
+    expect(socket.sentOfType('join')?.['role']).toBe('host')
+    expect(useSessionStore.getState().sessionCode).toBe(HOME_MINTED_CODE)
+    expect(mintFetch).not.toHaveBeenCalled()
+  })
+
+  it('carries the TURN credentials that came with the pre-minted code into the peer', async () => {
+    renderSessionProbe(null, {
+      code: HOME_MINTED_CODE,
+      turnCredentials: { username: 'home-user', credential: 'home-secret' },
+    })
+
+    await waitFor(() => fakePeers.length >= 1, 'the host peer connection')
+    const turn = fakePeers[0]?.config?.iceServers?.find((server) =>
+      String(server.urls).includes('turn:'),
+    )
+    expect(turn?.username).toBe('home-user')
+    expect(turn?.credential).toBe('home-secret')
+    expect(mintFetch).not.toHaveBeenCalled()
+  })
+
+  it('mints fresh when the pre-minted code is not a session code', async () => {
+    renderSessionProbe(null, { code: 'not-a-code' })
+
+    await waitFor(() => sockets.length === 1, 'the host signaling socket')
+
+    // A hand-crafted navigation state must never send this device at a code the worker
+    // would reject: the fallback is an ordinary, fresh session.
+    expect(mintFetch).toHaveBeenCalledTimes(1)
+    expect(latestSocket().url).toContain(SESSION_CODE)
+    expect(useSessionStore.getState().sessionCode).toBe(SESSION_CODE)
+  })
+
+  it('mints a new code on restart rather than reusing the pre-minted one', async () => {
+    renderSessionProbe(null, { code: HOME_MINTED_CODE })
+    await waitFor(() => sockets.length === 1, 'the first host socket')
+
+    session().restart()
+
+    // PLAN.md §19 decision 10: a restart is a NEW session, so the stale code must not be
+    // reused (a peer could still be waiting on it).
+    await waitFor(() => sockets.length === 2, 'the restarted host socket')
+    await waitFor(() => useSessionStore.getState().sessionCode === SESSION_CODE, 'the fresh code')
+    expect(mintFetch).toHaveBeenCalledTimes(1)
+    expect(latestSocket().url).toContain(SESSION_CODE)
+  })
+
+  it('drains the queue for a real guest joining the code Home minted (D8)', async () => {
+    const item = libraryTextItem('queued from the QR screen', 'Queued note')
+    queueLibrarySends([item])
+
+    const devices = await pairDevicesAsReceiver({ code: HOME_MINTED_CODE })
+    const guestReceived: WireMessage[] = []
+    devices.guest.onMessage((message) => guestReceived.push(message))
+
+    // One session, minted on Home and joined here: the guest's keys were derived with the
+    // same code, which is the proof that both devices are on the same session.
+    expect(mintFetch).not.toHaveBeenCalled()
+    expect(useSessionStore.getState().sessionCode).toBe(HOME_MINTED_CODE)
+
+    await activateReceiverPairing(devices)
+
+    await waitFor(
+      () => framesOf(guestReceived, 'text-delta').length === 1,
+      'the queued item to reach the guest',
+    )
+    expect(framesOf(guestReceived, 'text-delta')[0]?.content).toBe('queued from the QR screen')
+    expect(takeQueuedLibrarySends()).toEqual([])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Item transport (PLAN.md §9, §10, §12, §16 Phase 3)
 // ---------------------------------------------------------------------------
@@ -695,8 +789,11 @@ interface ReceivingDevices {
  * the phase. The raw peer is the same transport the hook uses, with the real key
  * derivation, so the frames crossing are genuinely encrypted and genuinely decoded.
  */
-async function pairDevicesAsReceiver(): Promise<ReceivingDevices> {
-  renderSessionProbe(null)
+async function pairDevicesAsReceiver(
+  hostSession: HostSession | null = null,
+): Promise<ReceivingDevices> {
+  renderSessionProbe(null, hostSession)
+  const sessionCode = hostSession?.code ?? SESSION_CODE
 
   await waitFor(() => sockets.length === 1, 'the host signaling socket')
   const hostSocket = latestSocket()
@@ -718,7 +815,7 @@ async function pairDevicesAsReceiver(): Promise<ReceivingDevices> {
 
   // The guest holds the same session key the hook derives from the guest's real key.
   guest.setSessionKey(
-    (await deriveSessionMaterial(guestKeys.privateKey, hostPublicKey, SESSION_CODE)).sessionKey,
+    (await deriveSessionMaterial(guestKeys.privateKey, hostPublicKey, sessionCode)).sessionKey,
   )
 
   hostSocket.deliver({
