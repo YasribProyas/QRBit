@@ -46,6 +46,13 @@ export interface LockedItemComposeModalProps {
   onAdd: (input: LockedItemInput) => Promise<string>
   onClose: () => void
   /**
+   * Copy overrides for the offline library path. The same modal saves as well as sends
+   * (NewItemBar.tsx), and a "Send" button on a flow that sends nothing is how a user
+   * starts distrusting the interface. Defaults keep the in-session wording.
+   */
+  title?: string
+  submitLabel?: string
+  /**
    * D6's plaintext cap for a locked item, in bytes — the whole item travels in one
    * frame, so this applies to every inner type, not only a file. `crypto.ts` owns the
    * constant; it arrives as a prop so this component never imports the crypto
@@ -85,6 +92,8 @@ const COMPOSE_DRAFT: RichTextItemModel = {
 export function LockedItemComposeModal({
   onAdd,
   onClose,
+  title = 'Send a locked item',
+  submitLabel = 'Send locked item',
   maxFileBytes = LOCKED_ITEM_DEFAULT_MAX_FILE_BYTES,
 }: LockedItemComposeModalProps) {
   const [label, setLabel] = useState('')
@@ -224,7 +233,7 @@ export function LockedItemComposeModal({
         }}
       >
         <h2 className="locked-compose__title" id="locked-compose-title">
-          Send a locked item
+          {title}
         </h2>
         <p className="locked-compose__intro muted">
           Encrypted on this device with your password before it is sent. The password never leaves
@@ -366,7 +375,7 @@ export function LockedItemComposeModal({
 
         <div className="locked-compose__actions">
           <button type="submit" className="button locked-compose__submit" disabled={!canSubmit}>
-            Send locked item
+            {submitLabel}
           </button>
           <button
             type="button"

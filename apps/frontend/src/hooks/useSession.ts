@@ -1860,11 +1860,11 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
         let activeCode = code
 
         if (activeCode === null || activeCode === '') {
-          // Host: create the session, then display its code for the guest to scan.
+          // Host: create the session. The code is deliberately NOT published to the store
+          // here — see the note at client.connect below.
           const created = await requestNewSession()
           if (isStale()) return
           activeCode = created.code
-          setSessionCode(created.code)
         }
 
         // Fetch TURN credentials for both roles using activeCode (ORCHESTRATION.md D10).
@@ -1926,6 +1926,18 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
 
         await client.connect(activeCode, nextRole, publicKey)
         if (isStale()) return
+
+        /*
+         * D13: the code becomes visible HERE and nowhere earlier.
+         *
+         * Publishing it at mint time rendered the QR across the whole gap between minting
+         * and joining — an HTTP credential fetch, keypair generation, public-key export and
+         * the WebSocket handshake, easily a few hundred milliseconds on a phone. For that
+         * window the app displayed a scannable code that nothing was listening on, which is
+         * precisely the defect D13 exists to prevent. If any of those steps throws, the
+         * catch below ends the session and no code was ever shown.
+         */
+        setSessionCode(activeCode)
 
         // The host's offer is deliberately not sent here. It waits for the peer to
         // join, which the worker reports with a `pubkey` message — see

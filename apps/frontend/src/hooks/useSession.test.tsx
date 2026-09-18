@@ -692,7 +692,11 @@ describe('useSession host sessions (PLAN.md §16 Phase 6, ORCHESTRATION.md D13)'
 
     expect(socket.url).toContain(SESSION_CODE)
     expect(socket.sentOfType('join')?.['role']).toBe('host')
-    expect(useSessionStore.getState().sessionCode).toBe(SESSION_CODE)
+    // D13: the code reaches the store only once the join has gone out. Waiting on the
+    // published state (rather than asserting it inline) is what flushes the continuation
+    // after `client.connect()` resolves -- `waitFor` returns on its first true check, so
+    // an inline assert right after fireOpen() races a microtask that has not run.
+    await waitFor(() => useSessionStore.getState().sessionCode === SESSION_CODE, 'the published code')
     expect(newSessionCalls()).toHaveLength(1)
   })
 
@@ -740,6 +744,9 @@ describe('useSession host sessions (PLAN.md §16 Phase 6, ORCHESTRATION.md D13)'
     // PLAN.md §19 decision 10: a restart is a NEW session, so the stale code must not be
     // reused (a peer could still be waiting on it).
     await waitFor(() => sockets.length === 2, 'the restarted host socket')
+    // D13: the fresh code becomes visible only once the restarted attempt has joined, so
+    // the new socket has to be opened for the publication to happen at all.
+    latestSocket().fireOpen()
     await waitFor(() => useSessionStore.getState().sessionCode === SESSION_CODE, 'the fresh code')
     expect(newSessionCalls()).toHaveLength(2)
     expect(latestSocket().url).toContain(SESSION_CODE)

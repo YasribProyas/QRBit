@@ -515,6 +515,16 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
     const element = renderHome()
     await waitFor(() => sockets.length === 1, 'the host signaling socket')
     const socket = sockets[0]!
+
+    /*
+     * D13, the half that matters here: before the join frame has gone out, there must be
+     * NO scannable code on screen. Asserting only that a join eventually happens is the
+     * same presence-only mistake that let the original D13 defect pass 932 tests — the
+     * window between minting and joining is exactly where a QR must not appear.
+     */
+    expect(element.querySelector('.session-qr')).toBe(null)
+    expect(element.textContent).not.toContain(`${APP_URL}/session?code=${HOME_CODE}`)
+
     socket.fireOpen()
     await waitFor(() => socket.sentOfType('join') !== null, 'the host join frame')
 
@@ -681,7 +691,10 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
     // Library view is restored with the fresh QR
     expect(element.querySelector('.library-browser')).not.toBe(null)
     expect(element.textContent).toContain('Your Library')
-    expect(element.textContent).toContain(FRESH_CODE)
+    // D13: the fresh code only appears once the new attempt has joined, and the
+    // publication lands a microtask after the join frame. Waiting on the rendered QR is
+    // both the flush and the real assertion -- a stale or unjoined code must not show.
+    await waitFor(() => element.textContent?.includes(FRESH_CODE) === true, 'the fresh live QR')
   })
 
   it('a guest arriving at /session?code= is unaffected', async () => {

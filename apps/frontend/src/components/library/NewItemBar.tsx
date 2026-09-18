@@ -379,6 +379,8 @@ export function NewItemBar({
       {lockedOpen ? (
         <LockedItemComposeModal
           onAdd={handleSaveLocked}
+          title="Save a locked item"
+          submitLabel="Save to library"
           onClose={() => {
             setLockedOpen(false)
           }}
