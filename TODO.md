@@ -24,8 +24,8 @@ Items the agent cannot complete autonomously. Per AGENTS.md, work continues past
 ## Model / provider
 
 - [x] Resolved: sub-agents run on `omnirouter/agy/gemini-3.8-flash-high`,
-      fallback `agentrouter/deepseek-v4-flash`. See `ORCHESTRATION.md`.
-- [ ] `agentrouter/claude-opus-5`, `agentrouter/gpt-5.6-sol` and
+      fallback `agentrouter-openai/deepseek-v4-flash`. See `ORCHESTRATION.md`.
+- [x] `agentrouter/claude-opus-5`, `agentrouter/gpt-5.6-sol` and
       `openrouter/*` are all 402 quota/billing-blocked. Not usable as fallback.
 
 ## Deferred design questions

@@ -288,6 +288,26 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
     )
     if (!remove) throw new Error('test bug: no Delete menu item')
     click(remove)
+
+    /*
+     * The row menu asks; it does not delete (Phase 5 review P2). A deletion is only
+     * allowed to follow an answer, so the item has to still be on the page and still be
+     * in IndexedDB while the question is open — an implementation that deleted on the
+     * menu click would get past a test that merely clicked whatever confirm button it
+     * found, and this is the half that would catch it.
+     */
+    const dialog = element.querySelector('[role="dialog"]')
+    if (!(dialog instanceof HTMLElement)) throw new Error('test bug: no confirmation dialog')
+    expect(itemNames(element)).toEqual(['Loose note'])
+    expect((await getItemsInFolder(ROOT_FOLDER_ID)).map((stored) => stored.id)).toEqual([
+      item.id,
+    ])
+
+    const confirm = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(
+      (candidate) => candidate.textContent === 'Delete item permanently',
+    )
+    if (!confirm) throw new Error('test bug: no destructive confirm button in the dialog')
+    click(confirm)
     await waitFor(() => itemNames(element).length === 0, 'the item to be deleted')
 
     expect(itemNames(element)).toEqual([])

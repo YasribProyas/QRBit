@@ -6,12 +6,12 @@
  *
  * QR (PLAN.md §16 Phase 6): on mount the page mints a session through `GET /session/new`
  * and renders it with `QRDisplay`, so the code on screen is a code the worker will
- * actually accept. The same bundle (code AND its TURN credentials) is handed to the
- * Session page through router state when the user opens the session — minting twice would
- * leave the peer that scanned the QR waiting on a session nobody joins (see
- * `useSession`'s `hostSession`). A tap anywhere on the QR panel refreshes it, which is
- * PLAN.md §7's "tap to refresh": sessions expire (PLAN.md §17), and a stale code is the
- * one failure mode a user cannot see.
+ * actually accept. The code is handed to the Session page through router state when the user
+ * opens the session — minting twice would leave the peer that scanned the QR waiting on a session
+ * nobody joins (see `useSession`'s `hostSession`). TURN credentials are now fetched separately
+ * from `/session/:code/turn` at connect time (ORCHESTRATION.md D10). A tap anywhere on the QR
+ * panel refreshes it, which is PLAN.md §7's "tap to refresh": sessions expire (PLAN.md §17),
+ * and a stale code is the one failure mode a user cannot see.
  *
  * The two send flows of PLAN.md §7 both start here:
  *

@@ -43,7 +43,7 @@ import { WIRE_MAX_FRAME_BYTES, encodeWire } from '../lib/protocol'
 import { PeerConnection } from '../lib/webrtc'
 import { useSessionStore } from '../store/sessionStore'
 import type { ItemStatus, LockedItem } from '../store/sessionStore'
-import { PEER_REJOINED_REASON, deriveSessionMaterial, useSession } from './useSession'
+import { PEER_REJOINED_REASON, deriveSessionMaterial, mintHostSession, useSession } from './useSession'
 import { queueLibrarySends, takeQueuedLibrarySends } from './useSession'
 import type { HostSession, UseSessionResult } from './useSession'
 const SESSION_CODE = 'A7X3K9P2'
@@ -650,6 +650,9 @@ describe('useSession as the host (ORCHESTRATION.md D2, D4 and D5)', () => {
 })
 
 describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase 6)', () => {
+  const newSessionCalls = (): unknown[][] =>
+    mintFetch.mock.calls.filter(([req]) => String(req).endsWith('/new'))
+
   it('joins the pre-minted code instead of minting a second session', async () => {
     renderSessionProbe(null, { code: HOME_MINTED_CODE })
 
@@ -663,14 +666,31 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
     expect(socket.url).toContain(HOME_MINTED_CODE)
     expect(socket.sentOfType('join')?.['role']).toBe('host')
     expect(useSessionStore.getState().sessionCode).toBe(HOME_MINTED_CODE)
-    expect(mintFetch).not.toHaveBeenCalled()
+    expect(newSessionCalls()).toHaveLength(0)
   })
 
-  it('carries the TURN credentials that came with the pre-minted code into the peer', async () => {
-    renderSessionProbe(null, {
-      code: HOME_MINTED_CODE,
-      turnCredentials: { username: 'home-user', credential: 'home-secret' },
+  it('fetches TURN credentials from the turn route for host at connect time (ORCHESTRATION.md D10)', async () => {
+    mintFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/turn')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+            username: 'home-user',
+            credential: 'home-secret',
+          }),
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: SESSION_CODE }),
+      }
     })
+
+    renderSessionProbe(null, { code: HOME_MINTED_CODE })
 
     await waitFor(() => fakePeers.length >= 1, 'the host peer connection')
     const turn = fakePeers[0]?.config?.iceServers?.find((server) =>
@@ -678,7 +698,10 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
     )
     expect(turn?.username).toBe('home-user')
     expect(turn?.credential).toBe('home-secret')
-    expect(mintFetch).not.toHaveBeenCalled()
+    expect(newSessionCalls()).toHaveLength(0)
+    expect(
+      mintFetch.mock.calls.some(([req]) => String(req).endsWith(`/${HOME_MINTED_CODE}/turn`)),
+    ).toBe(true)
   })
 
   it('mints fresh when the pre-minted code is not a session code', async () => {
@@ -688,7 +711,7 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
 
     // A hand-crafted navigation state must never send this device at a code the worker
     // would reject: the fallback is an ordinary, fresh session.
-    expect(mintFetch).toHaveBeenCalledTimes(1)
+    expect(newSessionCalls()).toHaveLength(1)
     expect(latestSocket().url).toContain(SESSION_CODE)
     expect(useSessionStore.getState().sessionCode).toBe(SESSION_CODE)
   })
@@ -703,7 +726,7 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
     // reused (a peer could still be waiting on it).
     await waitFor(() => sockets.length === 2, 'the restarted host socket')
     await waitFor(() => useSessionStore.getState().sessionCode === SESSION_CODE, 'the fresh code')
-    expect(mintFetch).toHaveBeenCalledTimes(1)
+    expect(newSessionCalls()).toHaveLength(1)
     expect(latestSocket().url).toContain(SESSION_CODE)
   })
 
@@ -717,7 +740,7 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
 
     // One session, minted on Home and joined here: the guest's keys were derived with the
     // same code, which is the proof that both devices are on the same session.
-    expect(mintFetch).not.toHaveBeenCalled()
+    expect(newSessionCalls()).toHaveLength(0)
     expect(useSessionStore.getState().sessionCode).toBe(HOME_MINTED_CODE)
 
     await activateReceiverPairing(devices)
@@ -728,6 +751,108 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
     )
     expect(framesOf(guestReceived, 'text-delta')[0]?.content).toBe('queued from the QR screen')
     expect(takeQueuedLibrarySends()).toEqual([])
+  })
+})
+
+describe('TURN credential flow (ORCHESTRATION.md D10, D11)', () => {
+  it('mintHostSession no longer requires credentials (ORCHESTRATION.md D10)', async () => {
+    mintFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: 'A7X3K9P2' }),
+    })
+    const minted = await mintHostSession()
+    expect(minted).toEqual({ code: 'A7X3K9P2' })
+  })
+
+  it('fetches TURN credentials from the turn route for guest at connect time', async () => {
+    mintFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/turn')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+            username: 'turn-guest-user',
+            credential: 'turn-guest-cred',
+          }),
+        }
+      }
+      return { ok: false, status: 404, json: async () => ({}) }
+    })
+
+    renderSessionProbe('GUESTCOD')
+
+    await waitFor(() => fakePeers.length >= 1, 'the guest peer connection')
+    const turn = fakePeers[0]?.config?.iceServers?.find((server) =>
+      String(server.urls).includes('turn:'),
+    )
+    expect(turn?.username).toBe('turn-guest-user')
+    expect(turn?.credential).toBe('turn-guest-cred')
+    expect(mintFetch.mock.calls.some(([req]) => String(req).endsWith('/GUESTCOD/turn'))).toBe(true)
+  })
+
+  it('re-fetches credentials on restart for both roles', async () => {
+    let turnFetchCount = 0
+    mintFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/turn')) {
+        turnFetchCount++
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+            username: `user-${turnFetchCount}`,
+            credential: `cred-${turnFetchCount}`,
+          }),
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: SESSION_CODE }),
+      }
+    })
+
+    renderSessionProbe(null)
+    await waitFor(() => fakePeers.length >= 1, 'the first peer connection')
+    expect(turnFetchCount).toBe(1)
+
+    session().restart()
+
+    await waitFor(() => fakePeers.length >= 2, 'the restarted peer connection')
+    expect(turnFetchCount).toBe(2)
+  })
+
+  it('degrades to STUN-only when turn route fails without failing the session', async () => {
+    mintFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/turn')) {
+        return {
+          ok: false,
+          status: 503,
+          json: async () => ({ error: 'TURN unavailable' }),
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: SESSION_CODE }),
+      }
+    })
+
+    renderSessionProbe('GUESTCOD')
+    await waitFor(() => fakePeers.length >= 1, 'the peer connection')
+
+    const servers = fakePeers[0]?.config?.iceServers ?? []
+    expect(servers.every((s) => !String(s.urls).includes('turn:'))).toBe(true)
+    expect(servers.some((s) => String(s.urls).includes('stun:'))).toBe(true)
+
+    // Session continues to connect without an error
+    await waitFor(() => sockets.length >= 1, 'the signaling socket')
+    expect(useSessionStore.getState().errorMessage).toBe(null)
   })
 })
 

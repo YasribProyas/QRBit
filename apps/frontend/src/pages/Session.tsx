@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { AddItemBar } from '../components/session/AddItemBar'
 import { SafetyPhraseOverlay } from '../components/session/SafetyPhraseOverlay'
@@ -36,6 +36,24 @@ export function Session() {
   const hostSession = code === null ? hostSessionFromState(location.state) : null
 
   const session = useSession({ code, hostSession })
+
+  /*
+   * GET share target (ORCHESTRATION.md D12): reads ?url, ?text, ?title on mount.
+   * Prefers url > text > title. When present, composes an item ready to send once the session
+   * goes active. Respects existing role rules: a share landing with no ?code is a host session,
+   * so the shared text becomes an outgoing item.
+   */
+  const sharedText = extractSharedText(searchParams)
+  const pendingShareRef = useRef<string | null>(sharedText)
+  const addTextItem = session.addTextItem
+
+  useEffect(() => {
+    if (session.phase === 'active' && pendingShareRef.current !== null) {
+      const textToSend = pendingShareRef.current
+      pendingShareRef.current = null
+      addTextItem(textToSend)
+    }
+  }, [session.phase, addTextItem])
 
   /*
    * PLAN.md §16 Phase 8 / §17: a session that is abandoned by closing the tab (or by
@@ -96,10 +114,18 @@ export function Session() {
         <section className="panel panel--error session-share" role="status">
           <h2 className="panel__title">Your shared file was not captured</h2>
           <p className="muted">
-            This build cannot read a shared file: capturing one needs a service worker of
-            its own, and this app uses the default one. The file is still where you shared
-            it from — add it from the board once the session is open.
+            Text and link sharing work directly, but sharing files is a documented limitation
+            that requires an owner decision to relax the no-session-persistence rule. The file
+            was not captured and is still where you shared it from — please add it from the
+            board once the session is open.
           </p>
+        </section>
+      ) : null}
+
+      {sharedText && session.phase !== 'active' && session.phase !== 'ended' ? (
+        <section className="panel session-share-pending" aria-label="Shared item ready to send">
+          <h2 className="panel__title">Shared text ready to send</h2>
+          <p className="session-share-pending__text">{sharedText}</p>
         </section>
       ) : null}
 
@@ -189,13 +215,33 @@ export function Session() {
 }
 
 /**
+ * Reads share target parameters (?url, ?text, ?title) from the query string (ORCHESTRATION.md D12).
+ *
+ * Prefers url > text > title (the most substantial item; a URL shares better as a text item).
+ * Returns null when none are present or all are empty.
+ */
+export function extractSharedText(searchParams: URLSearchParams): string | null {
+  const url = searchParams.get('url')?.trim()
+  if (url && url !== '') return url
+
+  const text = searchParams.get('text')?.trim()
+  if (text && text !== '') return text
+
+  const title = searchParams.get('title')?.trim()
+  if (title && title !== '') return title
+
+  return null
+}
+
+/**
  * The host session bundle Home handed over in router state (PLAN.md §16 Phase 6), or
  * `null` when this navigation did not carry one.
  *
  * Router state is same-document data, so it cannot be addressed from a URL the way
  * `?code=` can, but it is still untrusted input to this render: the code is returned for
- * `useSession` to validate (an invalid one falls back to minting fresh), and the TURN
- * credentials are only carried across when both halves are strings.
+ * `useSession` to validate (an invalid one falls back to minting fresh).
+ * Under D10, TURN credentials come from the /session/:code/turn route and are no longer
+ * carried across router state.
  */
 function hostSessionFromState(state: unknown): HostSession | null {
   if (typeof state !== 'object' || state === null) return null
@@ -203,15 +249,10 @@ function hostSessionFromState(state: unknown): HostSession | null {
   const bundle = (state as { hostSession?: unknown }).hostSession
   if (typeof bundle !== 'object' || bundle === null) return null
 
-  const { code, turnCredentials } = bundle as { code?: unknown; turnCredentials?: unknown }
+  const { code } = bundle as { code?: unknown }
   if (typeof code !== 'string') return null
 
-  if (typeof turnCredentials !== 'object' || turnCredentials === null) return { code }
-
-  const { username, credential } = turnCredentials as { username?: unknown; credential?: unknown }
-  if (typeof username !== 'string' || typeof credential !== 'string') return { code }
-
-  return { code, turnCredentials: { username, credential } }
+  return { code }
 }
 
 /**

@@ -10,10 +10,12 @@
   "theme_color": "#0f0f0f",
   "share_target": {
     "action": "/session",
-    "method": "POST",
-    "enctype": "multipart/form-data",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
     "params": {
-      "files": [{ "name": "file", "accept": ["*/*"] }]
+      "title": "title",
+      "text": "text",
+      "url": "url"
     }
   },
   "icons": [

@@ -205,3 +205,62 @@ No worktrees: avoids overnight merge risk on a greenfield repo.
 ## Verification gate per phase
 `pnpm -r typecheck` → `pnpm -r test` → `pnpm -r build`, then git commit.
 Commit at every phase boundary so a provider outage loses nothing.
+
+### D10 — TURN credentials move off `/session/new` (Phase 9)
+PLAN.md §13 returns `{ code, turnCredentials }` from `GET /session/new`. That endpoint is
+public and was unmetered, so it was a credential-harvesting faucet: each response carried a
+credential valid for the whole TTL, and coturn/Cloudflare time-limited credentials are NOT
+single-use — one credential relays unlimited traffic until it expires. With Cloudflare
+billing at $0.05/GB past the 1,000 GB free allowance and **no hard spending cap for TURN**
+(budget alerts are notification-only), an unauthenticated loop of `/session/new` is a direct
+cost threat against the operator.
+
+**Decision:** `/session/new` returns `{ code }` only. Credentials are served by a new
+`GET /session/:code/turn`, which requires an existing, unexpired, un-burned session code and
+is rate-limited per IP. Clients fetch creds at connect time (both roles already know the code:
+the guest from the URL, the host from its own mint under D8) and re-fetch on `restart()`.
+
+Rationale: this does not stop a determined attacker alone — the real controls are (a) rate
+limits on both the mint and the credential route, (b) TTL cut from 3600s to **600s**, and
+(c) Cloudflare `customIdentifier` tagging with the session code so TURN analytics show exactly
+which credential was abused. Removing creds from the public mint is what makes the rate limits
+effective instead of bypassable, and it keeps `/session/new` honest about what it is: an
+allocator of short-lived identifiers, not of paid relay access.
+
+### D11 — Cloudflare TURN is an API, not an HMAC the worker computes (Phase 9)
+PLAN.md §13's `generateTurnCredentials` describes the **self-hosted coturn** scheme
+(`username = expiry:nonce`, `credential = base64(HMAC-SHA256(secret, username))`). Cloudflare
+Realtime TURN does **not** accept client-computed HMACs. It mints credentials itself:
+
+    POST https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate
+    Authorization: Bearer {TURN_KEY_SECRET}
+    Content-Type: application/json
+    { "ttl": <1..172800>, "customIdentifier": <≤128 chars> }
+
+→ 201 `{ "iceServers": { "urls": [...], "username": "...", "credential": "..." } }`
+
+username/credential are opaque hex strings produced by Cloudflare; the key id is a URL path
+segment only and never appears in the username. Therefore `TURN_SECRET` (PLAN.md §18) is
+replaced by **`TURN_KEY_ID`** (wrangler.toml var, non-secret) + **`TURN_KEY_SECRET`** (secure
+value). Absent either, the worker returns no credentials and clients fall back to STUN-only —
+the same graceful path as before, so local dev and a key-less deployment still work.
+
+The response also carries Cloudflare's own ICE URL list; the worker filters port 53 entries
+(Chrome/Firefox block them) and passes the rest to the client verbatim rather than letting the
+frontend hardcode ports. Cloudflare's list already includes `turns:...:443?transport=tcp`, so
+PLAN.md §17's hostile-firewall requirement is satisfied from the authoritative source.
+
+### D12 — Share target switched POST/files → GET/text (Phase 9)
+PLAN.md §15 declares a `share_target` that POSTs `multipart/form-data` to `/session`. A POST
+body can only be read by a **service worker** we write ourselves, and the only ways to hand
+that file to the page are the Cache API or IndexedDB — both forbidden for session data by
+AGENTS.md and PLAN.md §17 ("Service worker explicitly excludes ... all IDB data from cache").
+The rule and the feature are in direct conflict; vite-plugin-pwa's generated SW has no share
+handler, which is why the honest "not captured" hint shipped in Phase 6.
+
+**Decision:** declare the share target as `GET` with `title` / `text` / `url` params. Those
+arrive as ordinary query parameters — **no service worker, no persistence, fully within the
+rules** — so sharing a link or selected text genuinely works end to end. Sharing *files* needs
+an owner-level decision to carve a bounded exception out of the no-session-persistence rule
+(short-TTL stash in the SW cache, deleted on read). Left as a documented limitation, not a
+silent no-op.

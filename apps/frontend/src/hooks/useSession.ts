@@ -29,7 +29,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { buildNewSessionUrl, SIGNALING_WS_URL } from '../config'
+import { buildNewSessionUrl, buildTurnCredentialsUrl, SIGNALING_WS_URL } from '../config'
 import { CHUNK_SIZE, FileAssembler, chunkFile } from '../lib/chunker'
 import {
   LOCKED_ITEM_MAX_PLAINTEXT_BYTES,
@@ -65,6 +65,7 @@ export interface SessionStatus {
 export interface TurnCredentials {
   username: string
   credential: string
+  urls?: string[]
 }
 
 interface NewSessionResponse {
@@ -457,18 +458,64 @@ async function requestNewSession(): Promise<NewSessionResponse> {
 
 /**
  * Mints a host session through the worker's `/session/new` route (PLAN.md §13, §16
- * Phase 6), for the Home screen's live QR.
+ * Phase 6, ORCHESTRATION.md D10), for the Home screen's live QR.
  *
- * The WHOLE bundle is returned — the code and the TURN credentials that came with it — so
- * the page can hand both to `useSession` (`hostSession`) when the user opens the session.
- * That is the point of this seam: the code is created once, on the screen that displays it,
- * and the session page joins it instead of creating another one.
+ * D10: /session/new returns { code } only. TURN credentials are now fetched separately
+ * from /session/:code/turn at connect time.
  */
 export async function mintHostSession(): Promise<HostSession> {
   const created = await requestNewSession()
-  return created.turnCredentials === undefined
-    ? { code: created.code }
-    : { code: created.code, turnCredentials: created.turnCredentials }
+  return { code: created.code }
+}
+
+/**
+ * Validates the worker's `/session/:code/turn` payload (ORCHESTRATION.md D10, D11).
+ *
+ * Untrusted response: requires valid username and credential strings, and extracts
+ * the authoritative URLs list. Returns null on any validation failure.
+ */
+export function parseTurnCredentialsResponse(value: unknown): TurnCredentials | null {
+  if (!isRecord(value)) return null
+
+  const username = value['username']
+  const credential = value['credential']
+  if (typeof username !== 'string' || username.trim() === '') return null
+  if (typeof credential !== 'string' || credential.trim() === '') return null
+
+  const rawUrls = value['urls'] ?? value['iceServers']
+  let urls: string[] | undefined
+  if (Array.isArray(rawUrls)) {
+    urls = rawUrls.filter((u): u is string => typeof u === 'string' && u.trim() !== '')
+  }
+
+  return {
+    username: username.trim(),
+    credential: credential.trim(),
+    urls,
+  }
+}
+
+/**
+ * Fetches short-lived TURN credentials from the worker's `/session/:code/turn` route
+ * (ORCHESTRATION.md D10).
+ *
+ * Never throws: a network failure or 503 (TURN unavailable) degrades gracefully
+ * to STUN-only by returning null without failing the session.
+ */
+export async function requestTurnCredentials(
+  code: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<TurnCredentials | null> {
+  try {
+    const response = await fetchFn(buildTurnCredentialsUrl(code), {
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok) return null
+    const payload: unknown = await response.json()
+    return parseTurnCredentialsResponse(payload)
+  } catch {
+    return null
+  }
 }
 
 /** Normalises anything thrown into a message safe to show the user. */
@@ -1801,7 +1848,6 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
 
       try {
         let activeCode = code
-        let peerOptions: PeerConnectionOptions | undefined
 
         if (activeCode === null || activeCode === '') {
           /*
@@ -1818,26 +1864,26 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
           if (preMinted !== null && isValidSessionCode(preMinted.code)) {
             activeCode = preMinted.code
             setSessionCode(preMinted.code)
-
-            if (preMinted.turnCredentials) {
-              peerOptions = {
-                turnUsername: preMinted.turnCredentials.username,
-                turnCredential: preMinted.turnCredentials.credential,
-              }
-            }
           } else {
             // Host: create the session, then display its code for the guest to scan.
             const created = await requestNewSession()
             if (isStale()) return
             activeCode = created.code
             setSessionCode(created.code)
+          }
+        }
 
-            if (created.turnCredentials) {
-              peerOptions = {
-                turnUsername: created.turnCredentials.username,
-                turnCredential: created.turnCredentials.credential,
-              }
-            }
+        // Fetch TURN credentials for both roles using activeCode (ORCHESTRATION.md D10).
+        // Failure degrades gracefully to STUN-only without failing the session.
+        const turnCredentials = await requestTurnCredentials(activeCode)
+        if (isStale()) return
+
+        let peerOptions: PeerConnectionOptions | undefined
+        if (turnCredentials !== null) {
+          peerOptions = {
+            turnUsername: turnCredentials.username,
+            turnCredential: turnCredentials.credential,
+            turnUrls: turnCredentials.urls,
           }
         }
 

@@ -36,6 +36,7 @@ import {
   getFolders,
   getItem,
   getItemsInFolder,
+  isItemCorrupt,
   ROOT_FOLDER_ID,
   saveItem,
   type LibraryFileItem,
@@ -68,6 +69,23 @@ beforeEach(freshDatabase)
 // ---------------------------------------------------------------------------
 // Fixtures and helpers
 // ---------------------------------------------------------------------------
+
+function idbRequest<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error ?? new Error('IDB request failed'))
+  })
+}
+
+async function withRawDatabase<T>(run: (db: IDBDatabase) => Promise<T>): Promise<T> {
+  const db = await idbRequest(indexedDB.open(DB_NAME))
+  try {
+    return await run(db)
+  } finally {
+    db.close()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
 
 /** Every byte value from 0x00 to 0xFF appears, so a truncated copy cannot pass. */
 function bytes(length: number): Uint8Array<ArrayBuffer> {
@@ -471,5 +489,37 @@ describe('importLibrary', () => {
       const restoredBytes = new Uint8Array(await restored.blob.arrayBuffer())
       expect(restoredBytes.length).toBe(0)
     }
+  })
+
+  it('safely exports and imports a library containing an item with a broken Safari blob', async () => {
+    await saveItem(textItem({ name: 'regular note' }))
+    const id = 'safari-broken-export'
+    await withRawDatabase(async (db) => {
+      await idbRequest(
+        db.transaction('items', 'readwrite').objectStore('items').put({
+          id,
+          folderId: ROOT_FOLDER_ID,
+          name: 'broken-photo.jpg',
+          type: 'image',
+          createdAt: NOW,
+          updatedAt: NOW,
+          mimeType: 'image/jpeg',
+          size: 2048,
+          blob: {}, // Older Safari bug shape
+        }),
+      )
+    })
+
+    const exported = await exportLibrary('all', { encrypt: false })
+    expect(exported.size).toBeGreaterThan(0)
+
+    await freshDatabase()
+    const result = await importLibrary(new File([exported], 'export.qrdrop'), {})
+    expect(result.errors).toEqual([])
+    expect(result.imported).toBe(2)
+
+    const importedItem = await getItem(id)
+    expect(importedItem).toBeDefined()
+    expect(importedItem?.name).toBe('broken-photo.jpg')
   })
 })

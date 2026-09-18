@@ -41,6 +41,9 @@ const CREATED_AT_STORAGE_KEY = 'createdAt'
 
 const DEFAULT_SESSION_TTL_SECONDS = 300
 
+/** Expiration TTL for the burned session code KV marker: 24h (86400s). */
+const BURNED_CODE_KV_TTL_SECONDS = 86400
+
 const SESSION_PATH = /^\/session\/([^/]+)\/(ws|create)$/
 
 /**
@@ -56,6 +59,7 @@ function resolveSessionTtlSeconds(env: Env): number {
 
 export class SessionDurableObject extends DurableObject<Env> {
   private state: SessionState
+  private sessionCode: string | null = null
   private readonly sockets = new Map<SessionRole, WebSocket>()
   /** Sockets that have upgraded but not yet announced a role. */
   private readonly unjoined = new Set<WebSocket>()
@@ -84,6 +88,8 @@ export class SessionDurableObject extends DurableObject<Env> {
     // Defence in depth: the worker already rejected malformed codes before any DO
     // lookup, but the DO refuses them too rather than trusting its caller.
     if (!isValidSessionCode(code)) return new Response('Invalid session code', { status: 400 })
+
+    this.sessionCode = code
 
     const action = match[2]
 
@@ -266,6 +272,25 @@ export class SessionDurableObject extends DurableObject<Env> {
       this.sendToSocket(socket, paired)
     }
     this.buffered.clear()
+    void this.markBurnedInKv()
+  }
+
+  /**
+   * Writes the burned:<code> marker to KV so the code can never be rejoined (Change 3).
+   * Fails open if KV is unavailable or throws.
+   */
+  private async markBurnedInKv(): Promise<void> {
+    if (!this.sessionCode) return
+    try {
+      const kv = this.env.RATE_LIMIT
+      if (typeof kv === 'object' && kv !== null && 'put' in kv) {
+        await kv.put(`burned:${this.sessionCode}`, '1', {
+          expirationTtl: BURNED_CODE_KV_TTL_SECONDS,
+        })
+      }
+    } catch {
+      // Fail open per policy: logging/throwing is forbidden.
+    }
   }
 
   private deliver(recipient: SessionRole, message: SignalingMessage): void {
@@ -339,6 +364,15 @@ export class SessionDurableObject extends DurableObject<Env> {
     this.unjoined.clear()
     this.roles.clear()
     this.buffered.clear()
+
+    // Burn the code on EVERY end-of-life path, not only on pairing. Without this a
+    // session that expired un-paired (the 300s alarm) or was abandoned by both sockets
+    // left no durable trace, and because identity is pure idFromName(code) a later
+    // request would instantiate a fresh DO, re-stamp createdAt and re-arm a fresh
+    // 300s window — making a code PLAN.md §17 says has expired joinable again.
+    // Runs before deleteAll() so the code is still readable.
+    await this.markBurnedInKv()
+
     this.state = { ...createInitialState(this.state.createdAt), phase: 'DONE' }
 
     await this.ctx.storage.deleteAll()

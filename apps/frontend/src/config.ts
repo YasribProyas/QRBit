@@ -43,7 +43,7 @@ export const SIGNALING_WS_URL = stripTrailingSlashes(
 /** Public origin this app is served from. */
 export const APP_URL = stripTrailingSlashes(firstNonBlank(import.meta.env.VITE_APP_URL) ?? DEFAULT_APP_URL)
 
-/** `GET {SIGNALING_HTTP_URL}/session/new` creates a session and issues TURN credentials. */
+/** `GET {SIGNALING_HTTP_URL}/session/new` creates a session. */
 export const SIGNALING_HTTP_URL = toHttpBase(SIGNALING_WS_URL)
 
 /**
@@ -60,3 +60,9 @@ export function buildSessionUrl(code: string): string {
 export function buildNewSessionUrl(): string {
   return `${SIGNALING_HTTP_URL}/session/new`
 }
+
+/** Full URL of the worker's turn-credentials route (PLAN.md §13, ORCHESTRATION.md D10). */
+export function buildTurnCredentialsUrl(code: string): string {
+  return `${SIGNALING_HTTP_URL}/session/${encodeURIComponent(code)}/turn`
+}
+

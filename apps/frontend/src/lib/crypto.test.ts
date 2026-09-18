@@ -588,6 +588,14 @@ describe('base64 helpers', () => {
     expect(toBase64(new TextEncoder().encode('QRDrop'))).toBe('UVJEcm9w')
   })
 
+  it('correctly handles multi-megabyte payloads crossing chunk boundaries', () => {
+    const multiMb = new Uint8Array(150_000)
+    for (let i = 0; i < multiMb.length; i++) multiMb[i] = (i * 37 + 13) & 0xff
+    const encoded = toBase64(multiMb)
+    expect(encoded.length).toBe(200_000)
+    expect(fromBase64(encoded)).toEqual(multiMb)
+  })
+
   it('round-trips every length modulo 3 and both input types', () => {
     for (const length of [1, 2, 3, 4, 5, 6, 7, 31, 91, 256]) {
       const bytes = patternedBytes(length)

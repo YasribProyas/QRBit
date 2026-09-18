@@ -4,7 +4,15 @@ compatibility_date = "2025-01-01"
 
 [vars]
 SESSION_TTL_SECONDS = "300"
-TURN_TTL_SECONDS = "3600"
+# TURN credential lifetime. QRDrop sessions last minutes, not hours, so this is
+# deliberately short: a harvested credential's abuse window is bounded by this value.
+# Cloudflare's maximum is 172800 (48h); PLAN.md §13's 3600 was a coturn-style default.
+TURN_TTL_SECONDS = "600"
+# Cloudflare Realtime TURN key identifier (NOT a secret — the secret is the
+# TURN_KEY_SECRET secure value, set with `wrangler secret put TURN_KEY_SECRET`).
+# Left blank until provisioned: an absent key makes the worker hand out no TURN
+# credentials, and clients fall back to STUN-only rather than failing the session.
+TURN_KEY_ID = ""
 
 [[durable_objects.bindings]]
 name = "SESSION"
@@ -14,10 +22,10 @@ class_name = "SessionDurableObject"
 tag = "v1"
 new_classes = ["SessionDurableObject"]
 
-# Rate limiting store (PLAN.md §13)
+# Rate limiting + session-code burn registry (PLAN.md §13, §17).
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "b93274ce4a89489c92dcb8fa7ce875a7"
 
 # Secrets (never commit):
-#   wrangler secret put TURN_SECRET
+#   wrangler secret put TURN_KEY_SECRET   # Cloudflare Realtime TURN key secret

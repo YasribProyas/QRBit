@@ -8,7 +8,9 @@
  * owns through a prop and a setter). These tests pin the two-region layout, the empty /
  * loading / error states, the folder navigation, and PLAN.md §6.4's multi-select
  * contract (long press, checkbox fallback, Escape, the `···` menu taking over, and
- * "Send selected (N)" reporting the selected ids).
+ * "Send selected (N)" reporting the selected ids. Deletes are pinned too (Phase 5 review
+ * P2): no store call happens until the confirmation is answered, and the cascade the
+ * confirmation warns about is counted from the subtree the store would destroy.
  */
 
 import { act, createElement } from 'react'
@@ -16,8 +18,13 @@ import type { ReactElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { LibraryBrowser, itemsInFolder } from './LibraryBrowser'
-import type { LibraryBrowserProps } from './LibraryBrowser'
+import {
+  LibraryBrowser,
+  describeDelete,
+  folderDeleteImpact,
+  itemsInFolder,
+} from './LibraryBrowser'
+import type { LibraryBrowserProps, PendingDelete } from './LibraryBrowser'
 import type { LibraryFolder } from './FolderNode'
 import type { LibraryItem } from './LibraryItemRow'
 
@@ -121,6 +128,46 @@ function longPress(element: HTMLElement): void {
   })
 }
 
+/** The open confirmation, or `null` when nothing is asking.
+ *  `.confirm-delete` is the dialog's own overlay class, added on top of the shared
+ * `library-modal` shell, so it never matches the new-folder dialog by accident. */
+function confirmDialog(element: HTMLElement): HTMLElement | null {
+  return element.querySelector<HTMLElement>('.confirm-delete')
+}
+
+function dialogText(element: HTMLElement): { title: string; message: string } {
+  const dialog = confirmDialog(element)
+  if (dialog === null) throw new Error('test bug: no confirmation open')
+
+  return {
+    title: dialog.querySelector('.confirm-delete__title')?.textContent ?? '',
+    message: dialog.querySelector('.confirm-delete__message')?.textContent ?? '',
+  }
+}
+
+function pressEscape(): void {
+  act(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+}
+
+/** Opens the folder's `···` menu and picks its delete entry, stopping at the question. */
+function askToDeleteFolder(element: HTMLElement, name: string): void {
+  const menuToggle = folderNamed(element, name).parentElement?.querySelector(
+    '.folder-node__menu-toggle',
+  )
+  if (!(menuToggle instanceof HTMLButtonElement)) throw new Error('test bug: no folder menu')
+
+  click(menuToggle)
+  click(menuItem(element, 'Delete folder and contents'))
+}
+
+/** The same for an item row: the first visible row's menu, then its Delete entry. */
+function askToDeleteFirstItem(element: HTMLElement): void {
+  click(button(element, '.library-item__menu-toggle'))
+  click(menuItem(element, 'Delete'))
+}
+
 function renderBrowser(overrides: Partial<LibraryBrowserProps> = {}) {
   const props: LibraryBrowserProps = {
     folders,
@@ -176,6 +223,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
   while (openHarnesses.length > 0) {
     const harness = openHarnesses.pop()
     if (harness) harness.unmount()
@@ -441,7 +489,7 @@ describe('LibraryBrowser — item actions reach the store (PLAN.md §6.4)', () =
     expect(props.onSendItems).toHaveBeenCalledWith(['i2'])
   })
 
-  it('wires rename and delete through to its own props', async () => {
+  it('wires rename and delete through to its own props, past the confirmation', async () => {
     const { harness, props } = renderBrowser({ currentFolderId: 'f1' })
 
     click(button(harness.element, '.library-item__menu-toggle'))
@@ -454,10 +502,14 @@ describe('LibraryBrowser — item actions reach the store (PLAN.md §6.4)', () =
     click(button(harness.element, '.library-item__menu-toggle'))
     click(menuItem(harness.element, 'Delete'))
 
+    // The row menu's Delete asks; it is the confirmation that answers it.
+    expect(props.onDeleteItem).not.toHaveBeenCalled()
+    click(button(harness.element, '.confirm-delete__confirm'))
+
     expect(props.onDeleteItem).toHaveBeenCalledWith('i2')
   })
 
-  it('wires the folder rename and delete through to its own props', async () => {
+  it('wires the folder rename and delete through to its own props, past the confirmation', async () => {
     const { harness, props } = renderBrowser({ currentFolderId: 'f1' })
 
     const work = folderNamed(harness.element, 'Work')
@@ -475,6 +527,305 @@ describe('LibraryBrowser — item actions reach the store (PLAN.md §6.4)', () =
     click(menuToggle)
     click(menuItem(harness.element, 'Delete folder and contents'))
 
+    expect(props.onDeleteFolder).not.toHaveBeenCalled()
+    click(button(harness.element, '.confirm-delete__confirm'))
+
     expect(props.onDeleteFolder).toHaveBeenCalledWith('f2')
+  })
+})
+
+describe('LibraryBrowser — folder delete cascade (PLAN.md §6.3, §6.4)', () => {
+  /**
+   * A tree three levels deep under Uni Stuff, so the count has to recurse rather than
+   * look at the folder's own rows:
+   *
+   *   Uni Stuff (f1)  i1, i2
+   *     Thesis (f3)   i5
+   *       Drafts (f5) i6
+   */
+  const deepFolders = [
+    ...folders,
+    { id: 'f5', name: 'Drafts', parentId: 'f3', createdAt: 1, updatedAt: 1 },
+  ]
+  const deepItems: LibraryItem[] = [
+    ...items,
+    { ...BASE, id: 'i5', folderId: 'f3', name: 'Chapter one', content: 'ch', updatedAt: 50 },
+    { ...BASE, id: 'i6', folderId: 'f5', name: 'Cold scan', content: 'scan', updatedAt: 50 },
+  ]
+
+  it('counts the whole doomed subtree, folders and items alike, in the warning', () => {
+    const { harness } = renderBrowser({
+      folders: deepFolders,
+      items: deepItems,
+      currentFolderId: 'f1',
+    })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+
+    const { title, message } = dialogText(harness.element)
+    expect(title).toBe('Delete “Uni Stuff”?')
+    expect(message).toContain('3 folders')
+    expect(message).toContain('4 items')
+    // Only the doomed tree is counted: Work's item and the root's note stay out of it.
+    expect(message).not.toContain('SSH Keys')
+    expect(message).not.toContain('Loose note')
+    expect(message).toContain('cannot be undone')
+  })
+
+  it('says so when the folder is empty, rather than implying a cascade that is not there', () => {
+    const { harness } = renderBrowser({ folders: deepFolders, items: deepItems })
+
+    askToDeleteFolder(harness.element, 'Empty')
+
+    expect(dialogText(harness.element).message).toContain('1 folder and no items')
+  })
+
+  it('re-reads the counts if the library changes while the question is open', () => {
+    const { harness, update } = renderBrowser({
+      folders: deepFolders,
+      items: deepItems,
+      currentFolderId: 'f1',
+    })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+    expect(dialogText(harness.element).message).toContain('3 folders')
+
+    // Drafts goes away elsewhere in the app; the warning must not keep quoting it.
+    update({ folders: deepFolders.filter((folder) => folder.id !== 'f5') })
+
+    const { message } = dialogText(harness.element)
+    expect(message).toContain('2 folders')
+    expect(message).toContain('3 items')
+  })
+
+  it('deletes nothing until the confirmation is answered, and then exactly the folder', () => {
+    const { harness, props } = renderBrowser({
+      folders: deepFolders,
+      items: deepItems,
+      currentFolderId: 'f1',
+    })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+
+    expect(props.onDeleteFolder).not.toHaveBeenCalled()
+    expect(props.onDeleteItem).not.toHaveBeenCalled()
+    // The library on screen is untouched while the dialog is up.
+    expect(itemNames(harness.element)).toEqual(['Thesis Draft', 'Portal password'])
+
+    click(button(harness.element, '.confirm-delete__confirm'))
+
+    // One call, one id — the same call the menu used to make on its own.
+    expect(props.onDeleteFolder).toHaveBeenCalledTimes(1)
+    expect(props.onDeleteFolder).toHaveBeenCalledWith('f1')
+    expect(props.onDeleteItem).not.toHaveBeenCalled()
+    expect(confirmDialog(harness.element)).toBe(null)
+  })
+
+  it('leaves the folder alone when the user cancels', () => {
+    const { harness, props } = renderBrowser({
+      folders: deepFolders,
+      items: deepItems,
+      currentFolderId: 'f1',
+    })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+    click(button(harness.element, '.confirm-delete__cancel'))
+
+    expect(props.onDeleteFolder).not.toHaveBeenCalled()
+    expect(props.onDeleteItem).not.toHaveBeenCalled()
+    expect(confirmDialog(harness.element)).toBe(null)
+    // The tree is still there to act on afterwards.
+    expect(folderNamed(harness.element, 'Uni Stuff')).not.toBe(null)
+  })
+
+  it('treats Escape as a cancel', () => {
+    const { harness, props } = renderBrowser({
+      folders: deepFolders,
+      items: deepItems,
+      currentFolderId: 'f1',
+    })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+    pressEscape()
+
+    expect(props.onDeleteFolder).not.toHaveBeenCalled()
+    expect(confirmDialog(harness.element)).toBe(null)
+  })
+
+  it('never asks twice, and never answers for the user with a second request', () => {
+    const { harness, props } = renderBrowser({
+      folders: deepFolders,
+      items: deepItems,
+      currentFolderId: 'f1',
+    })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+    // A different folder asked about while one is open replaces the question.
+    askToDeleteFolder(harness.element, 'Work')
+
+    expect(harness.element.querySelectorAll('.confirm-delete')).toHaveLength(1)
+    expect(dialogText(harness.element).title).toBe('Delete “Work”?')
+
+    click(button(harness.element, '.confirm-delete__confirm'))
+
+    expect(props.onDeleteFolder).toHaveBeenCalledTimes(1)
+    expect(props.onDeleteFolder).toHaveBeenCalledWith('f2')
+  })
+})
+
+describe('LibraryBrowser — item delete confirmation', () => {
+  it('asks for the item by name', () => {
+    const { harness } = renderBrowser({ currentFolderId: 'f1' })
+
+    askToDeleteFirstItem(harness.element)
+
+    const { title, message } = dialogText(harness.element)
+    // Rows are most recently changed first, so the first row is Thesis Draft (i2).
+    expect(title).toBe('Delete “Thesis Draft”?')
+    expect(message).toContain('“Thesis Draft”')
+    expect(message).toContain('cannot be undone')
+    // An item takes nothing with it, so no counts appear.
+    expect(message).not.toMatch(/\d+ folders?/)
+  })
+
+  it('deletes nothing until the confirmation is answered, then exactly that item', () => {
+    const { harness, props } = renderBrowser({ currentFolderId: 'f1' })
+
+    askToDeleteFirstItem(harness.element)
+    expect(props.onDeleteItem).not.toHaveBeenCalled()
+
+    click(button(harness.element, '.confirm-delete__confirm'))
+
+    expect(props.onDeleteItem).toHaveBeenCalledTimes(1)
+    expect(props.onDeleteItem).toHaveBeenCalledWith('i2')
+    expect(props.onDeleteFolder).not.toHaveBeenCalled()
+    expect(confirmDialog(harness.element)).toBe(null)
+  })
+
+  it('cancels on Escape and on Cancel', () => {
+    const { harness, props } = renderBrowser({ currentFolderId: 'f1' })
+
+    askToDeleteFirstItem(harness.element)
+    pressEscape()
+    expect(props.onDeleteItem).not.toHaveBeenCalled()
+
+    askToDeleteFirstItem(harness.element)
+    click(button(harness.element, '.confirm-delete__cancel'))
+
+    expect(props.onDeleteItem).not.toHaveBeenCalled()
+    expect(confirmDialog(harness.element)).toBe(null)
+  })
+
+  it('drops the question if the item disappears while it is open', () => {
+    const { harness, update } = renderBrowser({ currentFolderId: 'f1' })
+
+    askToDeleteFirstItem(harness.element)
+    expect(confirmDialog(harness.element)).not.toBe(null)
+
+    update({ items: items.filter((item) => item.id !== 'i2') })
+
+    // No dialog quoting an item that is already gone, and no deletion asked for.
+    expect(confirmDialog(harness.element)).toBe(null)
+  })
+})
+
+describe('LibraryBrowser — the gate is a dialog, not a browser prompt', () => {
+  it('uses no window.confirm and keeps focus inside the dialog while it asks', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+
+    const { harness, props } = renderBrowser({ currentFolderId: 'f1' })
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+
+    // window.confirm is blocked in a cross-origin iframe: a gate built on it would have
+    // deleted the subtree without ever showing a question.
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(alertSpy).not.toHaveBeenCalled()
+    expect(props.onDeleteFolder).not.toHaveBeenCalled()
+
+    const focused = document.activeElement
+    const dialog = confirmDialog(harness.element)
+    if (dialog === null || !(focused instanceof HTMLElement)) throw new Error('test bug: no dialog')
+    expect(dialog.contains(focused)).toBe(true)
+  })
+
+  it('does not strand focus on the menu entry that opened the question', () => {
+    const { harness } = renderBrowser({ currentFolderId: 'f1' })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+    click(button(harness.element, '.confirm-delete__cancel'))
+
+    // The folder's own menu closes on the way into the dialog, so the trigger that opened
+    // it is gone and ConfirmDelete skips the hand-back. What must not happen is focus
+    // staying inside a node that is no longer in the document.
+    const focused = document.activeElement
+    if (!(focused instanceof HTMLElement)) throw new Error('test bug: nothing focused')
+    expect(focused.isConnected).toBe(true)
+    expect(confirmDialog(harness.element)).toBe(null)
+  })
+
+  it('leaves multi-select reporting alone while a delete is pending (PLAN.md §7 Flow A)', () => {
+    const { harness, props } = renderBrowser({ currentFolderId: 'f1' })
+
+    askToDeleteFolder(harness.element, 'Uni Stuff')
+    pressEscape()
+
+    expect(props.onSelectionChange).toHaveBeenLastCalledWith([])
+    expect(props.onDeleteFolder).not.toHaveBeenCalled()
+  })
+})
+
+describe('folderDeleteImpact / describeDelete', () => {
+  const nested: LibraryFolder[] = [
+    { id: 'a', name: 'A', parentId: null, createdAt: 1, updatedAt: 1 },
+    { id: 'b', name: 'B', parentId: 'a', createdAt: 1, updatedAt: 1 },
+    { id: 'c', name: 'C', parentId: 'b', createdAt: 1, updatedAt: 1 },
+    { id: 'd', name: 'D', parentId: null, createdAt: 1, updatedAt: 1 },
+  ]
+  const nestedItems: LibraryItem[] = [
+    { ...BASE, id: 'i1', folderId: 'a', name: 'A note', content: 'a', updatedAt: 1 },
+    { ...BASE, id: 'i2', folderId: 'c', name: 'Deep note', content: 'c', updatedAt: 1 },
+    { ...BASE, id: 'i3', folderId: 'd', name: 'Elsewhere', content: 'd', updatedAt: 1 },
+    { ...BASE, id: 'i4', folderId: 'root', name: 'Loose', content: 'r', updatedAt: 1 },
+  ]
+
+  it('counts every depth and leaves the rest of the library out', () => {
+    expect(folderDeleteImpact(nested, nestedItems, 'a')).toEqual({ folders: 3, items: 2 })
+    expect(folderDeleteImpact(nested, nestedItems, 'b')).toEqual({ folders: 2, items: 1 })
+    expect(folderDeleteImpact(nested, nestedItems, 'c')).toEqual({ folders: 1, items: 1 })
+    expect(folderDeleteImpact(nested, nestedItems, 'd')).toEqual({ folders: 1, items: 1 })
+  })
+
+  it('survives a malformed parent cycle instead of counting forever', () => {
+    // Two rows that name each other as parent: stored data can only get here by
+    // corruption, but a warning that hangs the page is worse than one that is wrong.
+    const cyclic = [
+      { id: 'x', name: 'X', parentId: 'y', createdAt: 1, updatedAt: 1 },
+      { id: 'y', name: 'Y', parentId: 'x', createdAt: 1, updatedAt: 1 },
+    ]
+
+    expect(folderDeleteImpact(cyclic, [], 'x')).toEqual({ folders: 2, items: 0 })
+  })
+
+  it('names the item for an item prompt and the numbers for a folder prompt', () => {
+    const item: PendingDelete = { kind: 'item', id: 'i2' }
+    const folder: PendingDelete = { kind: 'folder', id: 'a' }
+
+    const itemPrompt = describeDelete(item, nested, nestedItems)
+    expect(itemPrompt?.title).toBe('Delete “Deep note”?')
+    expect(itemPrompt?.message).toContain('“Deep note”')
+    expect(itemPrompt?.confirmLabel).toContain('permanently')
+
+    const folderPrompt = describeDelete(folder, nested, nestedItems)
+    expect(folderPrompt?.message).toContain('3 folders')
+    expect(folderPrompt?.message).toContain('2 items')
+    expect(folderPrompt?.confirmLabel).toContain('Delete folder and contents')
+  })
+
+  it('has nothing to say about a target that is no longer there', () => {
+    const request: PendingDelete = { kind: 'folder', id: 'gone' }
+
+    expect(describeDelete(request, nested, nestedItems)).toBe(null)
+    expect(describeDelete({ kind: 'item', id: 'gone' }, nested, nestedItems)).toBe(null)
   })
 })

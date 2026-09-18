@@ -12,6 +12,7 @@ import {
   SIGNALING_WS_URL,
   buildNewSessionUrl,
   buildSessionUrl,
+  buildTurnCredentialsUrl,
   toHttpBase,
 } from './config'
 
@@ -40,6 +41,16 @@ describe('signaling endpoint construction', () => {
 
   it('builds the session-creation URL against the derived HTTP base', () => {
     expect(buildNewSessionUrl()).toBe(`${SIGNALING_HTTP_URL}/session/new`)
+  })
+
+  it('builds the turn-credentials URL against the derived HTTP base', () => {
+    expect(buildTurnCredentialsUrl('A7X3K9P2')).toBe(`${SIGNALING_HTTP_URL}/session/A7X3K9P2/turn`)
+  })
+
+  it('percent-encodes the session code in the turn-credentials URL', () => {
+    expect(buildTurnCredentialsUrl('a b/c')).toBe(
+      `${SIGNALING_HTTP_URL}/session/${encodeURIComponent('a b/c')}/turn`,
+    )
   })
 })
 

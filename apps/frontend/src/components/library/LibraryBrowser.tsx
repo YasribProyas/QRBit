@@ -26,6 +26,15 @@
  * The Root row is the browser's own node rather than a `FolderNode`: the root is not a
  * `LibraryFolder` (every folder has a `parentId`, and PLAN.md §6.3 spells the root as
  * `null`), so there is no folder to hand a `FolderNode`.
+ *
+ * Every delete is confirmed first (Phase 5 review P2). PLAN.md §6.3's `deleteFolder` is
+ * "a folder tree dies whole": one mis-tap on a phone used to take the folder, every
+ * folder nested inside it and every item in all of them out of IndexedDB, permanently,
+ * with nothing to undo it from — the library never leaves the device, so there is no
+ * server copy and no trash. The gate is the only new behaviour: the browser counts the
+ * doomed subtree from the props it already has, hands `ConfirmDelete` the numbers, and on
+ * confirmation calls exactly the same prop, with the same id, that it used to call on
+ * click. Nothing about the cascade, the selection or the root changes.
  */
 
 import { useEffect, useState } from 'react'
@@ -34,6 +43,7 @@ import type { LibraryFolder } from './FolderNode'
 import { LibraryItemRow } from './LibraryItemRow'
 import type { LibraryItem } from './LibraryItemRow'
 import { NewFolderModal } from './NewFolderModal'
+import { ConfirmDelete } from '../ConfirmDelete'
 
 export interface LibraryBrowserProps {
   folders: LibraryFolder[]
@@ -102,6 +112,104 @@ function byMostRecent(a: LibraryItem, b: LibraryItem): number {
   return 0
 }
 
+/** What a folder delete would cost, counted over the flat lists the store hands down. */
+export interface DeleteImpact {
+  /** Folder rows destroyed: the named folder plus every folder nested inside it. */
+  folders: number
+  /** Items destroyed, at any depth. */
+  items: number
+}
+
+/**
+ * Counts the subtree a folder delete takes with it.
+ *
+ * PLAN.md §6.3's `deleteFolder` walks the same parent links in IndexedDB — "a folder tree
+ * dies whole", because an item whose folder is gone would be unreachable — so the warning
+ * can only be truthful if it counts the same way. The folder itself is included: it is
+ * destroyed too. The browser already has every folder and every item as props, so this is
+ * arithmetic on those, not a second read of the database.
+ */
+export function folderDeleteImpact(
+  folders: LibraryFolder[],
+  items: LibraryItem[],
+  folderId: string,
+): DeleteImpact {
+  const doomed = new Set<string>([folderId])
+
+  /*
+   * A Set's iterator visits values added during iteration, so widening `doomed` in place
+   * walks the whole tree without a queue of its own. The `has` guard is what makes a
+   * malformed cycle in the stored parent links terminate instead of looping forever.
+   */
+  for (const ancestor of doomed) {
+    for (const folder of folders) {
+      if (folder.parentId === ancestor && !doomed.has(folder.id)) doomed.add(folder.id)
+    }
+  }
+
+  let itemCount = 0
+  for (const item of items) {
+    if (doomed.has(item.folderId)) itemCount += 1
+  }
+
+  return { folders: doomed.size, items: itemCount }
+}
+
+/** The delete the user asked for, by id. `null` in state means no dialog is open. */
+export type PendingDelete = { kind: 'folder'; id: string } | { kind: 'item'; id: string }
+
+/** The words `ConfirmDelete` shows for one pending delete. */
+export interface DeletePrompt {
+  title: string
+  message: string
+  confirmLabel: string
+}
+
+/**
+ * The prompt for a pending delete, read from the live props.
+ *
+ * Derived on every render rather than frozen when the dialog opened, so the counts the
+ * user is about to act on are the counts the library has now. It returns `null` when the
+ * target is gone — the folder was deleted from another tab while the question was up —
+ * which drops the dialog instead of letting it quote a subtree that no longer exists.
+ */
+export function describeDelete(
+  request: PendingDelete,
+  folders: LibraryFolder[],
+  items: LibraryItem[],
+): DeletePrompt | null {
+  if (request.kind === 'item') {
+    const item = items.find((candidate) => candidate.id === request.id)
+    if (item === undefined) return null
+
+    // PLAN.md §6.4's item delete takes one thing, so the name is the whole warning.
+    return {
+      title: `Delete “${item.name}”?`,
+      message: `“${item.name}” will be permanently deleted from this device. This cannot be undone.`,
+      confirmLabel: 'Delete item permanently',
+    }
+  }
+
+  const folder = folders.find((candidate) => candidate.id === request.id)
+  if (folder === undefined) return null
+
+  const impact = folderDeleteImpact(folders, items, folder.id)
+  return {
+    title: `Delete “${folder.name}”?`,
+    message:
+      `This permanently deletes ${countNouns(impact.folders, 'folder')} and ` +
+      `${countNouns(impact.items, 'item')} from this device — “${folder.name}” and every ` +
+      'folder and file nested inside it. This cannot be undone.',
+    confirmLabel: 'Delete folder and contents permanently',
+  }
+}
+
+/** "2 folders", "1 folder", "no items" — the phrasing the cascade warning is read in. */
+function countNouns(count: number, noun: string): string {
+  if (count === 0) return `no ${noun}s`
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
 export function LibraryBrowser({
   folders,
   items,
@@ -121,6 +229,7 @@ export function LibraryBrowser({
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [newFolderOpen, setNewFolderOpen] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
 
   /*
    * Reports the selection upward on every change, including the empty ones
@@ -165,6 +274,34 @@ export function LibraryBrowser({
     setSelectedIds([])
   }
 
+  /*
+   * The delete gate (Phase 5 review P2). Both handlers only record what was asked for;
+   * the row and folder menus keep their own behaviour, including leaving multi-select
+   * when a menu opens.
+   */
+  const askToDeleteFolder = (id: string): void => {
+    setPendingDelete({ kind: 'folder', id })
+  }
+
+  const askToDeleteItem = (id: string): void => {
+    setPendingDelete({ kind: 'item', id })
+  }
+
+  const cancelPendingDelete = (): void => {
+    setPendingDelete(null)
+  }
+
+  /** The one path to a deletion: the same props, called with the same ids as before. */
+  const confirmPendingDelete = (): void => {
+    if (pendingDelete === null) return
+    if (pendingDelete.kind === 'folder') {
+      onDeleteFolder(pendingDelete.id)
+    } else {
+      onDeleteItem(pendingDelete.id)
+    }
+    setPendingDelete(null)
+  }
+
   const sendSelected = (): void => {
     if (selectedIds.length === 0) return
     onSendItems(selectedIds)
@@ -182,6 +319,7 @@ export function LibraryBrowser({
   const currentName = currentFolder?.name ?? 'Root'
   const libraryEmpty = folders.length === 0 && items.length === 0
   const rootSelected = currentFolder === undefined
+  const deletePrompt = pendingDelete === null ? null : describeDelete(pendingDelete, folders, items)
 
   return (
     <div className="library-browser">
@@ -292,7 +430,7 @@ export function LibraryBrowser({
                 currentFolderId={currentFolderId}
                 onSelectFolder={onSelectFolder}
                 onRenameFolder={onRenameFolder}
-                onDeleteFolder={onDeleteFolder}
+                onDeleteFolder={askToDeleteFolder}
               />
             ))}
           </ul>
@@ -312,7 +450,7 @@ export function LibraryBrowser({
                 }}
                 onRename={onRenameItem}
                 onMove={onMoveItem}
-                onDelete={onDeleteItem}
+                onDelete={askToDeleteItem}
                 onSend={(id) => {
                   onSendItems([id])
                 }}
@@ -334,6 +472,16 @@ export function LibraryBrowser({
           onClose={() => {
             setNewFolderOpen(false)
           }}
+        />
+      ) : null}
+
+      {deletePrompt !== null ? (
+        <ConfirmDelete
+          title={deletePrompt.title}
+          message={deletePrompt.message}
+          confirmLabel={deletePrompt.confirmLabel}
+          onConfirm={confirmPendingDelete}
+          onCancel={cancelPendingDelete}
         />
       ) : null}
     </div>

@@ -62,9 +62,11 @@ export function isItemMessage(message: WireMessage): boolean {
 export const FILE_PUMP_BUFFER_THRESHOLD = 256 * 1024
 
 export interface PeerConnectionOptions {
-  /** Short-lived TURN credential issued by the signaling worker (PLAN.md §13). */
+  /** Short-lived TURN credential issued by the signaling worker (PLAN.md §13, ORCHESTRATION.md D10). */
   turnUsername?: string
   turnCredential?: string
+  /** Authoritative TURN server URLs supplied with credentials (ORCHESTRATION.md D11). */
+  turnUrls?: readonly string[] | string[]
 }
 
 /** DataChannel label for the main control/data channel. */
@@ -92,7 +94,21 @@ const TURN_URLS: readonly string[] = [
 ]
 
 /**
- * Builds the ICE server list (PLAN.md §12).
+ * Detects port 53 URLs (DNS port).
+ *
+ * Browsers block port 53 to prevent DNS collision attacks. The signaling worker
+ * filters these out, but we defend in depth here since the URL list is server-supplied.
+ */
+function isPort53(url: string): boolean {
+  return /:53(?:\?|\/|$)/.test(url)
+}
+
+/**
+ * Builds the ICE server list (PLAN.md §12, ORCHESTRATION.md D11).
+ *
+ * Prefers the URLs supplied with the credentials from Cloudflare, and falls back to
+ * the existing hardcoded array when none are supplied. Defends in depth by filtering
+ * out any port 53 URLs.
  *
  * When the worker has not issued TURN credentials, this returns STUN only.
  * Advertising a TURN server with empty credentials is worse than omitting it:
@@ -100,13 +116,19 @@ const TURN_URLS: readonly string[] = [
  * traversal entirely rather than just losing the relay fallback.
  */
 export function buildIceServers(options: PeerConnectionOptions = {}): RTCIceServer[] {
-  const { turnUsername, turnCredential } = options
+  const { turnUsername, turnCredential, turnUrls } = options
   if (!turnUsername || !turnCredential) {
     return STUN_SERVERS.map((server) => ({ ...server }))
   }
+
+  const filteredUrls = turnUrls?.filter(
+    (url) => typeof url === 'string' && url.trim() !== '' && !isPort53(url),
+  )
+  const urls = filteredUrls && filteredUrls.length > 0 ? [...filteredUrls] : [...TURN_URLS]
+
   return [
     ...STUN_SERVERS.map((server) => ({ ...server })),
-    { urls: [...TURN_URLS], username: turnUsername, credential: turnCredential },
+    { urls: [...urls], username: turnUsername, credential: turnCredential },
   ]
 }
 

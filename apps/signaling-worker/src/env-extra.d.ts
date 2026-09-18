@@ -10,8 +10,13 @@
 // the SESSION Durable Object binding).
 
 interface Env {
-  /** Set with `wrangler secret put TURN_SECRET`. Absent in local dev. */
-  TURN_SECRET?: string
+  /**
+   * Realtime TURN key identifier (wrangler.toml [vars]).
+   * Declared optional here because worker-configuration.d.ts was generated before TURN_KEY_ID was declared.
+   */
+  TURN_KEY_ID?: string
+  /** Set with `wrangler secret put TURN_KEY_SECRET`. Absent in local dev. */
+  TURN_KEY_SECRET?: string
   /**
    * Comma-separated CORS allowlist for /session/new. Optional: when absent the
    * worker falls back to the Vite dev origin so local development works unconfigured.

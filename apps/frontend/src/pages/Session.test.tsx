@@ -275,7 +275,7 @@ describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
   })
 
   it('joins the pre-minted host code Home handed over in router state', () => {
-    const hostSession = { code: 'ABCDEFGH', turnCredentials: { username: 'u', credential: 'c' } }
+    const hostSession = { code: 'ABCDEFGH' }
     mocked.current = makeResult({ role: 'host', sessionCode: 'ABCDEFGH' })
 
     renderSession({ pathname: '/session', state: { hostSession } })
@@ -283,7 +283,7 @@ describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
     // One user intent, one session: the hook is told which code to join, so it never mints
     // a second one behind the QR the peer already scanned.
     expect(mocked.options?.code).toBe(null)
-    expect(mocked.options?.hostSession).toEqual(hostSession)
+    expect(mocked.options?.hostSession).toEqual({ code: 'ABCDEFGH' })
   })
 
   it('ignores a host bundle on a ?code= (guest) navigation', () => {
@@ -307,18 +307,18 @@ describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
     expect(mocked.options?.hostSession).toBe(null)
   })
 
-  it('drops TURN credentials that are not a pair of strings', () => {
+  it('ignores TURN credentials on router state since credentials come from the turn route (ORCHESTRATION.md D10)', () => {
     mocked.current = makeResult({ role: 'host' })
 
     renderSession({
       pathname: '/session',
-      state: { hostSession: { code: 'ABCDEFGH', turnCredentials: { username: 7 } } },
+      state: { hostSession: { code: 'ABCDEFGH', turnCredentials: { username: 'u', credential: 'c' } } },
     })
 
     expect(mocked.options?.hostSession).toEqual({ code: 'ABCDEFGH' })
   })
 
-  it('shows the share landing hint when a shared file was not captured (PLAN.md §15)', () => {
+  it('shows the share landing hint when a shared file was not captured (PLAN.md §15, ORCHESTRATION.md D12)', () => {
     mocked.current = makeResult({ role: 'host' })
 
     const element = renderSession('/session?share=1')
@@ -326,7 +326,70 @@ describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
     expect(element.querySelector('.session-share')).not.toBe(null)
     expect(element.textContent).toContain('was not captured')
     expect(element.textContent).toContain('add it from the board')
+    expect(element.textContent).toContain('Text and link sharing work directly')
+    expect(element.textContent).toContain('documented limitation')
+    expect(element.textContent).not.toContain('file capture works')
     expect(mocked.options?.code).toBe(null)
+  })
+
+  it('composes a text item ready to send when ?text is present on mount in active phase (ORCHESTRATION.md D12)', () => {
+    const addTextItem = vi.fn()
+    mocked.current = makeResult({ role: 'host', phase: 'active', addTextItem })
+
+    renderSession('/session?text=Hello%20shared%20world')
+
+    expect(addTextItem).toHaveBeenCalledWith('Hello shared world')
+    // A share landing with no ?code is a host session
+    expect(mocked.options?.code).toBe(null)
+  })
+
+  it('composes a text item ready to send when ?url is present on mount (ORCHESTRATION.md D12)', () => {
+    const addTextItem = vi.fn()
+    mocked.current = makeResult({ role: 'host', phase: 'active', addTextItem })
+
+    renderSession('/session?url=https%3A%2F%2Fexample.com%2Fdocs')
+
+    expect(addTextItem).toHaveBeenCalledWith('https://example.com/docs')
+  })
+
+  it('composes a text item ready to send when ?title is present on mount (ORCHESTRATION.md D12)', () => {
+    const addTextItem = vi.fn()
+    mocked.current = makeResult({ role: 'host', phase: 'active', addTextItem })
+
+    renderSession('/session?title=Important%20Link')
+
+    expect(addTextItem).toHaveBeenCalledWith('Important Link')
+  })
+
+  it('prefers url > text > title when multiple share params are present (ORCHESTRATION.md D12)', () => {
+    const addTextItem = vi.fn()
+    mocked.current = makeResult({ role: 'host', phase: 'active', addTextItem })
+
+    renderSession(
+      '/session?title=Title&text=Some%20text&url=https%3A%2F%2Fpreferred.example.com',
+    )
+
+    expect(addTextItem).toHaveBeenCalledWith('https://preferred.example.com')
+  })
+
+  it('prefers text > title when url is absent (ORCHESTRATION.md D12)', () => {
+    const addTextItem = vi.fn()
+    mocked.current = makeResult({ role: 'host', phase: 'active', addTextItem })
+
+    renderSession('/session?title=My%20Title&text=My%20Text')
+
+    expect(addTextItem).toHaveBeenCalledWith('My Text')
+  })
+
+  it('shows shared text preview and does not send before session becomes active', () => {
+    const addTextItem = vi.fn()
+    mocked.current = makeResult({ role: 'host', phase: 'connecting', addTextItem })
+
+    const element = renderSession('/session?text=Pending%20share%20note')
+
+    expect(addTextItem).not.toHaveBeenCalled()
+    expect(element.querySelector('.session-share-pending')).not.toBe(null)
+    expect(element.textContent).toContain('Pending share note')
   })
 
   it('does not show the share hint on an ordinary session URL', () => {

@@ -47,6 +47,10 @@ export interface LibraryItemBase {
   type: LibraryItemType
   createdAt: number
   updatedAt: number
+  /** True when stored blob data failed integrity check or Safari IDB serialization. */
+  corrupt?: boolean
+  /** Human-readable error message when the item could not be loaded. */
+  error?: string
 }
 
 export interface LibraryTextItem extends LibraryItemBase {
@@ -65,6 +69,8 @@ export interface LibraryImageItem extends LibraryItemBase {
   blob: Blob
   mimeType: string
   size: number
+  corrupt?: boolean
+  error?: string
 }
 
 export interface LibraryFileItem extends LibraryItemBase {
@@ -72,6 +78,8 @@ export interface LibraryFileItem extends LibraryItemBase {
   blob: Blob
   mimeType: string
   size: number
+  corrupt?: boolean
+  error?: string
 }
 
 export interface LibraryLockedItem extends LibraryItemBase {
@@ -194,8 +202,8 @@ const BASE_FIELDS: readonly string[] = ['id', 'folderId', 'name', 'type', 'creat
 const TYPE_FIELDS: Record<LibraryItemType, readonly string[]> = {
   text: ['content'],
   richtext: ['content'],
-  image: ['blob', 'mimeType', 'size'],
-  file: ['blob', 'mimeType', 'size'],
+  image: ['blob', 'mimeType', 'size', 'corrupt', 'error'],
+  file: ['blob', 'mimeType', 'size', 'corrupt', 'error'],
   locked: ['label', 'innerType', 'ciphertext', 'iv', 'salt'],
 }
 
@@ -326,18 +334,53 @@ function assertKnownFields(record: Record<string, unknown>, fields: readonly str
 function readBlobFields(
   record: Record<string, unknown>,
   type: 'image' | 'file',
-): { blob: Blob; mimeType: string; size: number } {
+  mode: 'read' | 'write' = 'write',
+): { blob: Blob; mimeType: string; size: number; corrupt?: boolean; error?: string } {
   const what = `${type} item`
-  const mimeType = readString(record, 'mimeType', what)
-  const blob = readBlob(record, 'blob', what, mimeType)
-  const size = record['size']
-  if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
-    throw new Error(`library: ${what} needs a non-negative integer "size"`)
+
+  if (mode === 'write') {
+    const mimeType = readString(record, 'mimeType', what)
+    const blob = readBlob(record, 'blob', what, mimeType)
+    const size = record['size']
+    if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`library: ${what} needs a non-negative integer "size"`)
+    }
+    if (size !== blob.size) {
+      throw new Error(`library: ${what} declares size ${size} but its blob holds ${blob.size} bytes`)
+    }
+    return { blob, mimeType, size }
   }
-  if (size !== blob.size) {
-    throw new Error(`library: ${what} declares size ${size} but its blob holds ${blob.size} bytes`)
+
+  // mode === 'read'
+  // On READ: defensive fallback against older Safari (storing Blob as empty object {})
+  // or corrupted storage where blob is missing or its size disagrees with the stored size.
+  const mimeType = typeof record['mimeType'] === 'string' ? record['mimeType'] : ''
+  const rawBlob = record['blob']
+  const rawSize = record['size']
+  const hasStoredSize = typeof rawSize === 'number' && Number.isSafeInteger(rawSize) && rawSize >= 0
+
+  let blob: Blob | null = null
+  try {
+    blob = readBlob(record, 'blob', what, mimeType)
+  } catch {
+    blob = null
   }
-  return { blob, mimeType, size }
+
+  if (blob === null || (hasStoredSize && blob.size !== rawSize)) {
+    return {
+      blob: blob ?? new Blob([], { type: mimeType }),
+      mimeType,
+      size: hasStoredSize ? rawSize : 0,
+      corrupt: true,
+      error: 'This item could not be loaded',
+    }
+  }
+
+  return {
+    blob,
+    mimeType,
+    size: hasStoredSize ? rawSize : blob.size,
+  }
 }
 
 /**
@@ -347,7 +390,7 @@ function readBlobFields(
  * shape written and the shape read cannot drift. An empty `content` is valid — an
  * empty note is a real item — but a missing or non-string `content` is not.
  */
-function parseItem(value: unknown): LibraryItem {
+function parseItem(value: unknown, mode: 'read' | 'write' = 'write'): LibraryItem {
   if (!isRecord(value)) throw new Error('library: an item must be an object')
 
   const type = value['type']
@@ -385,9 +428,9 @@ function parseItem(value: unknown): LibraryItem {
         content: readString(value, 'content', what),
       }
     case 'image':
-      return { id, folderId, name, type: 'image', createdAt, updatedAt, ...readBlobFields(value, 'image') }
+      return { id, folderId, name, type: 'image', createdAt, updatedAt, ...readBlobFields(value, 'image', mode) }
     case 'file':
-      return { id, folderId, name, type: 'file', createdAt, updatedAt, ...readBlobFields(value, 'file') }
+      return { id, folderId, name, type: 'file', createdAt, updatedAt, ...readBlobFields(value, 'file', mode) }
     case 'locked': {
       const innerType = value['innerType']
       if (!isLockedInnerType(innerType)) {
@@ -613,7 +656,7 @@ function collectSubtree(folders: readonly LibraryFolder[], rootId: string): Set<
 export async function getItemsInFolder(folderId: string): Promise<LibraryItem[]> {
   const target = requireId(folderId, 'getItemsInFolder')
   const db = await getDatabase()
-  const items = (await db.getAllFromIndex('items', 'folderId', target)).map(parseItem)
+  const items = (await db.getAllFromIndex('items', 'folderId', target)).map((item) => parseItem(item, 'read'))
   return items.sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
 }
 
@@ -622,12 +665,12 @@ export async function getItem(id: string): Promise<LibraryItem | undefined> {
   const itemId = requireId(id, 'getItem')
   const db = await getDatabase()
   const stored = await db.get('items', itemId)
-  return stored === undefined ? undefined : parseItem(stored)
+  return stored === undefined ? undefined : parseItem(stored, 'read')
 }
 
 /** Create or overwrite by id (the library id is the store's key). */
 export async function saveItem(item: LibraryItem): Promise<void> {
-  await putItem(parseItem(item))
+  await putItem(parseItem(item, 'write'))
 }
 
 /** The write half of `saveItem`, for callers that already hold a parsed item. */
@@ -667,7 +710,9 @@ export async function updateItem(id: string, patch: Partial<LibraryItem>): Promi
     throw new Error(`library: an item's createdAt is immutable`)
   }
 
-  const updated = parseItem(merged)
+  const parsedExisting = parseItem(existing, 'read')
+  const mode = 'blob' in patch && patch.blob !== undefined ? 'write' : parsedExisting.corrupt ? 'read' : 'write'
+  const updated = parseItem(merged, mode)
   await requireFolder(tx, updated.folderId)
   await store.put(updated)
   await tx.done
@@ -699,8 +744,18 @@ export async function moveItem(id: string, targetFolderId: string): Promise<void
   const existing = await store.get(itemId)
   if (existing === undefined) throw new Error(`library: no item with id "${itemId}"`)
 
-  await store.put(parseItem({ ...existing, folderId: target, updatedAt: Date.now() }))
+  const parsedExisting = parseItem(existing, 'read')
+  const mode = parsedExisting.corrupt ? 'read' : 'write'
+  await store.put(parseItem({ ...existing, folderId: target, updatedAt: Date.now() }, mode))
   await tx.done
+}
+
+/**
+ * Returns true if the library item could not be fully loaded from storage
+ * (e.g. an older Safari IndexedDB Blob serialization failure or size mismatch).
+ */
+export function isItemCorrupt(item: LibraryItem): boolean {
+  return item.corrupt === true
 }
 
 // ---------------------------------------------------------------------------
@@ -722,6 +777,7 @@ export async function saveFromSession(item: SessionItem, folderId: string): Prom
   const target = requireId(folderId, 'saveFromSession')
   const converted = parseItem(
     libraryItemFromSession(item, globalThis.crypto.randomUUID(), target, Date.now()),
+    'write',
   )
   await putItem(converted)
   return converted

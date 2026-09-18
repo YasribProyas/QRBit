@@ -445,29 +445,66 @@ export async function decryptExport(
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
+const BASE64_CODES = new Uint8Array([...BASE64_ALPHABET].map((char) => char.charCodeAt(0)))
+const EQUALS_CODE = 61 // '=' in ASCII
+
 const BASE64_LOOKUP: ReadonlyMap<string, number> = new Map(
   [...BASE64_ALPHABET].map((char, index): [string, number] => [char, index]),
 )
 
+const BASE64_CHUNK_BYTES = 49152 // 16384 * 3 bytes -> 65536 base64 chars
+const TEXT_DECODER = new TextDecoder()
+
 /** Encodes bytes as standard (padded) base64. Implemented directly rather than
  * through `btoa` so the browser, the worker and the node test run all take the
- * same code path. */
+ * same code path. Emits output in 64 KiB chunks via TextDecoder to minimize
+ * intermediate string allocations for multi-megabyte payloads. */
 export function toBase64(bytes: ArrayBuffer | Uint8Array): string {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
-  let encoded = ''
-  for (let i = 0; i < view.length; i += 3) {
-    const first = view[i] ?? 0
-    const second = view[i + 1]
-    const third = view[i + 2]
-    encoded += BASE64_ALPHABET.charAt(first >> 2)
-    encoded += BASE64_ALPHABET.charAt(((first & 0x03) << 4) | ((second ?? 0) >> 4))
-    encoded +=
-      second === undefined
-        ? '='
-        : BASE64_ALPHABET.charAt(((second & 0x0f) << 2) | ((third ?? 0) >> 6))
-    encoded += third === undefined ? '=' : BASE64_ALPHABET.charAt(third & 0x3f)
+  const totalLength = view.length
+  if (totalLength === 0) return ''
+
+  const chunks: string[] = []
+  const maxChunkOutput = (BASE64_CHUNK_BYTES / 3) * 4
+  const chunkBuffer = new Uint8Array(Math.min(maxChunkOutput, Math.ceil(totalLength / 3) * 4))
+
+  for (let i = 0; i < totalLength; i += BASE64_CHUNK_BYTES) {
+    const chunkEnd = Math.min(i + BASE64_CHUNK_BYTES, totalLength)
+    const chunkLen = chunkEnd - i
+    const extra = chunkLen % 3
+    const mainEnd = chunkEnd - extra
+    let outIdx = 0
+
+    for (let j = i; j < mainEnd; j += 3) {
+      const b0 = view[j] ?? 0
+      const b1 = view[j + 1] ?? 0
+      const b2 = view[j + 2] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[b0 >> 2] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[((b0 & 3) << 4) | (b1 >> 4)] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[((b1 & 15) << 2) | (b2 >> 6)] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[b2 & 63] ?? 0
+    }
+
+    if (extra === 1) {
+      const b0 = view[mainEnd] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[b0 >> 2] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[(b0 & 3) << 4] ?? 0
+      chunkBuffer[outIdx++] = EQUALS_CODE
+      chunkBuffer[outIdx++] = EQUALS_CODE
+    } else if (extra === 2) {
+      const b0 = view[mainEnd] ?? 0
+      const b1 = view[mainEnd + 1] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[b0 >> 2] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[((b0 & 3) << 4) | (b1 >> 4)] ?? 0
+      chunkBuffer[outIdx++] = BASE64_CODES[(b1 & 15) << 2] ?? 0
+      chunkBuffer[outIdx++] = EQUALS_CODE
+    }
+
+    const slice = outIdx === chunkBuffer.length ? chunkBuffer : chunkBuffer.subarray(0, outIdx)
+    chunks.push(TEXT_DECODER.decode(slice))
   }
-  return encoded
+
+  return chunks.length === 1 ? (chunks[0] ?? '') : chunks.join('')
 }
 
 function decodeBase64Char(char: string, index: number): number {

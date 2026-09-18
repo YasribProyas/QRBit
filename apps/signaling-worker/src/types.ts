@@ -6,6 +6,15 @@
 export type SessionRole = 'host' | 'guest'
 
 export interface TurnCredentials {
+  iceServers: string[]
+  urls: string[]
+  username: string
+  credential: string
+}
+
+export interface SessionTurnResponse {
+  iceServers: string[]
+  urls: string[]
   username: string
   credential: string
 }
@@ -44,7 +53,6 @@ export type SignalingMessage =
 
 export interface SessionNewResponse {
   code: string
-  turnCredentials?: TurnCredentials
 }
 
 export function isSessionRole(value: unknown): value is SessionRole {

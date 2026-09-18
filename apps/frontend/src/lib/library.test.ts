@@ -26,6 +26,7 @@ import {
   getFolders,
   getItem,
   getItemsInFolder,
+  isItemCorrupt,
   moveItem,
   renameFolder,
   ROOT_FOLDER_ID,
@@ -995,6 +996,133 @@ describe('bytes and blobs through IndexedDB', () => {
     expect(stored.blob).toBeInstanceOf(Blob)
     expect(stored.blob.type).toBe('image/png')
     expect(new Uint8Array(await stored.blob.arrayBuffer())).toEqual(data)
+  })
+
+  describe('Safari / IndexedDB Blob persistence fallback', () => {
+    it('gracefully handles the broken-Safari shape where blob is stored as an empty object', async () => {
+      const id = 'safari-broken-blob'
+      await saveItem(textItem())
+      await withRawDatabase(async (db) => {
+        await idbRequest(
+          db.transaction('items', 'readwrite').objectStore('items').put({
+            id,
+            folderId: ROOT_FOLDER_ID,
+            name: 'photo.jpg',
+            type: 'image',
+            createdAt: NOW,
+            updatedAt: NOW,
+            mimeType: 'image/jpeg',
+            size: 4096,
+            blob: {}, // Older Safari bug: stored Blob reads back as an empty plain object
+          }),
+        )
+      })
+
+      // Must not throw or crash on single item read
+      const item = await getItem(id)
+      expect(item).toBeDefined()
+      expect(item?.type).toBe('image')
+      expect(item?.name).toBe('photo.jpg')
+      expect(item?.type === 'image' && item.size).toBe(4096)
+      expect(item?.corrupt).toBe(true)
+      expect(item?.error).toBe('This item could not be loaded')
+      expect(isItemCorrupt(item!)).toBe(true)
+      expect((item as LibraryImageItem).blob).toBeInstanceOf(Blob)
+
+      // Must not throw or crash when reading all items in folder
+      const folderItems = await getItemsInFolder(ROOT_FOLDER_ID)
+      const found = folderItems.find((i) => i.id === id)
+      expect(found).toBeDefined()
+      expect(found?.corrupt).toBe(true)
+      expect(found?.error).toBe('This item could not be loaded')
+
+      // Renaming or moving the broken item still works without crashing
+      await updateItem(id, { name: 'photo-renamed.jpg' })
+      const updated = await getItem(id)
+      expect(updated?.name).toBe('photo-renamed.jpg')
+      expect(updated?.corrupt).toBe(true)
+    })
+
+    it('surfaces an error state when stored blob size disagrees with recorded size', async () => {
+      const id = 'truncated-blob-item'
+      await saveItem(textItem())
+      await withRawDatabase(async (db) => {
+        await idbRequest(
+          db.transaction('items', 'readwrite').objectStore('items').put({
+            id,
+            folderId: ROOT_FOLDER_ID,
+            name: 'document.pdf',
+            type: 'file',
+            createdAt: NOW,
+            updatedAt: NOW,
+            mimeType: 'application/pdf',
+            size: 5000,
+            blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }), // 3 bytes vs 5000 declared
+          }),
+        )
+      })
+
+      const item = await getItem(id)
+      expect(item).toBeDefined()
+      expect(item?.type).toBe('file')
+      expect(item?.corrupt).toBe(true)
+      expect(item?.error).toBe('This item could not be loaded')
+      expect(item?.type === 'file' && item.size).toBe(5000)
+    })
+
+    it('surfaces an error state when blob field is missing or null', async () => {
+      const id = 'missing-blob-item'
+      await saveItem(textItem())
+      await withRawDatabase(async (db) => {
+        await idbRequest(
+          db.transaction('items', 'readwrite').objectStore('items').put({
+            id,
+            folderId: ROOT_FOLDER_ID,
+            name: 'missing.png',
+            type: 'image',
+            createdAt: NOW,
+            updatedAt: NOW,
+            mimeType: 'image/png',
+            size: 1024,
+            blob: null,
+          }),
+        )
+      })
+
+      const item = await getItem(id)
+      expect(item).toBeDefined()
+      expect(item?.corrupt).toBe(true)
+      expect(item?.error).toBe('This item could not be loaded')
+      expect((item as LibraryImageItem).blob).toBeInstanceOf(Blob)
+    })
+
+    it('parses older rows stored without a size field for backward compatibility', async () => {
+      const id = 'older-row-without-size'
+      const testBytes = bytes(48)
+      await saveItem(textItem())
+      await withRawDatabase(async (db) => {
+        await idbRequest(
+          db.transaction('items', 'readwrite').objectStore('items').put({
+            id,
+            folderId: ROOT_FOLDER_ID,
+            name: 'legacy.png',
+            type: 'image',
+            createdAt: NOW,
+            updatedAt: NOW,
+            mimeType: 'image/png',
+            blob: new Blob([testBytes], { type: 'image/png' }),
+            // No size field stored in older schema
+          }),
+        )
+      })
+
+      const item = (await getItem(id)) as LibraryImageItem
+      expect(item).toBeDefined()
+      expect(item.corrupt).toBeUndefined()
+      expect(item.error).toBeUndefined()
+      expect(item.size).toBe(48)
+      expect(new Uint8Array(await item.blob.arrayBuffer())).toEqual(testBytes)
+    })
   })
 })
 

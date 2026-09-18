@@ -260,6 +260,59 @@ describe('buildIceServers (PLAN.md §12)', () => {
 
     expect(buildIceServers()).toEqual([{ urls: STUN_URL }])
   })
+
+  it('prefers server-supplied TURN URLs when provided (ORCHESTRATION.md D11)', () => {
+    const customUrls = [
+      'turns:custom.turn.cloudflare.com:5349',
+      'turns:custom.turn.cloudflare.com:443?transport=tcp',
+    ]
+    const servers = buildIceServers({
+      turnUsername: 'user',
+      turnCredential: 'cred',
+      turnUrls: customUrls,
+    })
+
+    expect(servers).toHaveLength(2)
+    expect(servers[0]?.urls).toBe(STUN_URL)
+    expect(servers[1]?.urls).toEqual(customUrls)
+    expect(servers[1]?.username).toBe('user')
+    expect(servers[1]?.credential).toBe('cred')
+  })
+
+  it('filters out port 53 URLs from server-supplied TURN URLs for defense in depth', () => {
+    const customWith53 = [
+      'turn:turn.cloudflare.com:3478?transport=udp',
+      'turn:turn.cloudflare.com:53?transport=udp',
+      'turn:turn.cloudflare.com:53',
+      'turns:turn.cloudflare.com:5349',
+    ]
+    const servers = buildIceServers({
+      turnUsername: 'user',
+      turnCredential: 'cred',
+      turnUrls: customWith53,
+    })
+
+    expect(servers[1]?.urls).toEqual([
+      'turn:turn.cloudflare.com:3478?transport=udp',
+      'turns:turn.cloudflare.com:5349',
+    ])
+  })
+
+  it('falls back to hardcoded TURN URLs when server-supplied list is empty or only port 53', () => {
+    const emptyServers = buildIceServers({
+      turnUsername: 'user',
+      turnCredential: 'cred',
+      turnUrls: [],
+    })
+    expect(emptyServers[1]?.urls).toEqual(TURN_URLS)
+
+    const only53Servers = buildIceServers({
+      turnUsername: 'user',
+      turnCredential: 'cred',
+      turnUrls: ['turn:turn.cloudflare.com:53?transport=udp', 'turn:turn.cloudflare.com:53'],
+    })
+    expect(only53Servers[1]?.urls).toEqual(TURN_URLS)
+  })
 })
 
 // ---------------------------------------------------------------------------
