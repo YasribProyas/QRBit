@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { LibraryBrowser } from '../components/library/LibraryBrowser'
 import { ManualCodeEntry } from '../components/ManualCodeEntry'
 import { QRScanner } from '../components/QRScanner'
 import { SessionView } from '../components/session/SessionView'
+import { AppLayout } from '../components/layout/AppLayout'
 import { clearLibrarySends, isValidSessionCode, queueLibrarySends, useSession } from '../hooks/useSession'
 import { useLibraryStore } from '../store/libraryStore'
 
@@ -22,12 +23,15 @@ function reportToStore(operation: Promise<unknown>): void {
 /**
  * Home screen (PLAN.md §7, §16 Phase 5/6, ORCHESTRATION.md D13).
  *
+ * Upgraded with Mantine UI: Dual-Pane responsive layout (Vault on left, Live Session/QR
+ * on right on desktop; mobile-responsive flow with drawer).
+ *
  * Home BECOMES the host: on mount it starts `useSession({ code: null })` which mints
  * a fresh session code and joins the signaling server as host immediately. The QR code
  * and honest status line ("Host — waiting for another device to scan your code") are
  * rendered right here on the home page so a visiting peer gets a joinable QR from the start.
  *
- * Below the QR, the library is visible and usable while waiting. When a peer joins and
+ * Beside the QR, the library is visible and usable while waiting. When a peer joins and
  * pairing begins, the session surface (SessionView) replaces the library view. Once the
  * session ends, Home auto-recovers (or lets the user save received items and tap Start a
  * new session) to mint a fresh live code.
@@ -115,79 +119,80 @@ export function Home() {
     (session.phase === 'ended' && session.receivedItems.length > 0)
 
   return (
-    <main className="page">
-      <header className="page__header">
-        <div>
-          <h1 className="page__title">QRDrop</h1>
-          <p className="muted">No login. No cloud. No trace.</p>
-        </div>
-        <Link className="link" to="/settings">
-          Settings
-        </Link>
-      </header>
-
-      <SessionView session={session} showConnectingCode={!isSessionSurface} />
-
-      {!isSessionSurface ? (
-        <>
-          <h2 className="page__section-title">Your Library</h2>
-          <LibraryBrowser
-            folders={folders}
-            items={items}
-            currentFolderId={currentFolderId}
-            onSelectFolder={setCurrentFolderId}
-            onCreateFolder={async (name, parentId) => {
-              await createFolder(name, parentId)
-            }}
-            onRenameFolder={(id, name) => {
-              reportToStore(renameFolder(id, name))
-            }}
-            onDeleteFolder={(id) => {
-              reportToStore(deleteFolder(id))
-            }}
-            onRenameItem={(id, name) => {
-              reportToStore(renameItem(id, name))
-            }}
-            onMoveItem={(id, targetFolderId) => {
-              reportToStore(moveItem(id, targetFolderId))
-            }}
-            onDeleteItem={(id) => {
-              reportToStore(deleteItem(id))
-            }}
-            onSendItems={sendSelected}
-            onSelectionChange={handleSelectionChange}
-            loading={loading}
-            error={error}
-          />
-
-          <button
-            type="button"
-            className="button home__scan"
-            onClick={() => {
-              setScanning(true)
-            }}
-          >
-            📷 Scan &amp; Send{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
-          </button>
-          <p className="muted">
-            Opens the camera to scan the other device’s code. Anything selected above sends as
-            soon as the session is active — with nothing selected this just joins the session,
-            and you can add items on the board.
-          </p>
-
-          <ManualCodeEntry />
-
-          {scanning ? (
-            <QRScanner
-              onScan={handleScan}
-              onCancel={() => {
-                clearLibrarySends()
-                setScanning(false)
+    <AppLayout
+      session={session}
+      showVault={!isSessionSurface}
+      vaultContent={
+        !isSessionSurface ? (
+          <>
+            <h2 className="page__section-title">Your Library</h2>
+            <LibraryBrowser
+              folders={folders}
+              items={items}
+              currentFolderId={currentFolderId}
+              onSelectFolder={setCurrentFolderId}
+              onCreateFolder={async (name, parentId) => {
+                await createFolder(name, parentId)
               }}
+              onRenameFolder={(id, name) => {
+                reportToStore(renameFolder(id, name))
+              }}
+              onDeleteFolder={(id) => {
+                reportToStore(deleteFolder(id))
+              }}
+              onRenameItem={(id, name) => {
+                reportToStore(renameItem(id, name))
+              }}
+              onMoveItem={(id, targetFolderId) => {
+                reportToStore(moveItem(id, targetFolderId))
+              }}
+              onDeleteItem={(id) => {
+                reportToStore(deleteItem(id))
+              }}
+              onSendItems={sendSelected}
+              onSelectionChange={handleSelectionChange}
+              loading={loading}
+              error={error}
             />
+          </>
+        ) : null
+      }
+      mainContent={
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
+          <SessionView session={session} showConnectingCode={!isSessionSurface} />
+
+          {!isSessionSurface ? (
+            <>
+              <button
+                type="button"
+                className="button home__scan"
+                onClick={() => {
+                  setScanning(true)
+                }}
+              >
+                📷 Scan &amp; Send{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
+              </button>
+              <p className="muted">
+                Opens the camera to scan the other device’s code. Anything selected above sends as
+                soon as the session is active — with nothing selected this just joins the session,
+                and you can add items on the board.
+              </p>
+
+              <ManualCodeEntry />
+
+              {scanning ? (
+                <QRScanner
+                  onScan={handleScan}
+                  onCancel={() => {
+                    clearLibrarySends()
+                    setScanning(false)
+                  }}
+                />
+              ) : null}
+            </>
           ) : null}
-        </>
-      ) : null}
-    </main>
+        </div>
+      }
+    />
   )
 }

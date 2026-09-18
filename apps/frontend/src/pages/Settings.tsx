@@ -2,28 +2,17 @@
  * Settings page (PLAN.md §5, §14, §16 Phase 7) — library export, library import and
  * the library's own size.
  *
- * The page is a thin coordinator. `lib/export.ts` owns the file format, `ExportModal`
- * owns the export choices, and the library store is the only route to IndexedDB; what
- * lives here is the three states the user needs to see: what is in the library, which
- * file is about to be imported and whether it needs a password, and how the last
- * import went.
- *
- * The password field appears only for an encrypted export, and that is decided by
- * reading the file's four-byte header (`isEncryptedExport`) rather than by asking the
- * user or guessing from the name. A plain JSON export therefore imports with no
- * ceremony at all. The password itself is component state for the duration of one
- * import and is cleared as soon as it succeeds or the file changes; it is never
- * stored, logged or sent anywhere.
- *
- * A failed import and a failed export are both rendered inline. `importLibrary`
- * reports per-item problems instead of throwing, so those are listed with the count
- * that did arrive — a partial import is never reported as a clean one.
+ * Upgraded with Mantine UI: sleek cards, clear typographic hierarchy,
+ * refined buttons, and Tabler icons.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Badge, Box, Button, Card, Group, Stack, Text, Title } from '@mantine/core'
+import { IconDatabase, IconDownload, IconFileImport, IconLock, IconShieldCheck } from '@tabler/icons-react'
 
 import { ExportModal } from '../components/ExportModal'
+import { AppLayout } from '../components/layout/AppLayout'
 import { EXPORT_FILE_EXTENSION, importLibrary, isEncryptedExport } from '../lib/export'
 import { useLibraryStore } from '../store/libraryStore'
 
@@ -48,11 +37,6 @@ export function Settings() {
   const [problems, setProblems] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  /*
-   * The header read is asynchronous, so a slow answer for the previous file must not
-   * decide the password field for the current one. A counter, not state: nothing
-   * renders it.
-   */
   const selection = useRef(0)
 
   // The library lives in IndexedDB, so the first render has no stats to show.
@@ -79,8 +63,6 @@ export function Settings() {
       return
     }
 
-    // `accept` is a hint to the file picker, not a rule: anything can still be
-    // dropped onto it, so the extension is checked here too.
     if (!chosen.name.toLowerCase().endsWith(EXPORT_FILE_EXTENSION)) {
       setFile(null)
       setNeedsPassword(false)
@@ -120,8 +102,6 @@ export function Settings() {
       setNeedsPassword(false)
       setHeaderReading(false)
       setPassword('')
-      // The import writes straight to IndexedDB, so the page's stats are re-read
-      // rather than patched with a guess at what the merge did.
       await refresh()
     } catch (cause: unknown) {
       setError(importFailedMessage(cause))
@@ -131,142 +111,175 @@ export function Settings() {
   }
 
   return (
-    <main className="page">
-      <header className="page__header">
-        <Link className="link" to="/">
-          ← QRDrop
-        </Link>
-        <h1 className="page__title">Settings</h1>
-      </header>
+    <AppLayout
+      showVault={false}
+      mainContent={
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
+          <header className="page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Link className="link" to="/" style={{ textDecoration: 'none', color: 'var(--accent)', fontWeight: 550 }}>
+              ← QRDrop
+            </Link>
+            <h1 className="page__title" style={{ margin: 0, fontSize: '1.25rem' }}>
+              Settings
+            </h1>
+          </header>
 
-      <section className="panel">
-        <h2 className="panel__title">Export &amp; import</h2>
-        <p className="muted">
-          Exporting writes the library to one file on this device — nothing is uploaded. Locked
-          items stay encrypted inside that file whether or not you encrypt the file itself
-          (PLAN.md §14).
-        </p>
+          <section className="panel" style={{ background: '#141517', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1.25rem' }}>
+            <Group justify="space-between" mb="xs">
+              <h2 className="panel__title" style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <IconDownload size={18} color="#4ade80" />
+                Export &amp; import
+              </h2>
+            </Group>
+            <p className="muted" style={{ marginBottom: '1rem', color: '#909296', fontSize: '0.875rem' }}>
+              Exporting writes the library to one file on this device — nothing is uploaded. Locked
+              items stay encrypted inside that file whether or not you encrypt the file itself
+              (PLAN.md §14).
+            </p>
 
-        <button type="button" className="button" onClick={() => setExporting(true)}>
-          Export Library
-        </button>
+            <Group gap="sm" mb="md">
+              <button
+                type="button"
+                className="button"
+                onClick={() => setExporting(true)}
+                style={{ flex: 1 }}
+              >
+                Export Library
+              </button>
+            </Group>
 
-        <label className="library-modal__field">
-          <span className="library-modal__field-label">Import Library</span>
-          <input
-            className="library-modal__input"
-            type="file"
-            accept={EXPORT_FILE_EXTENSION}
-            aria-label="Import Library"
-            disabled={busy}
-            onChange={(event) => {
-              const chosen = event.currentTarget.files?.[0] ?? null
-              // Cleared so picking the same file twice in a row still fires a change.
-              event.currentTarget.value = ''
-              chooseFile(chosen)
-            }}
-          />
-        </label>
+            <label className="library-modal__field" style={{ display: 'block', marginTop: '1rem' }}>
+              <span className="library-modal__field-label" style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: '#a6a7ab' }}>
+                Import Library
+              </span>
+              <input
+                className="library-modal__input"
+                type="file"
+                accept={EXPORT_FILE_EXTENSION}
+                aria-label="Import Library"
+                disabled={busy}
+                onChange={(event) => {
+                  const chosen = event.currentTarget.files?.[0] ?? null
+                  event.currentTarget.value = ''
+                  chooseFile(chosen)
+                }}
+                style={{ width: '100%', padding: '0.5rem', background: '#0d0e11', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', color: '#f2f2f2' }}
+              />
+            </label>
 
-        {file !== null ? <p className="muted">{`Chosen file: ${file.name}`}</p> : null}
+            {file !== null ? (
+              <p className="muted" style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
+                {`Chosen file: ${file.name}`}
+              </p>
+            ) : null}
 
-        {needsPassword ? (
-          <label className="library-modal__field">
-            <span className="library-modal__field-label">Password</span>
-            <input
-              className="library-modal__input"
-              type="password"
-              value={password}
-              aria-label="Import password"
-              autoComplete="off"
-              placeholder="Password for this export file"
-              disabled={busy}
-              onChange={(event) => {
-                setPassword(event.target.value)
+            {needsPassword ? (
+              <label className="library-modal__field" style={{ display: 'block', marginTop: '0.75rem' }}>
+                <span className="library-modal__field-label" style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: '#a6a7ab' }}>
+                  Password
+                </span>
+                <input
+                  className="library-modal__input"
+                  type="password"
+                  value={password}
+                  aria-label="Import password"
+                  autoComplete="off"
+                  placeholder="Password for this export file"
+                  disabled={busy}
+                  onChange={(event) => {
+                    setPassword(event.target.value)
+                  }}
+                  style={{ width: '100%', padding: '0.6rem', background: '#0d0e11', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', color: '#f2f2f2' }}
+                />
+              </label>
+            ) : null}
+
+            {file !== null ? (
+              <button
+                type="button"
+                className="button"
+                disabled={busy || headerReading || (needsPassword && password === '')}
+                onClick={() => {
+                  void runImport()
+                }}
+                style={{ marginTop: '0.75rem' }}
+              >
+                {busy ? 'Importing…' : 'Import'}
+              </button>
+            ) : null}
+
+            {status !== null ? (
+              <p className="muted" role="status" style={{ marginTop: '0.5rem', color: '#4ade80' }}>
+                {status}
+              </p>
+            ) : null}
+
+            {problems.length > 0 ? (
+              <ul className="muted" style={{ marginTop: '0.5rem' }}>
+                {problems.map((problem, index) => (
+                  <li key={index}>{problem}</li>
+                ))}
+              </ul>
+            ) : null}
+
+            {error !== null ? (
+              <p className="item-error" role="alert" style={{ marginTop: '0.5rem', color: '#f87171' }}>
+                {error}
+              </p>
+            ) : null}
+          </section>
+
+          <section className="panel" style={{ background: '#141517', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1.25rem' }}>
+            <Group justify="space-between" mb="xs">
+              <h2 className="panel__title" style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <IconDatabase size={18} color="#4ade80" />
+                Library
+              </h2>
+            </Group>
+            {storeError !== null ? (
+              <p className="item-error" role="alert">
+                {storeError}
+              </p>
+            ) : null}
+            <p className="muted">{`Folders: ${folders.length}`}</p>
+            <p className="muted">{`Items: ${items.length}`}</p>
+            <p className="muted">{`File and image data: ${formatBytes(blobBytes)}`}</p>
+          </section>
+
+          <section className="panel" style={{ background: '#141517', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '1.25rem' }}>
+            <h2 className="panel__title" style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <IconShieldCheck size={18} color="#4ade80" />
+              Privacy
+            </h2>
+            <p className="muted" style={{ color: '#909296', fontSize: '0.875rem', lineHeight: 1.6 }}>
+              QRDrop keeps no history. Session data lives in memory only and is
+              discarded when the session ends — it is never written to IndexedDB, the
+              Cache API or localStorage.
+            </p>
+          </section>
+
+          {exporting ? (
+            <ExportModal
+              onClose={() => {
+                setExporting(false)
               }}
             />
-          </label>
-        ) : null}
-
-        {file !== null ? (
-          <button
-            type="button"
-            className="button"
-            disabled={busy || headerReading || (needsPassword && password === '')}
-            onClick={() => {
-              void runImport()
-            }}
-          >
-            {busy ? 'Importing…' : 'Import'}
-          </button>
-        ) : null}
-
-        {status !== null ? (
-          <p className="muted" role="status">
-            {status}
-          </p>
-        ) : null}
-
-        {problems.length > 0 ? (
-          <ul className="muted">
-            {problems.map((problem, index) => (
-              // A report rather than rows with identity: the list has no ids of its
-              // own, and the whole thing is replaced on the next import.
-              <li key={index}>{problem}</li>
-            ))}
-          </ul>
-        ) : null}
-
-        {error !== null ? (
-          <p className="item-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-      </section>
-
-      <section className="panel">
-        <h2 className="panel__title">Library</h2>
-        <p className="muted">{`Folders: ${folders.length}`}</p>
-        <p className="muted">{`Items: ${items.length}`}</p>
-        <p className="muted">{`File and image data: ${formatBytes(blobBytes)}`}</p>
-        {storeError !== null ? (
-          <p className="item-error" role="alert">
-            {storeError}
-          </p>
-        ) : null}
-      </section>
-
-      <section className="panel">
-        <h2 className="panel__title">Privacy</h2>
-        <p className="muted">
-          QRDrop keeps no history. Session data lives in memory only and is
-          discarded when the session ends — it is never written to IndexedDB, the
-          Cache API or localStorage.
-        </p>
-      </section>
-
-      {exporting ? (
-        <ExportModal
-          onClose={() => {
-            setExporting(false)
-          }}
-        />
-      ) : null}
-    </main>
+          ) : null}
+        </div>
+      }
+    />
   )
 }
 
-/** Byte counts for a stats line: exact under 1 KiB, one decimal above it. */
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
 }
 
-function importFailedMessage(cause: unknown): string {
-  // An unknown export version, a wrong password and a foreign file all arrive here
-  // with their own sentence (`lib/export.ts` owns those words) — repeating them is
-  // more useful than a generic wrapper.
-  if (cause instanceof Error && cause.message.trim() !== '') return `Import failed: ${cause.message}`
+function importFailedMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim() !== '') {
+    return `Import failed: ${error.message}`
+  }
   return 'Import failed.'
 }

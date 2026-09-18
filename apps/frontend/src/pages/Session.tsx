@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { AppLayout } from '../components/layout/AppLayout'
 import { SessionView } from '../components/session/SessionView'
 import { useSession } from '../hooks/useSession'
 
@@ -9,6 +10,7 @@ import { useSession } from '../hooks/useSession'
  * Role comes from the URL: `?code=XXXXXXXX` means this device scanned a peer and
  * is the guest; no code means this device is the host whose QR was scanned.
  *
+ * Upgraded with Mantine UI: unified shell header and stealth minimalist styling.
  * The page stays presentational: `SessionView` owns the session surface (status,
  * connecting code panel, board, phrase overlay and end-of-session save flow),
  * while `useSession` owns the handshake.
@@ -50,35 +52,41 @@ export function Session() {
   const sharedFileNotCaptured = searchParams.get('share') === '1'
 
   return (
-    <main className="page">
-      <header className="page__header">
-        <Link className="link" to="/">
-          ← QRDrop
-        </Link>
-        <span className="badge">{session.role ?? 'assigning'}</span>
-      </header>
+    <AppLayout
+      session={session}
+      showVault={false}
+      mainContent={
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
+          <header className="page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Link className="link" to="/" style={{ textDecoration: 'none', color: 'var(--accent)', fontWeight: 550 }}>
+              ← QRDrop
+            </Link>
+            <span className="badge">{session.role ?? 'assigning'}</span>
+          </header>
 
-      {sharedFileNotCaptured ? (
-        <section className="panel panel--error session-share" role="status">
-          <h2 className="panel__title">Your shared file was not captured</h2>
-          <p className="muted">
-            Text and link sharing work directly, but sharing files is a documented limitation
-            that requires an owner decision to relax the no-session-persistence rule. The file
-            was not captured and is still where you shared it from — please add it from the
-            board once the session is open.
-          </p>
-        </section>
-      ) : null}
+          {sharedFileNotCaptured ? (
+            <section className="panel panel--error session-share" role="status">
+              <h2 className="panel__title">Your shared file was not captured</h2>
+              <p className="muted">
+                Text and link sharing work directly, but sharing files is a documented limitation
+                that requires an owner decision to relax the no-session-persistence rule. The file
+                was not captured and is still where you shared it from — please add it from the
+                board once the session is open.
+              </p>
+            </section>
+          ) : null}
 
-      {sharedText && session.phase !== 'active' && session.phase !== 'ended' ? (
-        <section className="panel session-share-pending" aria-label="Shared item ready to send">
-          <h2 className="panel__title">Shared text ready to send</h2>
-          <p className="session-share-pending__text">{sharedText}</p>
-        </section>
-      ) : null}
+          {sharedText && session.phase !== 'active' && session.phase !== 'ended' ? (
+            <section className="panel session-share-pending" aria-label="Shared item ready to send">
+              <h2 className="panel__title">Shared text ready to send</h2>
+              <p className="session-share-pending__text">{sharedText}</p>
+            </section>
+          ) : null}
 
-      <SessionView session={session} />
-    </main>
+          <SessionView session={session} />
+        </div>
+      }
+    />
   )
 }
 

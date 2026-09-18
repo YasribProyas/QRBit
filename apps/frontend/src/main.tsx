@@ -1,9 +1,12 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { MantineProvider } from '@mantine/core'
+import '@mantine/core/styles.css'
 import { Home } from './pages/Home'
 import { Session } from './pages/Session'
 import { Settings } from './pages/Settings'
+import { theme } from './theme'
 import './styles.css'
 
 const container = document.getElementById('root')
@@ -24,13 +27,15 @@ if (container === null) {
  */
 createRoot(container).render(
   <StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/session" element={<Session />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <MantineProvider theme={theme} defaultColorScheme="dark">
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/session" element={<Session />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </MantineProvider>
   </StrictMode>,
 )
