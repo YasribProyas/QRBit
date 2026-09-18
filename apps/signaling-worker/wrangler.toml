@@ -22,7 +22,7 @@ TURN_KEY_ID = ""
 #   3. The pairing contract: the QR encodes the Pages origin, so it must be listed here or
 #      the browser blocks the fetch that creates the session.
 # Add the custom domain here (comma-separated) when it replaces pages.dev.
-ALLOWED_ORIGINS = "https://qrdrop.pages.dev, http://localhost:5173"
+ALLOWED_ORIGINS = "https://qrdrop-app.proyas.workers.dev, http://localhost:5173"
 
 [[durable_objects.bindings]]
 name = "SESSION"
@@ -30,7 +30,12 @@ class_name = "SessionDurableObject"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["SessionDurableObject"]
+# SQLite-backed, which the Workers FREE plan requires for Durable Objects (`new_classes`
+# is the ephemeral-storage form and the API rejects it outright on a free account).
+# PLAN.md §13 already specified SQLite-backed DOs, so this matches the design intent.
+# Safe to rewrite rather than append: nothing has been deployed under this tag yet, and
+# DO class migrations are append-only once live.
+new_sqlite_classes = ["SessionDurableObject"]
 
 # Rate limiting + session-code burn registry (PLAN.md §13, §17).
 [[kv_namespaces]]

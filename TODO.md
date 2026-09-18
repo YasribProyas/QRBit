@@ -1,91 +1,69 @@
-# TODO — things needing manual/owner action
+# TODO — QRDrop
 
-Items the agent cannot complete autonomously. Per AGENTS.md, work continues past these.
+Everything here is genuinely open. Items completed on 2026-09-18 were moved out rather than
+left as stale checkboxes; the git log is the record.
 
-## Blocking real deployment
+## Needs the owner (not automatable from here)
 
-- [ ] **No Cloudflare credentials on this machine.** `wrangler` is installed but
-      unauthenticated (no `~/.wrangler`, no `CLOUDFLARE_API_TOKEN`). Phase 1's
-      "Deploy to Cloudflare Pages + Worker" and Phase 7's live hostile-network
-      TURN testing **cannot be done**. Substituted with local `workerd`
-      verification via `wrangler dev`. Owner must run `wrangler login` and deploy.
-- [ ] **KV namespace ID is a placeholder.** `apps/signaling-worker/wrangler.toml`
-      has `id = "REPLACE_WITH_KV_NAMESPACE_ID"` for the `RATE_LIMIT` binding.
-      Create it with `wrangler kv namespace create RATE_LIMIT` and paste the real
-      id. Rate-limiting code treats the binding as optional so local dev works.
-- [ ] **`TURN_SECRET` not set.** Needed for Cloudflare TURN HMAC tokens
-      (`wrangler secret put TURN_SECRET`).
-- [ ] **Cloudflare TURN endpoint.** PLAN.md §12 hardcodes `turn.cloudflare.com`.
-      Confirm the account's actual TURN hostname + credentials endpoint before
-      Phase 7; Cloudflare TURN is a paid add-on in some plans.
-- [ ] **App URL / domain.** PLAN.md assumes `https://qrdrop.app`. QR codes encode
-      that origin. Set `VITE_APP_URL` per environment before Phase 6.
+- [ ] **Billing alerts at $5 and $20.** Cloudflare dashboard → Billing → Billable Usage.
+      Cloudflare has **no hard spending cap for TURN** — alerts notify, they do not stop the
+      meter. This is the only circuit breaker available, so it is worth doing before the
+      TURN key exists.
+- [ ] **Create the Cloudflare TURN key**, then:
+      `wrangler secret put TURN_KEY_SECRET` and set `TURN_KEY_ID` in
+      `apps/signaling-worker/wrangler.toml`. The `wrangler login` OAuth token does not carry
+      the `calls` API scope, so this cannot be scripted from here. Until then the worker
+      mints no credentials and every session is STUN-only — a degraded connection, not a
+      failure, and deliberately not a hard error.
+- [ ] **Real-device pass (~1 hour).** Nothing here can substitute for it, and it gates
+      "shipped" rather than "code-complete". See README "Testing status" for the specific
+      list: two-device transfer + safety phrase read aloud, TURN on a hotspot, 3 MiB locked
+      item on Safari/Firefox, iOS/Android install + share sheet.
+- [ ] **Custom domain.** When it lands, update `VITE_APP_URL` in
+      `apps/frontend/.env.production` **and** `ALLOWED_ORIGINS` in
+      `apps/signaling-worker/wrangler.toml`, redeploy both, then re-run the origin
+      verification commands in README. Do not assume a hostname is yours because it
+      resolves — `qrdrop.pages.dev` belongs to an unrelated account.
+- [ ] **Choose a license** (README has a placeholder section).
 
-## Model / provider
+## Open engineering items
 
-- [x] Resolved: sub-agents run on `omnirouter/agy/gemini-3.8-flash-high`,
-      fallback `agentrouter-openai/deepseek-v4-flash`. See `ORCHESTRATION.md`.
-- [x] `agentrouter/claude-opus-5`, `agentrouter/gpt-5.6-sol` and
-      `openrouter/*` are all 402 quota/billing-blocked. Not usable as fallback.
+- [ ] **DO-level integration tests.** `@cloudflare/vitest-pool-workers@0.22` peers on
+      vitest ^4.1; this repo is on vitest 5. Either pin the worker package to vitest 4 for a
+      dedicated test project, or drive `miniflare` programmatically under vitest 5. This is
+      the gap that leaves `alarm()` → `destroy()` → `markBurnedInKv()` — the durable
+      burned-code fix — verified by source review and live curl only. Worth closing before
+      any further DO state-machine change.
+- [ ] **Share-target *file* capture.** Needs a deliberate owner decision to carve a bounded
+      exception out of the AGENTS.md rule that session data never touches IndexedDB or the
+      Cache API — a POST body is only readable by a custom service worker, and every way to
+      hand it to the page is one of those two stores. Text/link sharing already works via a
+      GET share target with query params, which needs neither. Currently stated honestly in
+      the UI rather than silently no-oping.
+- [ ] **Large-library export still buffers the whole library.** The base64 encoder is now
+      16× faster with ~14× less heap churn (measured: 4 MiB 694ms→43ms, 170MB→12MB), but
+      `exportLibrary` still assembles the entire manifest in memory before writing. A
+      streaming encoder would matter only once real users have real libraries; leave it
+      until someone hits it.
+- [ ] **`/session/new` allocation is rate-limited per IP but not globally.** A distributed
+      actor could still mint many DOs cheaply (each is one storage write + one alarm).
+      Cloudflare bills DOs on requests + duration, not per-instance, so exposure is small;
+      revisit if the numbers say otherwise.
+- [ ] **`react-router-dom` is not in PLAN.md §4's tech table.** Kept because PLAN.md §8
+      derives session role from URL params, which needs a router. Treated as accepted since
+      deployment proceeded, but it is a spec deviation worth a yes from you.
 
-## Deferred design questions
+## Deliberate decisions, recorded so they don't get "fixed"
 
-- [ ] **Destructive deletes have no confirmation (Phase 5 review P2).** §6.4's menu spec is
-      literal: rename/move/delete send immediately. Folder delete cascades the whole subtree
-      permanently — total data loss on one mis-tap on a phone. Product decision: add a confirm
-      dialog (recommended) or accept spec-literal behaviour. Left as-is tonight; the menu label
-      does disclose the cascade ("Delete folder and contents").
-- [ ] **Save-to-library dialog uses one shared folder picker, not §8 Phase 4's per-item picker.**
-      Per-item targets remain reachable (pick → Save row 1 → re-pick → Save row 2; the dialog stays
-      open), so this is a shape deviation from the spec's wording, not a functional loss. Accepted
-      reading; revisit if the per-item flow feels clumsy in use.
-- [ ] **DataChannel `maxMessageSize` on real devices (Phase 4 review residual).** A locked item is
-      one frame up to ~3 MiB. If a browser rejects it, send() throws and the session ends rather
-      than failing the item. Needs a real-device check (Chrome/Safari/Firefox).
-
-- [ ] **No server-side registry of issued session codes** (Phase 8). `createSession`
-      writes no record; identity is pure `idFromName(code)`. So PLAN.md §17's
-      "expired codes return 404" only holds while the DO instance is alive — after
-      eviction, `restore()` finds no `createdAt`, stamps a fresh one plus a fresh
-      300s alarm, and the same code becomes joinable again. Not exploitable today
-      (a client only joins the code it just minted, so there is no victim), but a
-      paired/burned code is not *durably* burned. Needs a KV/D1 "issued" marker
-      checked in `/session/:code/ws`. Belongs with Phase 8 server-side validation.
-- [ ] **No DO-level integration test** (would need `@cloudflare/vitest-pool-workers`).
-      `session.test.ts` covers the extracted pure state machine only, because
-      `session.ts` imports `cloudflare:workers` which does not resolve under plain
-      vitest. So `openSocket`'s 404/409, `handleSocketClosed` → `releaseRole`,
-      `restore()`/`setAlarm` and `destroy()` — the exact code implementing D1 —
-      are verified by source review and a live `workerd` run, not by the suite.
-      153 green tests do not prove D1 end-to-end. Adding the pool-workers harness is
-      a parent-owned config + dependency change; worth doing before Phase 7 hardening.
-- [ ] **`/session/new` is unmetered.** The 10/min limiter guards only joins, so DO
-      allocation (one storage write + one alarm each) is unbounded per IP. §13 only
-      specified join limiting and Phase 7 covers broader rate limiting.
-
-- [ ] `react-router-dom` was added (not in PLAN.md §4 tech table) because
-      PLAN.md §8 derives session role from URL params. Confirm acceptable.
-- [ ] PLAN.md §12 ICE config lists `turns:turn.cloudflare.com:5349` with a
-      comment "TCP 443", but 5349 is the standard TURNS port. PLAN.md §17 asks
-      for "TURN over TCP 443". Need `turns:...:443?transport=tcp` as well.
-      Flagged for Phase 7.
-- [ ] PLAN.md §6.1 stores `Blob` directly in IndexedDB for library image/file
-      items. Works in IDB, but Phase 5 should confirm Safari's IDB Blob
-      handling and add a fallback if needed.
-
-- [ ] **Share-target file capture needs a custom service worker.** The manifest
-      declares a `share_target` POST to `/session` (PLAN.md §15). The Workbox-generated
-      SW has no handler for this POST: the browser will deliver the share to a SW `fetch`
-      event, but without a custom network-first cache-and-redirect handler the POST body
-      is lost and the user lands on `/session` in the default (host) mode. Session.tsx
-      handles `?share=1` with an honest "not captured" hint rather than silently ignoring
-      it. Full capture requires a custom SW (injecting a `fetch` handler via
-      `vite-plugin-pwa`'s `injectManifest` strategy or a separate sw.ts) — that is a
-      parent config decision. Block on Phase 8 or treat as a known limitation.
-
-- [ ] **Export memory usage for large libraries.** `exportLibrary` serializes all
-      blobs to base64 in-memory (3 bytes → 4 chars at a time) before writing the
-      file. For a library with many large files this will stall the main thread and
-      may OOM on constrained devices. A streaming approach (ReadableStream + Blob
-      constructor) or chunked base64 conversion would fix this; low priority until
-      users hit it in practice (Phase 8 polish or post-launch).
+- [ ] **`saveFolder` and `encryptExport`/`decryptExport` were added in Phase 7** under
+      parent approval — the export format cannot preserve folder ids or encrypt its envelope
+      through the existing API. Not oversights.
+- [ ] **Host must open the session page for its QR to be joinable.** A code left on screen
+      past the 300s TTL goes stale; "New code" and the retry panel are the recovery paths.
+      This follows from Home being the single mint point (D8/D10) and is inherent to it.
+- [ ] **Save-to-library uses one shared folder picker**, not §8 Phase 4's per-item picker.
+      Per-item targets are still reachable (the dialog stays open). Accepted reading.
+- [ ] **PLAN.md §12's `turns:turn.cloudflare.com:5349` annotated "TCP 443"** was resolved by
+      keeping 5349 *and* adding `443?transport=tcp`. Now moot for the shipped path: the ICE
+      list comes from Cloudflare's own credential response (D11), so the hardcoded array is
+      only the STUN-era fallback.

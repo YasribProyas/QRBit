@@ -1,0 +1,20 @@
+name = "qrdrop-app"
+compatibility_date = "2025-01-01"
+
+# The frontend is static assets. Workers static assets are the successor to Cloudflare
+# Pages (Pages projects are now created as Workers), and deploying one under our own
+# `proyas.workers.dev` subdomain is deliberate: the classic `*.pages.dev` namespace is
+# effectively global, and `qrdrop.pages.dev` turned out to be claimed by an unrelated
+# account. Because PLAN.md §8 has the QR code encode the FULL app origin, an origin we
+# do not control would send every scanning phone to somebody else's site — and it would
+# fail quietly, since the CORS and CSP checks below would still look self-consistent.
+#
+# Verify ownership of any origin before encoding it into a QR: mint it, then confirm the
+# served <title> is "QRDrop" and not a framework default.
+[assets]
+directory = "./dist"
+
+# PLAN.md §8/§16: /session?code=XXXXXXXX must be reachable by a native camera app that has
+# never seen the SPA's router. Without this the asset layer 404s on the deep link, which is
+# the app's primary entry path (Flow B).
+not_found_handling = "single-page-application"
