@@ -12,6 +12,17 @@ import worker from './index'
 /** A well-formed code from the Phase 1 alphabet, reused by the route tests. */
 const VALID_CODE = '23456789'
 
+/*
+ * The §17 policy as it ships now that connect-src is DERIVED from ALLOWED_ORIGINS
+ * (cspConnectSrc in index.ts): the origins permitted to call this API are exactly the
+ * origins whose documents must be allowed to reach it, including the ws:// form of the
+ * WebSocket upgrade. Hardcoding `wss://*.workers.dev` would have rotted the moment the
+ * app moved onto a custom domain — the header would still ship, and would then block the
+ * one connection it exists to permit.
+ */
+const DEFAULT_CSP =
+  "default-src 'self'; connect-src 'self' http://localhost:5173 ws://localhost:5173 https://turn.cloudflare.com; worker-src 'self'"
+
 /**
  * A Map-backed KV stand-in.
  *
@@ -413,9 +424,7 @@ describe('worker security hardening & routes', () => {
       expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
       expect(res.headers.get('X-Frame-Options')).toBe('DENY')
       expect(res.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin')
-      expect(res.headers.get('Content-Security-Policy')).toBe(
-        "default-src 'self'; connect-src wss://*.workers.dev https://turn.cloudflare.com; worker-src 'self'",
-      )
+      expect(res.headers.get('Content-Security-Policy')).toBe(DEFAULT_CSP)
     })
 
     it('GET /session/:code/turn includes security headers', async () => {
@@ -427,9 +436,7 @@ describe('worker security hardening & routes', () => {
       expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
       expect(res.headers.get('X-Frame-Options')).toBe('DENY')
       expect(res.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin')
-      expect(res.headers.get('Content-Security-Policy')).toBe(
-        "default-src 'self'; connect-src wss://*.workers.dev https://turn.cloudflare.com; worker-src 'self'",
-      )
+      expect(res.headers.get('Content-Security-Policy')).toBe(DEFAULT_CSP)
     })
 
     it('OPTIONS preflight response includes security headers including CSP', async () => {
@@ -441,9 +448,33 @@ describe('worker security hardening & routes', () => {
       expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
       expect(res.headers.get('X-Frame-Options')).toBe('DENY')
       expect(res.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin')
-      expect(res.headers.get('Content-Security-Policy')).toBe(
-        "default-src 'self'; connect-src wss://*.workers.dev https://turn.cloudflare.com; worker-src 'self'",
+      expect(res.headers.get('Content-Security-Policy')).toBe(DEFAULT_CSP)
+    })
+
+    it('derives connect-src from ALLOWED_ORIGINS, including the wss: form', async () => {
+      // The whole point of deriving it: a deployment that moves onto a custom domain
+      // changes one variable and the policy follows. This is the regression guard
+      // against someone reintroducing a hardcoded workers.dev literal.
+      const env = createMockEnv({
+        ALLOWED_ORIGINS: 'https://qrdrop.example.com, https://qrdrop.pages.dev',
+      })
+      const res = await worker.fetch(
+        new Request('https://worker.internal/session/new', {
+          headers: { Origin: 'https://qrdrop.example.com' },
+        }),
+        env,
       )
+
+      const csp = res.headers.get('Content-Security-Policy') ?? ''
+      expect(csp).toContain("connect-src 'self'")
+      expect(csp).toContain('https://qrdrop.example.com')
+      expect(csp).toContain('wss://qrdrop.example.com')
+      expect(csp).toContain('https://qrdrop.pages.dev')
+      expect(csp).toContain('wss://qrdrop.pages.dev')
+      expect(csp).toContain('https://turn.cloudflare.com')
+      expect(csp).not.toContain('*.workers.dev')
+      // CORS still reflects only the allowlisted origin that asked.
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://qrdrop.example.com')
     })
 
     it('WebSocket upgrade challenge (426) does NOT include Content-Security-Policy', async () => {
@@ -467,9 +498,7 @@ describe('worker security hardening & routes', () => {
       expect(res.status).toBe(404)
       expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
       expect(res.headers.get('X-Frame-Options')).toBe('DENY')
-      expect(res.headers.get('Content-Security-Policy')).toBe(
-        "default-src 'self'; connect-src wss://*.workers.dev https://turn.cloudflare.com; worker-src 'self'",
-      )
+      expect(res.headers.get('Content-Security-Policy')).toBe(DEFAULT_CSP)
     })
   })
 

@@ -42,36 +42,60 @@ const ISSUED_CODE_KV_TTL_SECONDS = 900
 const SESSION_SOCKET_PATH = /^\/session\/([^/]+)\/ws$/
 const SESSION_TURN_PATH = /^\/session\/([^/]+)\/turn$/
 
-const CSP_DIRECTIVES =
-  "default-src 'self'; connect-src wss://*.workers.dev https://turn.cloudflare.com; worker-src 'self'"
+const CSP_CONNECT_SRC_HOSTS = "https://turn.cloudflare.com"
+
+/**
+ * `connect-src` for the hardening headers (PLAN.md §17).
+ *
+ * The origins allowed to call this API are exactly the origins whose documents need to
+ * reach it, so the directive is DERIVED from ALLOWED_ORIGINS rather than hardcoded to
+ * `*.workers.dev`. A hardcoded value silently rots the moment the app moves onto a custom
+ * domain: the header still ships, and now blocks the one connection it exists to permit.
+ */
+function cspConnectSrc(env: Env): string {
+  const sources = new Set<string>(["'self'"])
+  for (const origin of allowedOrigins(env)) {
+    sources.add(origin)
+    const asWss = origin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
+    sources.add(asWss)
+  }
+  sources.add(CSP_CONNECT_SRC_HOSTS)
+  return sources.size > 0 ? [...sources].join(' ') : CSP_CONNECT_SRC_HOSTS
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
-    const cors = corsHeaders(request, env)
+    // CORS and hardening headers are merged ONCE per request, then threaded through
+    // every response builder. Deriving them per-call would mean each new route has to
+    // remember to apply them — and a route that forgets fails open, silently.
+    const baseHeaders = mergeHeaders(
+      corsHeaders(request, env),
+      securityHeaders({ connectSrc: cspConnectSrc(env) }),
+    )
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: mergeHeaders(cors, securityHeaders()) })
+      return new Response(null, { status: 204, headers: baseHeaders })
     }
 
     if (url.pathname === '/healthz') {
-      return new Response('ok', { status: 200, headers: mergeHeaders(cors, securityHeaders()) })
+      return new Response('ok', { status: 200, headers: baseHeaders })
     }
 
     if (url.pathname === '/session/new') {
       if (!isValidBrowserFetch(request)) {
-        return json({ error: 'Forbidden' }, 403, cors)
+        return json({ error: 'Forbidden' }, 403, baseHeaders)
       }
       if (await isRateLimited(request, env, 'new', RATE_LIMIT_NEW_SESSION_CAP)) {
-        return json({ error: 'Rate limit exceeded' }, 429, cors)
+        return json({ error: 'Rate limit exceeded' }, 429, baseHeaders)
       }
-      return createSession(env, cors)
+      return createSession(env, baseHeaders)
     }
 
     const turnMatch = SESSION_TURN_PATH.exec(url.pathname)
     if (turnMatch !== null) {
       const code = turnMatch[1] ?? ''
-      return handleTurnCredentials(request, env, code, cors)
+      return handleTurnCredentials(request, env, code, baseHeaders)
     }
 
     const wsMatch = SESSION_SOCKET_PATH.exec(url.pathname)
@@ -79,14 +103,14 @@ export default {
       // `?? ''` keeps a missing capture from leaking an undefined; an empty string
       // then fails isValidSessionCode and yields the same 400 as any other
       // malformed code.
-      return openSignalingSocket(request, env, wsMatch[1] ?? '', cors)
+      return openSignalingSocket(request, env, wsMatch[1] ?? '', baseHeaders)
     }
 
-    return json({ error: 'Not found' }, 404, cors)
+    return json({ error: 'Not found' }, 404, baseHeaders)
   },
 } satisfies ExportedHandler<Env>
 
-async function createSession(env: Env, cors: Headers): Promise<Response> {
+async function createSession(env: Env, baseHeaders: Headers): Promise<Response> {
   const code = generateSessionCode()
   const stub = env.SESSION.get(env.SESSION.idFromName(code))
 
@@ -95,7 +119,7 @@ async function createSession(env: Env, cors: Headers): Promise<Response> {
     // the guest never connects (PLAN.md §17).
     await stub.fetch(`https://session.internal/session/${code}/create`, { method: 'POST' })
   } catch {
-    return json({ error: 'Session unavailable' }, 503, cors)
+    return json({ error: 'Session unavailable' }, 503, baseHeaders)
   }
 
   // D10: record that this code was issued, so the credential route can require it.
@@ -107,28 +131,28 @@ async function createSession(env: Env, cors: Headers): Promise<Response> {
 
   // D10: /session/new returns { code } ONLY. No TURN credentials in this response.
   const body: SessionNewResponse = { code }
-  return json(body, 200, cors)
+  return json(body, 200, baseHeaders)
 }
 
 async function handleTurnCredentials(
   request: Request,
   env: Env,
   code: string,
-  cors: Headers,
+  baseHeaders: Headers,
 ): Promise<Response> {
   // Sec-Fetch-* browser-CSRF defense: mode must be 'cors' when present.
   if (!isValidBrowserFetch(request)) {
-    return json({ error: 'Forbidden' }, 403, cors)
+    return json({ error: 'Forbidden' }, 403, baseHeaders)
   }
 
   // Reject malformed codes before KV or DO lookup.
   if (!isValidSessionCode(code)) {
-    return json({ error: 'Invalid session code' }, 400, cors)
+    return json({ error: 'Invalid session code' }, 400, baseHeaders)
   }
 
   // Check burned registry (Change 3).
   if (await isCodeBurned(code, env)) {
-    return json({ error: 'Session already paired or expired' }, 410, cors)
+    return json({ error: 'Session already paired or expired' }, 410, baseHeaders)
   }
 
   // D10: only a code this worker actually issued, still inside its window, may buy
@@ -136,11 +160,11 @@ async function handleTurnCredentials(
   // whose session expired without ever pairing, which is never marked burned — would
   // mint live credentials and bill the operator's TURN allowance.
   if ((await codeIssuedStatus(code, env)) === 'absent') {
-    return json({ error: 'Session not found' }, 404, cors)
+    return json({ error: 'Session not found' }, 404, baseHeaders)
   }
 
   if (await isRateLimited(request, env, 'turn', RATE_LIMIT_TURN_CAP)) {
-    return json({ error: 'Rate limit exceeded' }, 429, cors)
+    return json({ error: 'Rate limit exceeded' }, 429, baseHeaders)
   }
 
   const keyId = env.TURN_KEY_ID
@@ -151,7 +175,7 @@ async function handleTurnCredentials(
 
   if (credentials === null) {
     // 503 when credentials unavailable (e.g. absent keys or Cloudflare API error)
-    return json({ error: 'TURN unavailable' }, 503, cors)
+    return json({ error: 'TURN unavailable' }, 503, baseHeaders)
   }
 
   const body: SessionTurnResponse = {
@@ -160,38 +184,38 @@ async function handleTurnCredentials(
     username: credentials.username,
     credential: credentials.credential,
   }
-  return json(body, 200, cors)
+  return json(body, 200, baseHeaders)
 }
 
 async function openSignalingSocket(
   request: Request,
   env: Env,
   code: string,
-  cors: Headers,
+  baseHeaders: Headers,
 ): Promise<Response> {
   // Sec-Fetch-* browser-CSRF defense: browsers always send Sec-Fetch-Mode: websocket
   // for WebSocket upgrades. Rejects cross-origin fetch CSRF attempts.
   if (!isValidSessionWsFetch(request)) {
-    return json({ error: 'Forbidden' }, 403, cors)
+    return json({ error: 'Forbidden' }, 403, baseHeaders)
   }
 
   // PLAN.md §17: the code is validated server-side BEFORE the Durable Object lookup,
   // so malformed input can never allocate or address a DO.
   if (!isValidSessionCode(code)) {
-    return json({ error: 'Invalid session code' }, 400, cors)
+    return json({ error: 'Invalid session code' }, 400, baseHeaders)
   }
 
   // Check burned registry (Change 3).
   if (await isCodeBurned(code, env)) {
-    return json({ error: 'Session already paired or expired' }, 410, cors)
+    return json({ error: 'Session already paired or expired' }, 410, baseHeaders)
   }
 
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-    return json({ error: 'Expected WebSocket upgrade' }, 426, cors, { omitCsp: true })
+    return json({ error: 'Expected WebSocket upgrade' }, 426, withoutCsp(baseHeaders))
   }
 
   if (await isRateLimited(request, env, 'join', RATE_LIMIT_JOIN_CAP)) {
-    return json({ error: 'Rate limit exceeded' }, 429, cors)
+    return json({ error: 'Rate limit exceeded' }, 429, baseHeaders)
   }
 
   const stub = env.SESSION.get(env.SESSION.idFromName(code))
@@ -334,15 +358,32 @@ function corsHeaders(request: Request, env: Env): Headers {
   return headers
 }
 
-function json(
-  body: unknown,
-  status: number,
-  headers: Headers,
-  options?: { omitCsp?: boolean },
-): Response {
-  const responseHeaders = mergeHeaders(headers, securityHeaders(options))
+/**
+ * Builds a JSON response. Hardening headers are already on `headers` — see the comment
+ * in `fetch`, where they are merged once per request.
+ */
+function json(body: unknown, status: number, headers: Headers): Response {
+  const responseHeaders = new Headers(headers)
   responseHeaders.set('Content-Type', 'application/json')
   return new Response(JSON.stringify(body), { status, headers: responseHeaders })
+}
+
+/**
+ * A copy of `headers` with the CSP removed.
+ *
+ * Browsers silently discard CSP on a 101 upgrade and some reject the handshake outright,
+ * so the 426 upgrade challenge must not carry it. The WebSocket tunnel itself is protected
+ * by the app-layer E2EE, not by a document policy.
+ */
+function withoutCsp(headers: Headers): Headers {
+  const copy = new Headers(headers)
+  copy.delete('Content-Security-Policy')
+  return copy
+}
+
+/** The §17 policy, with `connect-src` supplied per request. */
+function cspDirectives(connectSrc: string): string {
+  return `default-src 'self'; connect-src ${connectSrc}; worker-src 'self'`
 }
 
 /**
@@ -352,11 +393,9 @@ function json(
  * 426 upgrade challenge, as browsers silently discard CSP on 101 and some reject the
  * handshake. It is included on all standard non-upgrade JSON responses and OPTIONS.
  */
-function securityHeaders(options?: { omitCsp?: boolean }): Headers {
+function securityHeaders(options: { connectSrc: string }): Headers {
   const headers = new Headers()
-  if (!options?.omitCsp) {
-    headers.set('Content-Security-Policy', CSP_DIRECTIVES)
-  }
+  headers.set('Content-Security-Policy', cspDirectives(options.connectSrc))
   headers.set('X-Content-Type-Options', 'nosniff')
   headers.set('X-Frame-Options', 'DENY')
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
@@ -364,8 +403,8 @@ function securityHeaders(options?: { omitCsp?: boolean }): Headers {
 }
 
 /** Merges security headers after CORS headers so CORS values are preserved. */
-function mergeHeaders(cors: Headers, security: Headers): Headers {
-  const merged = new Headers(cors)
+function mergeHeaders(baseHeaders: Headers, security: Headers): Headers {
+  const merged = new Headers(baseHeaders)
   for (const [key, value] of security.entries()) {
     merged.set(key, value)
   }
