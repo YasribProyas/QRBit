@@ -2,16 +2,19 @@
  * Home screen (PLAN.md §7, §16 Phase 5/6). The primary screen — no landing page and no
  * "start / join" split, because the app is symmetric.
  *
- * This page owns two things: the library's wiring, and the live session QR.
+ * This page owns two things: the library's wiring, and the entry point to receiving.
  *
- * QR (PLAN.md §16 Phase 6): on mount the page mints a session through `GET /session/new`
- * and renders it with `QRDisplay`, so the code on screen is a code the worker will
- * actually accept. The code is handed to the Session page through router state when the user
- * opens the session — minting twice would leave the peer that scanned the QR waiting on a session
- * nobody joins (see `useSession`'s `hostSession`). TURN credentials are now fetched separately
- * from `/session/:code/turn` at connect time (ORCHESTRATION.md D10). A tap anywhere on the QR
- * panel refreshes it, which is PLAN.md §7's "tap to refresh": sessions expire (PLAN.md §17),
- * and a stale code is the one failure mode a user cannot see.
+ * Receiving (PLAN.md §7, §16 Phase 6): on mount the page mints a session through
+ * `GET /session/new` and hands the code to the Session page through router state, so
+ * "Show my QR code" renders a code instantly instead of spinning. Minting here rather than
+ * on the Session page also surfaces an unreachable worker as a Home-level error, where the
+ * user can retry before they have invited a peer.
+ *
+ * The QR itself is rendered ONLY on the Session page. Home used to draw it, which made the
+ * headline flow a dead end — see the note on the receiving panel below.
+ *
+ * TURN credentials are fetched separately from `/session/:code/turn` at connect time
+ * (ORCHESTRATION.md D10).
  *
  * The two send flows of PLAN.md §7 both start here:
  *
@@ -28,13 +31,10 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import type { MouseEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { LibraryBrowser } from '../components/library/LibraryBrowser'
 import { ManualCodeEntry } from '../components/ManualCodeEntry'
-import { QRDisplay } from '../components/QRDisplay'
 import { QRScanner } from '../components/QRScanner'
-import { APP_URL } from '../config'
 import { describeError, isValidSessionCode, mintHostSession, queueLibrarySends, clearLibrarySends } from '../hooks/useSession'
 import type { HostSession } from '../hooks/useSession'
 import { useLibraryStore } from '../store/libraryStore'
@@ -123,16 +123,6 @@ export function Home() {
   }, [])
 
   /**
-   * PLAN.md §7's "tap to refresh". The controls inside the panel (Enlarge, New code) keep
-   * their own actions, so a tap that lands on one of them is left alone.
-   */
-  const handleQrTap = (event: MouseEvent<HTMLElement>): void => {
-    if (mint.status !== 'ready') return
-    if (event.target instanceof Element && event.target.closest('button') !== null) return
-    newCode()
-  }
-
-  /**
    * Opens this device's session page as the host. The pre-minted bundle travels in the
    * router state so the session page joins the code the QR is already showing rather than
    * minting a second one; without a ready bundle the hook mints its own, which is the only
@@ -203,27 +193,29 @@ export function Home() {
         </Link>
       </header>
 
-      <section className="panel home__qr" onClick={handleQrTap}>
-        {import.meta.env.DEV && new URL(APP_URL).origin !== location.origin ? (
-          <p className="item-error" role="alert">
-            Dev warning: VITE_APP_URL ({APP_URL}) does not match this page's origin
-            ({location.origin}). The QR code will encode the wrong URL and cannot be
-            scanned. Set VITE_APP_URL={location.origin} in your .env to fix this.
-          </p>
-        ) : null}
-        {mint.status === 'creating' ? (
-          <p className="muted" role="status">
-            Creating your session code…
-          </p>
-        ) : null}
+      {/*
+        Receiving lives on the Session page, not here.
 
-        {mint.status === 'ready' ? (
-          <QRDisplay code={mint.hostSession.code} onRefresh={newCode} />
-        ) : null}
-
+        Home used to draw this device's QR directly, and PLAN.md §7 labels it "Scan this to
+        send files here" — but Home holds no session. It mints a code and stops; no
+        WebSocket, no peer connection. A phone that scanned it joined a code whose host was
+        never going to arrive, so the app's headline flow could not work. Making the panel
+        tappable to enter the session fixed the ordering but left a second trap: a QR that
+        is only safe to scan after you have tapped it is still a QR that invites the wrong
+        scan. The code is therefore shown only where a host is actually listening.
+      */}
+      <section className="panel home__receive">
+        <h2 className="panel__title">Receive files</h2>
+        <p className="muted">
+          Show a QR code that another device can scan. It stays open on this screen while
+          you receive, and nothing is stored on this device unless you save it.
+        </p>
+        <button type="button" className="button button--primary home__receive-cta" onClick={openHostSession}>
+          Show my QR code
+        </button>
         {mint.status === 'error' ? (
           <div className="home__qr-error" role="alert">
-            <p className="muted">Could not reach the signaling server to create your code.</p>
+            <p className="muted">Could not reach the signaling server.</p>
             <p className="item-error">{mint.message}</p>
             <button type="button" className="button" onClick={newCode}>
               Try again
@@ -231,10 +223,6 @@ export function Home() {
           </div>
         ) : null}
       </section>
-
-      <button type="button" className="button" onClick={openHostSession}>
-        Start a session on this device
-      </button>
 
       <h2 className="page__section-title">Your Library</h2>
       <LibraryBrowser

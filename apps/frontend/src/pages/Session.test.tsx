@@ -25,6 +25,7 @@ import { createRoot } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { APP_URL } from '../config'
 import type { UseSessionResult, HostSession } from '../hooks/useSession'
 import type { ItemsApi } from '../components/session/SessionBoard'
 import { closeLibraryDatabase, createFolder, getItemsInFolder } from '../lib/library'
@@ -284,6 +285,37 @@ describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
     // a second one behind the QR the peer already scanned.
     expect(mocked.options?.code).toBe(null)
     expect(mocked.options?.hostSession).toEqual({ code: 'ABCDEFGH' })
+  })
+
+  /*
+   * The receiving flow's other half. Home used to own the QR while only this page held
+   * the session, so the scannable code and the waiting host never existed on the same
+   * screen and "scan this to send files here" could not work. The QR must be rendered
+   * here, by the host, and NOT by the guest (which already scanned one).
+   */
+  it('renders the scannable QR for the host, who is the device that listens', () => {
+    mocked.current = makeResult({ role: 'host', sessionCode: 'ABCDEFGH' })
+
+    const element = renderSession({ pathname: '/session', state: { hostSession: { code: 'ABCDEFGH' } } })
+
+    const panel = element.querySelector('.session-qr')
+    expect(panel).not.toBe(null)
+    // QRDisplay is mounted. jsdom has no canvas 2D context, so it takes its own
+    // documented fallback and prints the URL as text -- which is also the assertion that
+    // matters most: the QR carries the FULL session URL on this app's origin (§3), not a
+    // bare code.
+    expect(panel?.querySelector('.qr')).not.toBe(null)
+    expect(element.textContent).toContain(`${APP_URL}/session?code=ABCDEFGH`)
+    expect(element.textContent).toContain('Scan to send files here')
+  })
+
+  it('shows the guest no QR to scan', () => {
+    mocked.current = makeResult({ role: 'guest', sessionCode: 'A7X3K9P2' })
+
+    const element = renderSession('/session?code=A7X3K9P2')
+
+    expect(element.querySelector('.session-qr')).toBe(null)
+    expect(element.querySelector('.qr')).toBe(null)
   })
 
   it('ignores a host bundle on a ?code= (guest) navigation', () => {

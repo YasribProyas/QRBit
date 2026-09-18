@@ -309,6 +309,39 @@ button {
   cursor: not-allowed;
 }
 
+/*
+ * The single call to action. "Show my QR code" is the app's headline flow, so it is the
+ * one button allowed the accent colour; every other action stays neutral so this one reads
+ * as the obvious next tap on a phone.
+ */
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.button--primary:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  filter: brightness(1.08);
+}
+
+.home__receive-cta {
+  margin-top: 0.5rem;
+}
+
+.session-qr {
+  text-align: center;
+}
+
+.session-qr .qr {
+  margin: 0.5rem auto 0;
+}
+
+.session-qr .code {
+  margin-bottom: 0;
+}
+
 .button--link {
   background: none;
   border: none;

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { AddItemBar } from '../components/session/AddItemBar'
+import { QRDisplay } from '../components/QRDisplay'
 import { SafetyPhraseOverlay } from '../components/session/SafetyPhraseOverlay'
 import { SessionBoard, isSenderRole } from '../components/session/SessionBoard'
 import { SaveToLibraryModal } from '../components/library/SaveToLibraryModal'
 import { ITEM_TYPE_ICONS } from '../components/library/LibraryItemRow'
+import { APP_URL } from '../config'
 import type { SaveableSessionItem } from '../components/library/SaveToLibraryModal'
 import { useSession } from '../hooks/useSession'
 import type { HostSession, UseSessionResult } from '../hooks/useSession'
@@ -131,7 +133,34 @@ export function Session() {
 
       <p className="muted">{session.roleLabel}</p>
 
-      {session.sessionCode !== null ? (
+      {/*
+        The host's QR lives here, on the page that is actually listening.
+
+        This is the other half of the fix for the dead-end receiving flow: Home used to own
+        the QR while only this page held the session, so the scannable code and the waiting
+        host were on two different screens and never overlapped. Showing it here means a
+        code is only ever visible while joining it can succeed. The 8-character code stays
+        as text beside it, because that is the manual-entry fallback (PLAN.md §8) and the
+        thing a user reads aloud when the camera will not focus.
+      */}
+      {session.sessionCode !== null && session.role !== null && !isSenderRole(session.role) ? (
+        <section className="panel session-qr">
+          {import.meta.env.DEV && new URL(APP_URL).origin !== window.location.origin ? (
+            <p className="item-error" role="alert">
+              Dev warning: VITE_APP_URL ({APP_URL}) does not match this page's origin
+              ({window.location.origin}). The QR encodes the wrong URL and cannot be scanned.
+            </p>
+          ) : null}
+          <h2 className="panel__title">Scan to send files here</h2>
+          <QRDisplay code={session.sessionCode} />
+          <p className="code">{session.sessionCode}</p>
+          <p className="muted">
+            On the other device, open <code>{`${APP_URL}/session?code=${session.sessionCode}`}</code>
+          </p>
+        </section>
+      ) : null}
+
+      {session.sessionCode !== null && session.role !== null && isSenderRole(session.role) ? (
         <section className="panel">
           <h2 className="panel__title">Session code</h2>
           <p className="code">{session.sessionCode}</p>

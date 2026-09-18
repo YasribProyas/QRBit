@@ -38,7 +38,7 @@ import {
 } from '../lib/library'
 import type { LibraryItem } from '../lib/library'
 import { takeQueuedLibrarySends } from '../hooks/useSession'
-import { APP_URL, buildNewSessionUrl } from '../config'
+import { buildNewSessionUrl } from '../config'
 import { useLibraryStore } from '../store/libraryStore'
 
 /**
@@ -46,7 +46,6 @@ import { useLibraryStore } from '../store/libraryStore'
  * well-formed in the Phase 1 alphabet (no 0, 1, I, L, O or U).
  */
 const HOME_CODE = 'ABCDEFGH'
-const REFRESHED_CODE = 'JKMNPQRS'
 const scannerStub = vi.hoisted(() => ({ peerCode: '23456789' }))
 const PEER_CODE = scannerStub.peerCode
 
@@ -363,9 +362,10 @@ describe('Home — send selected (PLAN.md §7 flow A, decision D8)', () => {
     click(boxFor('Portal password'))
     click(boxFor('Thesis draft'))
 
-    // The QR is live by the time the selection exists, so the host navigation can carry
-    // the code the other device is meant to scan.
-    await waitFor(() => element.textContent?.includes(HOME_CODE) === true, 'the minted code')
+    // The code is minted before the selection is sent, so the host navigation can carry
+    // it and the Session page can render the QR immediately. Home no longer displays the
+    // code, so the wait is on the request rather than on text.
+    await waitFor(() => mintFetch.mock.calls.length >= 1, 'the mint to complete')
 
     click(buttonByClass(element, 'library-browser__send-selected'))
 
@@ -404,58 +404,33 @@ describe('Home — send selected (PLAN.md §7 flow A, decision D8)', () => {
   })
 })
 
-describe('Home — the live session QR (PLAN.md §7, §16 Phase 6)', () => {
-  it('mints a code on mount and encodes the full session URL on this app’s own origin', async () => {
-    const element = renderHome()
+describe('Home — receiving entry point (PLAN.md §7, §16 Phase 6)', () => {
+  it('mints a code on mount so showing the QR is instant', async () => {
+    renderHome()
 
-    await waitFor(() => element.textContent?.includes(HOME_CODE) === true, 'the minted code')
-
-    expect(mintFetch).toHaveBeenCalledTimes(1)
+    await waitFor(() => mintFetch.mock.calls.length === 1, 'the mint request')
     expect(mintFetch.mock.calls[0]?.[0]).toBe(buildNewSessionUrl())
-
-    // PLAN.md §3 / §7 flow B: the QR carries the FULL URL, not the bare code, and it is
-    // built from this app's origin — a code on someone else's origin opens nothing.
-    expect(element.textContent).toContain(`${APP_URL}/session?code=${HOME_CODE}`)
-    expect(element.textContent).toContain(HOME_CODE)
   })
 
-  it('re-mints when the QR panel is tapped (PLAN.md §7 “tap to refresh”)', async () => {
-    mintFetch
-      .mockResolvedValueOnce(jsonResponse({ code: HOME_CODE }))
-      .mockResolvedValueOnce(jsonResponse({ code: REFRESHED_CODE }))
-
+  /*
+   * The regression that made the app's headline flow unusable: Home drew a QR and
+   * promised "scan this to send files here", but only the Session page ever joins a
+   * session, so a phone that scanned Home's code waited on a host that never arrived.
+   * Home must therefore not present a code as scannable.
+   */
+  it('never shows a scannable QR it is not listening on', async () => {
     const element = renderHome()
-    await waitFor(() => element.textContent?.includes(HOME_CODE) === true, 'the first code')
+    await waitFor(() => mintFetch.mock.calls.length === 1, 'the mint to settle')
+    await settle()
 
-    const panel = element.querySelector('.home__qr')
-    if (!(panel instanceof HTMLElement)) throw new Error('test bug: no QR panel')
-    click(panel)
-
-    await waitFor(() => element.textContent?.includes(REFRESHED_CODE) === true, 'the refreshed code')
-    expect(mintFetch).toHaveBeenCalledTimes(2)
-    expect(element.textContent).not.toContain(HOME_CODE)
+    expect(element.querySelector('canvas')).toBe(null)
+    expect(element.querySelector('.qr__canvas')).toBe(null)
+    // The minted code must not be rendered as a hand-typed URL either, or a user would
+    // reasonably treat it as the thing to point a camera at.
+    expect(element.textContent).not.toContain(`/session?code=${HOME_CODE}`)
   })
 
-  it('re-mints once from the panel’s own refresh control, not twice', async () => {
-    mintFetch
-      .mockResolvedValueOnce(jsonResponse({ code: HOME_CODE }))
-      .mockResolvedValueOnce(jsonResponse({ code: REFRESHED_CODE }))
-
-    const element = renderHome()
-    await waitFor(() => element.textContent?.includes(HOME_CODE) === true, 'the first code')
-
-    const newCode = [...element.querySelectorAll<HTMLButtonElement>('.qr__actions button')].find(
-      (candidate) => candidate.textContent?.includes('New code') === true,
-    )
-    if (!newCode) throw new Error('test bug: no New code button')
-    click(newCode)
-
-    await waitFor(() => element.textContent?.includes(REFRESHED_CODE) === true, 'the refreshed code')
-    // The panel's tap-to-refresh must not double-fire when the button was what was clicked.
-    expect(mintFetch).toHaveBeenCalledTimes(2)
-  })
-
-  it('offers a retry instead of a QR when the worker cannot be reached', async () => {
+  it('retries the mint when the worker cannot be reached', async () => {
     mintFetch.mockRejectedValueOnce(new Error('Failed to fetch'))
 
     const element = renderHome()
@@ -468,19 +443,18 @@ describe('Home — the live session QR (PLAN.md §7, §16 Phase 6)', () => {
     if (!(retry instanceof HTMLButtonElement)) throw new Error('test bug: no retry button')
     click(retry)
 
-    await waitFor(() => element.textContent?.includes(HOME_CODE) === true, 'the retried code')
-    expect(mintFetch).toHaveBeenCalledTimes(2)
+    await waitFor(() => mintFetch.mock.calls.length === 2, 'the retry mint')
     expect(element.querySelector('.home__qr-error')).toBe(null)
   })
 
   it('opens the host session with the code it already minted, never a second one', async () => {
     const element = renderHome()
-    await waitFor(() => element.textContent?.includes(HOME_CODE) === true, 'the minted code')
+    await waitFor(() => mintFetch.mock.calls.length === 1, 'the minted code')
 
-    const start = [...element.querySelectorAll('button')].find(
-      (candidate) => candidate.textContent?.includes('Start a session on this device') === true,
+    const start = [...element.querySelectorAll<HTMLButtonElement>('button')].find(
+      (candidate) => candidate.textContent?.includes('Show my QR code') === true,
     )
-    if (!start) throw new Error('test bug: no start-session button')
+    if (!start) throw new Error('test bug: no show-QR button')
     click(start)
 
     const route = element.querySelector<HTMLElement>('.session-route')

@@ -264,3 +264,34 @@ rules** — so sharing a link or selected text genuinely works end to end. Shari
 an owner-level decision to carve a bounded exception out of the no-session-persistence rule
 (short-TTL stash in the SW cache, deleted on read). Left as a documented limitation, not a
 silent no-op.
+
+### D13 — the QR moved from Home to Session (Phase 10)
+The owner's first real-device test failed outright: *"I opened the website, got the QR code
+and scanned it on my phone, it won't connect. Then I opened another tab and pasted the code,
+it won't connect."* Both reports are the same defect, and it made the app's headline flow
+unusable.
+
+Home drew the QR and PLAN.md §7 labels it "Scan this to send files here" — but Home holds no
+session. It mints a code through `GET /session/new` and stops. No WebSocket, no
+`RTCPeerConnection`. The host only ever exists on `/session`. So a phone that scanned Home's
+code joined a session whose host was never going to arrive, and the Session page — the one
+screen that does listen — rendered the code as **text with no QR**, so there was nowhere to
+scan from. There was no sequence of taps that worked.
+
+Phase 6 recorded this as an accepted residual ("the host must still open the session page for
+its QR to be joinable"), which was the wrong call: a flow that requires the user to guess an
+undisclosed ordering is not a residual, it is a broken flow. The same defect explains the
+two-tab failure, and it is worth noting that no test caught it because every test asserted
+*"Home renders the code"* — a true statement about a page that could never complete a
+session. Tests that pin a component's output rather than the user's goal cannot catch this.
+
+**Decision:** the QR is rendered only on `/session`, by the host. Home keeps its on-mount mint
+(so the QR appears instantly and an unreachable worker surfaces as a retryable Home-level
+error before a peer is invited) and presents one accent CTA, "Show my QR code". The guest sees
+no QR — it already scanned one. Home is guarded by a test asserting it renders *no* canvas and
+never prints a scannable URL; Session is guarded by asserting the host renders the full
+`<APP_URL>/session?code=…`.
+
+Deviation from PLAN.md §7's layout, deliberate: §7's mockup assumed Home *is* the listening
+host. Under this architecture it cannot be, so the panel moved rather than the promise being
+broken.
