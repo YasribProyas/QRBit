@@ -314,3 +314,27 @@ preserves the ability to notice a mismatch (and to abort) without adding a tap. 
 would turn a friction reduction into losing the MITM defence entirely.
 
 Deviation from PLAN.md §8 is deliberate and owner-directed.
+
+### D15 — publish the session code only after the join lands (Phase 10 review)
+Lane 3 fixed D13's headline bug but reintroduced it in a subtler form: `setSessionCode()`
+ran at *mint* time, while six awaited steps still separated that from the join frame
+(credential fetch, `createPeer`, keypair generation, public-key export, client construction,
+WebSocket handshake). Hundreds of milliseconds on a phone with a scannable QR on screen and
+no host joined to it — and if any step threw, a code stayed visible on a dead session.
+
+**Rule: a code becomes visible when `client.connect()` resolves, never before.** The
+invariant D13 states ("a QR may only appear where a host is joined and waiting") is about
+*time*, not just page layout, and separating them is easy because minting and joining both
+happen in the same function.
+
+**Testing lesson, and it generalizes:** the new suite asserted a join *eventually* happened
+but never that the QR was *absent beforehand* — so it passed against the buggy ordering. That
+is the same presence-only mistake D13 was written about, reproduced inside the fix for it. For
+any "must not exist until X" invariant, the test must assert absence **before** X, and the
+guard must be verified by reintroducing the bug and watching that test fail (done here: the
+D13 test fails with the old placement, passes with the fix). An assertion that cannot fail is
+documentation, not a test.
+
+Harness note that shaped the three updated tests: `waitFor` returns on its first synchronous
+true check, so asserting state written by a continuation after a fake socket's `fireOpen()`
+races a microtask that has not run. Wait on the state itself.
