@@ -134,6 +134,53 @@ describe('session store Phase 2 resets (PLAN.md §8)', () => {
   })
 })
 
+describe('isSenderConfirmed() (decision D14)', () => {
+  it('for guest (sender): confirms once phraseConfirmed is true, ignoring peer', () => {
+    const store = useSessionStore.getState()
+    store.startConnecting('guest', 'CODE1234')
+
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(false)
+
+    // Peer confirmation alone does not confirm for sender
+    store.setPeerConfirmed(true)
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(false)
+
+    // Local confirmation confirms for sender
+    store.confirmPhrase()
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(true)
+
+    // Even if peer is unconfirmed, sender is confirmed
+    store.setPeerConfirmed(false)
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(true)
+  })
+
+  it('for host (receiver): confirms once peerConfirmed is true, ignoring local confirmation', () => {
+    const store = useSessionStore.getState()
+    store.startConnecting('host', 'CODE1234')
+
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(false)
+
+    // Local confirmation alone does not confirm for receiver
+    store.confirmPhrase()
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(false)
+
+    // Peer (sender) confirmation confirms for receiver
+    store.setPeerConfirmed(true)
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(true)
+  })
+
+  it('falls back to bothConfirmed when role is null', () => {
+    const store = useSessionStore.getState()
+    expect(store.role).toBe(null)
+
+    store.confirmPhrase()
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(false)
+
+    store.setPeerConfirmed(true)
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(true)
+  })
+})
+
 describe('bothConfirmed() as a live selector (PLAN.md §8)', () => {
   function mountProbe(): { text: () => string; unmount: () => void } {
     const container = document.createElement('div')

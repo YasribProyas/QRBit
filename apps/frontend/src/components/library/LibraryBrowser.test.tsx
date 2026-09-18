@@ -11,7 +11,15 @@
  * "Send selected (N)" reporting the selected ids. Deletes are pinned too (Phase 5 review
  * P2): no store call happens until the confirmation is answered, and the cascade the
  * confirmation warns about is counted from the subtree the store would destroy.
+ *
+ * The offline creation row (`NewItemBar`) is pinned from two sides: here, that the browser
+ * offers it, keeps it out of multi-select, points it at the folder actually on screen,
+ * hands the §6.1 row to the save seam — and, in the store-backed case, that the row
+ * reaches IndexedDB and appears in the list with nobody calling `refresh`; and in
+ * `NewItemBar.test.tsx`, the compose dialogs, the pickers and the locked tuple.
  */
+
+import 'fake-indexeddb/auto'
 
 import { act, createElement } from 'react'
 import type { ReactElement } from 'react'
@@ -27,6 +35,8 @@ import {
 import type { LibraryBrowserProps, PendingDelete } from './LibraryBrowser'
 import type { LibraryFolder } from './FolderNode'
 import type { LibraryItem } from './LibraryItemRow'
+import { closeLibraryDatabase, getItemsInFolder, ROOT_FOLDER_ID } from '../../lib/library'
+import { useLibraryStore } from '../../store/libraryStore'
 
 const folders: LibraryFolder[] = [
   { id: 'f1', name: 'Uni Stuff', parentId: null, createdAt: 1, updatedAt: 1 },
@@ -168,6 +178,24 @@ function askToDeleteFirstItem(element: HTMLElement): void {
   click(menuItem(element, 'Delete'))
 }
 
+const IDB_NAME = 'qrdrop-library'
+
+/**
+ * Drops the library database.
+ *
+ * Only the store-backed cases need it: the library layer caches one connection, so
+ * `closeLibraryDatabase` comes first or `deleteDatabase` blocks forever.
+ */
+async function emptyLibraryDatabase(): Promise<void> {
+  await closeLibraryDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(IDB_NAME)
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(request.error ?? new Error('deleteDatabase failed'))
+    request.onblocked = () => reject(new Error('deleteDatabase blocked by an open connection'))
+  })
+}
+
 function renderBrowser(overrides: Partial<LibraryBrowserProps> = {}) {
   const props: LibraryBrowserProps = {
     folders,
@@ -180,6 +208,10 @@ function renderBrowser(overrides: Partial<LibraryBrowserProps> = {}) {
     onRenameItem: vi.fn(),
     onMoveItem: vi.fn(),
     onDeleteItem: vi.fn(),
+    // The offline creation row's save seam. Stubbed on every render so no layout test can
+    // reach IndexedDB by accident; the row's own writes are pinned in NewItemBar.test.tsx
+    // against a real `fake-indexeddb`.
+    onSaveItem: vi.fn(),
     onSendItems: vi.fn(),
     onSelectionChange: vi.fn(),
     ...overrides,
@@ -368,6 +400,201 @@ describe('LibraryBrowser — new folder (PLAN.md §6.4)', () => {
     await submitForm(harness.element)
 
     expect(props.onCreateFolder).toHaveBeenCalledWith('Archive', null)
+  })
+})
+
+describe('LibraryBrowser — offline creation row (PLAN.md §6.1, §6.4)', () => {
+  /** The five actions of `NewItemBar`, in the order PLAN.md §9's add bar uses. */
+  const CREATE_LABELS = [
+    'Add text item',
+    'Add rich text item',
+    'Add images',
+    'Add files',
+    'Add locked item',
+  ] as const
+
+  function createButton(element: HTMLElement, label: string): HTMLButtonElement {
+    return bySelector(element, `button[aria-label="${label}"]`, HTMLButtonElement)
+  }
+
+  it('offers a save row beside + New Folder, and says it saves rather than sends', () => {
+    const { harness } = renderBrowser({ currentFolderId: 'f2' })
+
+    expect(harness.element.querySelector('.new-item-bar')).not.toBe(null)
+    for (const label of CREATE_LABELS) {
+      expect(createButton(harness.element, label)).toBeInstanceOf(HTMLButtonElement)
+    }
+    // It is the same visual language as the in-session bar…
+    expect(harness.element.querySelector('.new-item-bar')?.className).toContain('add-item-bar')
+    // …but the promise is different, and it is written down.
+    expect(harness.element.querySelector('.add-item-bar__hint')?.textContent).toContain(
+      'nothing is sent',
+    )
+  })
+
+  it('is there on an empty library, because creating something is the point', () => {
+    const { harness, update } = renderBrowser({ folders: [], items: [], currentFolderId: null })
+
+    update({ folders: [], items: [] })
+
+    expect(harness.element.querySelector('.library-browser__empty')?.textContent).toContain(
+      'Your library is empty',
+    )
+    for (const label of CREATE_LABELS) {
+      expect(createButton(harness.element, label)).toBeInstanceOf(HTMLButtonElement)
+    }
+  })
+
+  it('leaves the row out while multi-selecting, so the only action is send', () => {
+    const { harness } = renderBrowser({ currentFolderId: 'f1' })
+
+    click(button(harness.element, '.library-browser__select'))
+
+    expect(harness.element.querySelector('.new-item-bar')).toBe(null)
+  })
+
+  it('saves a text note into the folder on screen, as a §6.1 row with no session involved', async () => {
+    const saved: LibraryItem[] = []
+    const { harness } = renderBrowser({
+      currentFolderId: 'f2',
+      onSaveItem: (item) => {
+        saved.push(item)
+      },
+    })
+
+    click(createButton(harness.element, 'Add text item'))
+    typeInto(bySelector(harness.element, 'input[aria-label="Name"]', HTMLInputElement), 'Standup')
+    typeInto(
+      bySelector(harness.element, 'input[aria-label="Text item"]', HTMLInputElement),
+      'Blocked on the relay',
+    )
+    await submitForm(harness.element)
+
+    expect(saved).toHaveLength(1)
+    const [item] = saved
+    expect(item?.type).toBe('text')
+    expect(item?.name).toBe('Standup')
+    // The folder the browser is showing, not the root and not a parent of it.
+    expect(item?.folderId).toBe('f2')
+    // §6.1: a uuid the browser minted, and both timestamps set.
+    expect(item?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+    expect(typeof item?.createdAt).toBe('number')
+    expect(typeof item?.updatedAt).toBe('number')
+    // The dialog is gone once the save landed.
+    expect(harness.element.querySelector('.library-modal')).toBe(null)
+  })
+
+  it('writes a nested folder with its own id, and the root for a current id that names no folder', async () => {
+    const saved: LibraryItem[] = []
+    const { harness, update } = renderBrowser({
+      currentFolderId: 'f3',
+      onSaveItem: (item) => {
+        saved.push(item)
+      },
+    })
+
+    const composeNote = async (): Promise<void> => {
+      click(createButton(harness.element, 'Add text item'))
+      typeInto(bySelector(harness.element, 'input[aria-label="Name"]', HTMLInputElement), 'Note')
+      await submitForm(harness.element)
+    }
+
+    await composeNote()
+    expect(saved[0]?.folderId).toBe('f3')
+
+    // A folder deleted while it was open: the list is the root, so the write goes there
+    // rather than to a folder id that has no row (the library layer would refuse it).
+    update({ currentFolderId: 'gone' })
+    await composeNote()
+    expect(saved[1]?.folderId).toBe('root')
+  })
+})
+
+describe('LibraryBrowser — the row reaches IndexedDB through the store (PLAN.md §6.3)', () => {
+  /** Home's shape and nothing else: the browser reads the library out of the store. */
+  function StoreBackedBrowser(props: { currentFolderId: string | null }) {
+    const storeFolders = useLibraryStore((state) => state.folders)
+    const storeItems = useLibraryStore((state) => state.items)
+
+    return (
+      <LibraryBrowser
+        folders={storeFolders}
+        items={storeItems}
+        currentFolderId={props.currentFolderId}
+        onSelectFolder={() => {}}
+        onCreateFolder={() => {}}
+        onRenameFolder={() => {}}
+        onDeleteFolder={() => {}}
+        onRenameItem={() => {}}
+        onMoveItem={() => {}}
+        onDeleteItem={() => {}}
+        onSendItems={() => {}}
+      />
+    )
+  }
+
+  /** Waits for a store write to come back around as a rendered row (no refresh call). */
+  async function waitForRows(element: HTMLElement, expected: string[]): Promise<void> {
+    const deadline = Date.now() + 20_000
+    for (;;) {
+      const names = itemNames(element).map((name) => name ?? '')
+      if (names.join('\u0000') === expected.join('\u0000')) return
+      if (Date.now() > deadline) {
+        throw new Error(`test bug: rows stayed [${names.join(', ')}], wanted [${expected.join(', ')}]`)
+      }
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10)
+        })
+      })
+    }
+  }
+
+  beforeEach(async () => {
+    useLibraryStore.setState({ folders: [], items: [], loading: false, error: null })
+    await emptyLibraryDatabase()
+  })
+
+  afterEach(async () => {
+    await closeLibraryDatabase()
+  })
+
+  it('lists a note the row created, with nobody calling refresh', async () => {
+    const folder = await useLibraryStore.getState().createFolder('Kept', null)
+    await useLibraryStore.getState().refresh()
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    act(() => {
+      root.render(<StoreBackedBrowser currentFolderId={folder.id} />)
+    })
+    openHarnesses.push({
+      element: host,
+      unmount: () => {
+        act(() => {
+          root.unmount()
+        })
+      },
+    })
+
+    expect(itemNames(host)).toEqual([])
+
+    click(bySelector(host, 'button[aria-label="Add text item"]', HTMLButtonElement))
+    typeInto(bySelector(host, 'input[aria-label="Name"]', HTMLInputElement), 'Written offline')
+    await submitForm(host)
+
+    // The list grew by itself: `saveItem` re-reads IndexedDB and the view follows.
+    await waitForRows(host, ['Written offline'])
+
+    const stored = await getItemsInFolder(folder.id)
+    expect(stored.map((row) => row.name)).toEqual(['Written offline'])
+    expect(stored[0]?.type).toBe('text')
+    // Nothing leaked to the root, and the store has no error to show.
+    expect(await getItemsInFolder(ROOT_FOLDER_ID)).toHaveLength(0)
+    expect(useLibraryStore.getState().error).toBe(null)
   })
 })
 

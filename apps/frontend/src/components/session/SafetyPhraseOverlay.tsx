@@ -1,27 +1,17 @@
-/**
- * Safety-phrase confirmation overlay (PLAN.md §8 Phase 2).
- *
- * Presentational and pure by contract: the phrase and both confirmation flags
- * arrive as props and the component only calls `onConfirm` / `onAbort`. It never
- * derives, compares or computes anything crypto-related (the phrase comes from
- * the ECDH exchange handled by `lib/safetyPhrase.ts`) and never touches the
- * session store — the page/hook owns the wiring, which keeps this component
- * testable without any crypto in the module graph.
- *
- * The words are rendered exactly as received. The uppercase look in PLAN.md §8
- * is produced by CSS only, so the compared string is never transformed here.
- *
- * The session must not proceed until both devices confirm (PLAN.md §8), so the
- * overlay covers the viewport and blocks the page behind it until it is unmounted.
- *
- * PHASE 3 SEAM: Lane B removes this component from the session flow once
- * `confirmed && peerConfirmed`; nothing here needs to change for the board to
- * take over. A later phase may wire the `phrase-confirm` wire message, which is
- * also Lane B's concern — this component has no wire knowledge.
- */
-
 import type { JSX } from 'react'
+import type { SessionRole } from '../../lib/signaling'
 
+/**
+ * SafetyPhraseOverlay (PLAN.md §8 Phase 2, decision D14).
+ *
+ * Renders the three-word safety phrase derived from the ECDH exchange.
+ *
+ * Under decision D14:
+ * - Only the sender (role 'guest') confirms the phrase to gate the session.
+ * - The receiver (role 'host') sees the three words prominently in a non-blocking/waiting
+ *   state without a gating confirm button.
+ * - Both roles have the Abort session button.
+ */
 export interface SafetyPhraseOverlayProps {
   /** The three words both devices must see identically, in display order. */
   phrase: readonly [string, string, string]
@@ -31,8 +21,14 @@ export interface SafetyPhraseOverlayProps {
   peerConfirmed: boolean
   onConfirm: () => void
   onAbort: () => void
-  /** Disables both buttons while a confirmation is in flight or awaiting the peer. */
+  /** Disables buttons while a confirmation is in flight or awaiting the peer. */
   busy?: boolean
+  /**
+   * D14: Whether this device is the sender (role 'guest').
+   * If unspecified, defaults to true (or role === 'guest' if role is provided).
+   */
+  isSender?: boolean
+  role?: SessionRole | null
 }
 
 export function SafetyPhraseOverlay({
@@ -42,10 +38,12 @@ export function SafetyPhraseOverlay({
   onConfirm,
   onAbort,
   busy = false,
+  isSender,
+  role,
 }: SafetyPhraseOverlayProps): JSX.Element {
+  const sender = isSender ?? (role !== undefined && role !== null ? role === 'guest' : true)
+
   return (
-    // The label id is a fixed string, not `useId`: at most one overlay can be
-    // mounted per session page, so there is no duplicate-id risk to defend against.
     <div
       className="safety-phrase"
       role="dialog"
@@ -57,10 +55,6 @@ export function SafetyPhraseOverlay({
           Confirm these match on both devices:
         </p>
 
-        {/*
-          A list gives every word its own accessible node, so a screen reader
-          reads three separate words rather than one run-on word jumble.
-        */}
         <ul className="safety-phrase__words">
           {phrase.map((word, index) => (
             <li className="safety-phrase__word" key={index}>
@@ -70,25 +64,30 @@ export function SafetyPhraseOverlay({
         </ul>
 
         <div className="safety-phrase__status" role="status" aria-live="polite">
-          <p className="safety-phrase__check" data-state={confirmed ? 'confirmed' : 'pending'}>
-            <span className="safety-phrase__check-label">This device</span>
-            <span>{confirmed ? 'confirmed ✓' : 'not confirmed yet'}</span>
-          </p>
-          <p className="safety-phrase__check" data-state={peerConfirmed ? 'confirmed' : 'pending'}>
-            <span className="safety-phrase__check-label">Other device</span>
-            <span>{peerConfirmed ? 'confirmed ✓' : 'not confirmed yet'}</span>
-          </p>
+          {sender ? (
+            <p className="safety-phrase__check" data-state={confirmed ? 'confirmed' : 'pending'}>
+              <span className="safety-phrase__check-label">This device</span>
+              <span>{confirmed ? 'confirmed ✓' : 'not confirmed yet'}</span>
+            </p>
+          ) : (
+            <p className="safety-phrase__check" data-state={peerConfirmed ? 'confirmed' : 'pending'}>
+              <span className="safety-phrase__check-label">Sender</span>
+              <span>{peerConfirmed ? 'confirmed ✓' : 'waiting for confirmation…'}</span>
+            </p>
+          )}
         </div>
 
         <div className="safety-phrase__actions">
-          <button
-            type="button"
-            className="button safety-phrase__confirm"
-            onClick={onConfirm}
-            disabled={busy || confirmed}
-          >
-            Confirmed ✓
-          </button>
+          {sender ? (
+            <button
+              type="button"
+              className="button safety-phrase__confirm"
+              onClick={onConfirm}
+              disabled={busy || confirmed}
+            >
+              Confirmed ✓
+            </button>
+          ) : null}
           <button
             type="button"
             className="button safety-phrase__abort"
@@ -100,9 +99,13 @@ export function SafetyPhraseOverlay({
         </div>
 
         <p className="safety-phrase__footnote muted">
-          {confirmed && peerConfirmed
-            ? 'Both devices confirmed — starting the session…'
-            : 'The session starts only after both devices confirm.'}
+          {sender
+            ? confirmed
+              ? 'Confirmed — starting the session…'
+              : 'The session starts once you confirm the words match.'
+            : peerConfirmed
+              ? 'Sender confirmed — starting the session…'
+              : 'Waiting for the sender to confirm the safety phrase.'}
         </p>
       </div>
     </div>

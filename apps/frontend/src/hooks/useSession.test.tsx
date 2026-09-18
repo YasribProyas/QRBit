@@ -249,9 +249,9 @@ let root: ReturnType<typeof createRoot> | null = null
 /** The worker's `/session/new` route, as this suite sees it. */
 let mintFetch: Mock
 
-function renderSessionProbe(code: string | null, hostSession: HostSession | null = null): void {
+function renderSessionProbe(code: string | null): void {
   function Probe() {
-    latest = useSession({ code, hostSession })
+    latest = useSession({ code })
     return null
   }
 
@@ -465,23 +465,15 @@ describe('useSession Phase 2 pairing (PLAN.md §8, §10, §13)', () => {
     }
   })
 
-  it('stays in pairing until BOTH devices have confirmed', async () => {
-    const { host, hostReceived } = await pairDevices()
+  it('advances sender to active once sender confirms and sends phrase-confirm (decision D14)', async () => {
+    const { hostReceived } = await pairDevices()
 
-    // This device confirms first: still not active, and the confirm goes out.
+    // The sender (guest) confirms: advances to active immediately without waiting for host
     session().confirmPhrase()
     await waitFor(() => useSessionStore.getState().phraseConfirmed, 'the local confirmation')
-    await settle()
-    expect(useSessionStore.getState().phase).toBe('pairing')
-
-    // The peer confirms: only now may the session start (PLAN.md §8 Phase 3).
-    host.send({ t: 'phrase-confirm' })
-    await host.drain()
-    await settle()
-    await waitFor(() => useSessionStore.getState().peerConfirmed, 'the peer confirmation')
     await waitFor(() => useSessionStore.getState().phase === 'active', 'the active phase')
 
-    // The guest's own confirm crossed as an encrypted, authenticated frame.
+    // The guest's own confirm crossed as an encrypted, authenticated frame to inform receiver
     await waitFor(
       () => hostReceived.some((message) => message.t === 'phrase-confirm'),
       'the guest phrase-confirm frame',
@@ -498,7 +490,44 @@ describe('useSession Phase 2 pairing (PLAN.md §8, §10, §13)', () => {
 
     const state = useSessionStore.getState()
     expect(state.phase).toBe('pairing')
-    expect(state.bothConfirmed()).toBe(false)
+    expect(state.phraseConfirmed).toBe(false)
+  })
+
+  it('receiver does not reach active on receiver confirmation alone (decision D14)', async () => {
+    const devices = await pairDevicesAsReceiver()
+
+    session().confirmPhrase()
+    await waitFor(() => useSessionStore.getState().phraseConfirmed, 'the local confirmation')
+    await settle()
+
+    expect(useSessionStore.getState().phase).toBe('pairing')
+  })
+
+  it('advances receiver to active when sender confirms without receiver confirming (decision D14)', async () => {
+    const devices = await pairDevicesAsReceiver()
+
+    devices.guest.send({ t: 'phrase-confirm' })
+    await devices.guest.drain()
+    await waitFor(() => useSessionStore.getState().peerConfirmed, 'the sender confirmation')
+    await waitFor(() => useSessionStore.getState().phase === 'active', 'the active phase')
+    expect(useSessionStore.getState().phraseConfirmed).toBe(false)
+  })
+
+  it('receiver aborts cleanly before confirming (decision D14)', async () => {
+    const devices = await pairDevicesAsReceiver()
+
+    session().abort()
+    await waitFor(() => useSessionStore.getState().phase === 'ended', 'the ended phase')
+    expect(useSessionStore.getState().errorMessage).toBe(null)
+  })
+
+  it('receiver exits pairing when sender aborts before confirming (decision D14)', async () => {
+    const devices = await pairDevicesAsReceiver()
+
+    devices.guest.send({ t: 'session-end' })
+    await devices.guest.drain()
+    await waitFor(() => useSessionStore.getState().phase === 'ended', 'the ended phase')
+    expect(useSessionStore.getState().errorMessage).toBe(null)
   })
 
   it('aborts cleanly: the peer is told, the channel closes, no error is shown', async () => {
@@ -649,24 +678,22 @@ describe('useSession as the host (ORCHESTRATION.md D2, D4 and D5)', () => {
   })
 })
 
-describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase 6)', () => {
+describe('useSession host sessions (PLAN.md §16 Phase 6, ORCHESTRATION.md D13)', () => {
   const newSessionCalls = (): unknown[][] =>
     mintFetch.mock.calls.filter(([req]) => String(req).endsWith('/new'))
 
-  it('joins the pre-minted code instead of minting a second session', async () => {
-    renderSessionProbe(null, { code: HOME_MINTED_CODE })
+  it('mints a code and joins as host', async () => {
+    renderSessionProbe(null)
 
     await waitFor(() => sockets.length === 1, 'the host signaling socket')
     const socket = latestSocket()
     socket.fireOpen()
     await waitFor(() => socket.sentOfType('join') !== null, 'the host join frame')
 
-    // The socket URL is the code the QR already showed. The worker addresses the Durable
-    // Object by it, so a second mint here would strand the peer that scanned the first one.
-    expect(socket.url).toContain(HOME_MINTED_CODE)
+    expect(socket.url).toContain(SESSION_CODE)
     expect(socket.sentOfType('join')?.['role']).toBe('host')
-    expect(useSessionStore.getState().sessionCode).toBe(HOME_MINTED_CODE)
-    expect(newSessionCalls()).toHaveLength(0)
+    expect(useSessionStore.getState().sessionCode).toBe(SESSION_CODE)
+    expect(newSessionCalls()).toHaveLength(1)
   })
 
   it('fetches TURN credentials from the turn route for host at connect time (ORCHESTRATION.md D10)', async () => {
@@ -690,7 +717,7 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
       }
     })
 
-    renderSessionProbe(null, { code: HOME_MINTED_CODE })
+    renderSessionProbe(null)
 
     await waitFor(() => fakePeers.length >= 1, 'the host peer connection')
     const turn = fakePeers[0]?.config?.iceServers?.find((server) =>
@@ -698,26 +725,14 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
     )
     expect(turn?.username).toBe('home-user')
     expect(turn?.credential).toBe('home-secret')
-    expect(newSessionCalls()).toHaveLength(0)
+    expect(newSessionCalls()).toHaveLength(1)
     expect(
-      mintFetch.mock.calls.some(([req]) => String(req).endsWith(`/${HOME_MINTED_CODE}/turn`)),
+      mintFetch.mock.calls.some(([req]) => String(req).endsWith(`/${SESSION_CODE}/turn`)),
     ).toBe(true)
   })
 
-  it('mints fresh when the pre-minted code is not a session code', async () => {
-    renderSessionProbe(null, { code: 'not-a-code' })
-
-    await waitFor(() => sockets.length === 1, 'the host signaling socket')
-
-    // A hand-crafted navigation state must never send this device at a code the worker
-    // would reject: the fallback is an ordinary, fresh session.
-    expect(newSessionCalls()).toHaveLength(1)
-    expect(latestSocket().url).toContain(SESSION_CODE)
-    expect(useSessionStore.getState().sessionCode).toBe(SESSION_CODE)
-  })
-
-  it('mints a new code on restart rather than reusing the pre-minted one', async () => {
-    renderSessionProbe(null, { code: HOME_MINTED_CODE })
+  it('mints a new code on restart', async () => {
+    renderSessionProbe(null)
     await waitFor(() => sockets.length === 1, 'the first host socket')
 
     session().restart()
@@ -726,22 +741,20 @@ describe('useSession host sessions minted on the Home screen (PLAN.md §16 Phase
     // reused (a peer could still be waiting on it).
     await waitFor(() => sockets.length === 2, 'the restarted host socket')
     await waitFor(() => useSessionStore.getState().sessionCode === SESSION_CODE, 'the fresh code')
-    expect(newSessionCalls()).toHaveLength(1)
+    expect(newSessionCalls()).toHaveLength(2)
     expect(latestSocket().url).toContain(SESSION_CODE)
   })
 
-  it('drains the queue for a real guest joining the code Home minted (D8)', async () => {
+  it('drains the queue for a real guest joining the host session (D8)', async () => {
     const item = libraryTextItem('queued from the QR screen', 'Queued note')
     queueLibrarySends([item])
 
-    const devices = await pairDevicesAsReceiver({ code: HOME_MINTED_CODE })
+    const devices = await pairDevicesAsReceiver()
     const guestReceived: WireMessage[] = []
     devices.guest.onMessage((message) => guestReceived.push(message))
 
-    // One session, minted on Home and joined here: the guest's keys were derived with the
-    // same code, which is the proof that both devices are on the same session.
-    expect(newSessionCalls()).toHaveLength(0)
-    expect(useSessionStore.getState().sessionCode).toBe(HOME_MINTED_CODE)
+    expect(newSessionCalls()).toHaveLength(1)
+    expect(useSessionStore.getState().sessionCode).toBe(SESSION_CODE)
 
     await activateReceiverPairing(devices)
 
@@ -914,11 +927,9 @@ interface ReceivingDevices {
  * the phase. The raw peer is the same transport the hook uses, with the real key
  * derivation, so the frames crossing are genuinely encrypted and genuinely decoded.
  */
-async function pairDevicesAsReceiver(
-  hostSession: HostSession | null = null,
-): Promise<ReceivingDevices> {
-  renderSessionProbe(null, hostSession)
-  const sessionCode = hostSession?.code ?? SESSION_CODE
+async function pairDevicesAsReceiver(): Promise<ReceivingDevices> {
+  renderSessionProbe(null)
+  const sessionCode = SESSION_CODE
 
   await waitFor(() => sockets.length === 1, 'the host signaling socket')
   const hostSocket = latestSocket()
@@ -1448,14 +1459,14 @@ describe('useSession items — the receive path (PLAN.md §9, §10, §12)', () =
     expect(captured[captured.length - 1]?.status).toBe('complete')
   })
 
-  it('ignores item frames from a peer until BOTH devices confirmed the phrase (PLAN.md §8)', async () => {
+  it('ignores item frames from a peer until the sender confirmed the phrase (decision D14)', async () => {
     const devices = await pairDevicesAsReceiver()
 
-    // Only this device has confirmed so far.
+    // Even if this device (receiver) confirmed locally, sender has not confirmed
     session().confirmPhrase()
     await waitFor(() => useSessionStore.getState().phraseConfirmed, 'the local confirmation')
     await settle()
-    expect(useSessionStore.getState().bothConfirmed()).toBe(false)
+    expect(useSessionStore.getState().isSenderConfirmed()).toBe(false)
 
     // The peer's own send gate is open — it believes the session is live — which is
     // the state the phase-based gate would miss.

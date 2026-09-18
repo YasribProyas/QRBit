@@ -295,3 +295,22 @@ never prints a scannable URL; Session is guarded by asserting the host renders t
 Deviation from PLAN.md §7's layout, deliberate: §7's mockup assumed Home *is* the listening
 host. Under this architecture it cannot be, so the panel moved rather than the promise being
 broken.
+
+### D14 — safety phrase confirmed by the sender only (Phase 10)
+PLAN.md §8 Phase 2 requires "confirmed on both sides". The owner changed this: the **sender**
+confirms, and the session waits on that alone. Their reasoning is a friction argument, and it
+is a legitimate product call — the sender is the party actively choosing who to hand data to.
+
+**The tradeoff, recorded so nobody "fixes" it silently:** the phrase is this app's *only*
+defence against a public-key substitution during pairing. It works because a human compares
+words on two screens. If the receiver never sees the words, the receiver cannot detect an
+attack that puts the attacker on the other end instead of the intended sender — the sender
+might notice, but only if they actually look. So this decision genuinely weakens the
+receiver's position, not just the ceremony.
+
+**Mitigation kept in the design, and it is not optional:** the receiver MUST still be shown
+the three words prominently while waiting — non-blocking display, no gating button. That
+preserves the ability to notice a mismatch (and to abort) without adding a tap. Anything less
+would turn a friction reduction into losing the MITM defence entirely.
+
+Deviation from PLAN.md §8 is deliberate and owner-directed.

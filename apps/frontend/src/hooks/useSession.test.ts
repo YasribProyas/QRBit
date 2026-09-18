@@ -11,6 +11,7 @@ import {
   deriveSessionMaterial,
   describeError,
   describeSessionStatus,
+  isSenderConfirmed,
   nextPhaseForConfirmations,
   parseNewSessionResponse,
 } from './useSession'
@@ -215,22 +216,67 @@ describe('deriveSessionMaterial (PLAN.md §11.1–§11.3, §11.6)', () => {
   })
 })
 
-describe('nextPhaseForConfirmations (PLAN.md §8 Phase 2)', () => {
-  it('holds the session in pairing until BOTH devices confirm', () => {
-    expect(nextPhaseForConfirmations('pairing', false, false)).toBe('pairing')
-    expect(nextPhaseForConfirmations('pairing', true, false)).toBe('pairing')
-    expect(nextPhaseForConfirmations('pairing', false, true)).toBe('pairing')
+describe('nextPhaseForConfirmations (PLAN.md §8 Phase 2, decision D14)', () => {
+  describe('sender role (guest)', () => {
+    it('advances to active once sender confirms, without waiting for peer', () => {
+      expect(nextPhaseForConfirmations('pairing', true, false, 'guest')).toBe('active')
+      expect(nextPhaseForConfirmations('pairing', true, true, 'guest')).toBe('active')
+    })
+
+    it('holds in pairing until sender confirms, even if peer confirmed', () => {
+      expect(nextPhaseForConfirmations('pairing', false, false, 'guest')).toBe('pairing')
+      expect(nextPhaseForConfirmations('pairing', false, true, 'guest')).toBe('pairing')
+    })
   })
 
-  it('advances to active only once both flags are set', () => {
-    expect(nextPhaseForConfirmations('pairing', true, true)).toBe('active')
+  describe('receiver role (host)', () => {
+    it('does NOT advance to active on receiver confirmation alone', () => {
+      expect(nextPhaseForConfirmations('pairing', true, false, 'host')).toBe('pairing')
+      expect(nextPhaseForConfirmations('pairing', false, false, 'host')).toBe('pairing')
+    })
+
+    it('advances to active once sender confirms (peer confirmation arrived)', () => {
+      expect(nextPhaseForConfirmations('pairing', false, true, 'host')).toBe('active')
+      expect(nextPhaseForConfirmations('pairing', true, true, 'host')).toBe('active')
+    })
+  })
+
+  describe('unspecified role (fallback)', () => {
+    it('holds the session in pairing until both flags are set', () => {
+      expect(nextPhaseForConfirmations('pairing', false, false)).toBe('pairing')
+      expect(nextPhaseForConfirmations('pairing', true, false)).toBe('pairing')
+      expect(nextPhaseForConfirmations('pairing', false, true)).toBe('pairing')
+    })
+
+    it('advances to active only once both flags are set', () => {
+      expect(nextPhaseForConfirmations('pairing', true, true)).toBe('active')
+    })
   })
 
   it('never leaves a phase that is not pairing', () => {
-    expect(nextPhaseForConfirmations('connecting', true, true)).toBe('connecting')
-    expect(nextPhaseForConfirmations('idle', true, true)).toBe('idle')
-    expect(nextPhaseForConfirmations('ended', true, true)).toBe('ended')
-    expect(nextPhaseForConfirmations('active', true, true)).toBe('active')
+    expect(nextPhaseForConfirmations('connecting', true, true, 'guest')).toBe('connecting')
+    expect(nextPhaseForConfirmations('idle', true, true, 'guest')).toBe('idle')
+    expect(nextPhaseForConfirmations('ended', true, true, 'guest')).toBe('ended')
+    expect(nextPhaseForConfirmations('active', true, true, 'guest')).toBe('active')
+    expect(nextPhaseForConfirmations('connecting', true, true, 'host')).toBe('connecting')
+  })
+})
+
+describe('isSenderConfirmed (decision D14)', () => {
+  it('returns true for guest when phraseConfirmed is true', () => {
+    expect(isSenderConfirmed('guest', true, false)).toBe(true)
+    expect(isSenderConfirmed('guest', false, true)).toBe(false)
+  })
+
+  it('returns true for host when peerConfirmed is true', () => {
+    expect(isSenderConfirmed('host', false, true)).toBe(true)
+    expect(isSenderConfirmed('host', true, false)).toBe(false)
+  })
+
+  it('falls back to both when role is null', () => {
+    expect(isSenderConfirmed(null, true, false)).toBe(false)
+    expect(isSenderConfirmed(null, false, true)).toBe(false)
+    expect(isSenderConfirmed(null, true, true)).toBe(true)
   })
 })
 

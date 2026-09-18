@@ -152,6 +152,13 @@ export interface SessionActions {
    * `useSessionStore((state) => state.bothConfirmed())` in a component.
    */
   bothConfirmed: () => boolean
+  /**
+   * D14: Derived, not stored: only the sender gates the session on confirming the phrase.
+   * On the sender ('guest'), true when this device has confirmed (phraseConfirmed).
+   * On the receiver ('host'), true when the peer has confirmed (peerConfirmed).
+   * If role is not yet determined, falls back to bothConfirmed().
+   */
+  isSenderConfirmed: () => boolean
   /** Phase 3 replaces the whole ordered board. */
   setItems: (items: SessionItem[]) => void
   /** Phase 3 updates one item in place as chunks and deltas arrive. */
@@ -228,6 +235,13 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
 
   bothConfirmed: () => {
     const { phraseConfirmed, peerConfirmed } = get()
+    return phraseConfirmed && peerConfirmed
+  },
+
+  isSenderConfirmed: () => {
+    const { role, phraseConfirmed, peerConfirmed } = get()
+    if (role === 'guest') return phraseConfirmed
+    if (role === 'host') return peerConfirmed
     return phraseConfirmed && peerConfirmed
   },
 

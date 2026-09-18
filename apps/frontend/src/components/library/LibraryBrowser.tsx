@@ -27,6 +27,14 @@
  * `LibraryFolder` (every folder has a `parentId`, and PLAN.md §6.3 spells the root as
  * `null`), so there is no folder to hand a `FolderNode`.
  *
+ * Below the header sits `NewItemBar` — the offline creation row (text, rich text, image,
+ * file, locked) that writes straight into the folder currently open. It is hidden while
+ * multi-select is on, because in that mode the header's action is "Send selected" and a
+ * row that creates content next to it reads as a second send control. Saving goes
+ * through `onSaveItem` when the page supplies one and through the library store's own
+ * `saveItem` when it does not; the store re-reads IndexedDB after a write, so a new item
+ * appears in this list without a refresh.
+ *
  * Every delete is confirmed first (Phase 5 review P2). PLAN.md §6.3's `deleteFolder` is
  * "a folder tree dies whole": one mis-tap on a phone used to take the folder, every
  * folder nested inside it and every item in all of them out of IndexedDB, permanently,
@@ -43,6 +51,7 @@ import type { LibraryFolder } from './FolderNode'
 import { LibraryItemRow } from './LibraryItemRow'
 import type { LibraryItem } from './LibraryItemRow'
 import { NewFolderModal } from './NewFolderModal'
+import { NewItemBar } from './NewItemBar'
 import { ConfirmDelete } from '../ConfirmDelete'
 
 export interface LibraryBrowserProps {
@@ -56,6 +65,15 @@ export interface LibraryBrowserProps {
   /** Cascades: PLAN.md §6.3 deletes the folder's items, recursively. */
   onDeleteFolder: (id: string) => void
   onRenameItem: (id: string, name: string) => void
+  /**
+   * Saves one item created offline (PLAN.md §6.1) into the folder on screen.
+   *
+   * `NewItemBar` builds the §6.1 row — id, folderId, timestamps and all — and this is the
+   * seam a page may take over. Left unset it goes to the library store's `saveItem`, which
+   * is what Home does: the store re-reads the database after the write, so the new item is
+   * already in `items` on the next render.
+   */
+  onSaveItem?: (item: LibraryItem) => Promise<void> | void
   /**
    * `targetFolderId: null` is the tree's Root. The library layer spells the root with
    * a sentinel id of its own (nothing is stored with `parentId: null`), so the page that
@@ -219,6 +237,7 @@ export function LibraryBrowser({
   onRenameFolder,
   onDeleteFolder,
   onRenameItem,
+  onSaveItem,
   onMoveItem,
   onDeleteItem,
   onSendItems,
@@ -317,6 +336,13 @@ export function LibraryBrowser({
   // `null` and the library layer's own sentinel, and it means a folder deleted while it
   // was open leaves a coherent screen rather than an empty one titled with its name.
   const currentName = currentFolder?.name ?? 'Root'
+  /*
+   * The folder the creation row writes into. `currentFolderId` may name no folder at all
+   * (the root, the store's sentinel, or a folder deleted while it was open), and the
+   * library layer refuses an item whose folder has no row — so the row is handed the
+   * resolved folder id, or `null` for the root, exactly as the list above is.
+   */
+  const openFolderId = currentFolder?.id ?? null
   const libraryEmpty = folders.length === 0 && items.length === 0
   const rootSelected = currentFolder === undefined
   const deletePrompt = pendingDelete === null ? null : describeDelete(pendingDelete, folders, items)
@@ -374,6 +400,21 @@ export function LibraryBrowser({
         )}
       </div>
 
+      {/*
+        The offline creation row: T / ¶ / 🖼 / 📎 / 🔒, writing into the folder on screen.
+        It is a sibling of the header rather than part of `library-browser__actions`,
+        because that box is swapped for the selection controls; this row stays for every
+        state — an empty library included, which is exactly when being able to make an item
+        with nothing connected matters most.
+      */}
+      {selectionMode ? null : (
+        <NewItemBar
+          currentFolderId={openFolderId}
+          currentFolderName={currentName}
+          onSaveItem={onSaveItem}
+        />
+      )}
+
       {error !== null ? (
         <p className="library-browser__error item-error" role="alert">
           {error}
@@ -386,7 +427,9 @@ export function LibraryBrowser({
         </p>
       ) : libraryEmpty ? (
         <p className="library-browser__empty empty">
-          Your library is empty. Use “+ New Folder” to start organising what you keep.
+          Your library is empty. Use “+ New Folder” to start organising what you keep, or
+          the row above to write a note, save an image or lock a secret — all of it on this
+          device, with nothing connected.
         </p>
       ) : (
         <>

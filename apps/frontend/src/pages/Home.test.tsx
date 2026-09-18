@@ -1,27 +1,19 @@
 /** @vitest-environment jsdom */
 /**
- * Page-level tests for `pages/Home.tsx` (PLAN.md §7, §16 Phase 5/6).
+ * Page-level tests for `pages/Home.tsx` (PLAN.md §7, §16 Phase 5/6, ORCHESTRATION.md D13).
  *
- * The page is the library's wiring and the live session QR. These tests drive both end to
- * end: the browser against a real (fake-indexeddb) library, and the QR against a stubbed
- * `/session/new` response (the shape the signaling worker returns).
+ * Lane 3: Home BECOMES the host. The QR is visible and joinable the moment the app opens,
+ * with no tap in between. Home connects as host to the signaling server for its minted
+ * code on mount. Below the QR, the library is visible and usable while waiting.
  *
- * The two send flows of PLAN.md §7 are pinned here: **Flow A** — select items, hit "Scan &
- * Send": exactly those items go into the session-scoped, memory-only queue (decision D8)
- * and the page navigates to the SCANNED code as the guest; and the host side — the code
- * minted for the QR is handed to the session page in router state, so opening the session
- * never mints a second one (PLAN.md §16 Phase 6). The session hook draining the queue is
- * covered in useSession.test.tsx.
- *
- * `QRScanner` is replaced with a stub: its job (camera, detection) has its own tests, and a
- * scan is the one thing this page cannot produce without a camera. The stub reports the
- * codes the real component would, including a malformed one, which is how the page's own
- * "validate before navigating" guard is exercised.
+ * When a peer connects and pairs, the session surface (SessionView) replaces the library.
+ * Once the session ends, Home auto-recovers to mint a fresh live code so the next peer
+ * gets a joinable QR rather than a burned one (D10).
  */
 
 import 'fake-indexeddb/auto'
 
-import { act } from 'react'
+import { StrictMode, act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
@@ -29,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
 
 import { Home } from './Home'
+import { Session } from './Session'
 import {
   closeLibraryDatabase,
   createFolder,
@@ -37,24 +30,17 @@ import {
   saveItem,
 } from '../lib/library'
 import type { LibraryItem } from '../lib/library'
-import { takeQueuedLibrarySends } from '../hooks/useSession'
-import { buildNewSessionUrl } from '../config'
+import { deriveSessionMaterial, takeQueuedLibrarySends } from '../hooks/useSession'
+import { APP_URL, buildNewSessionUrl } from '../config'
 import { useLibraryStore } from '../store/libraryStore'
+import { useSessionStore } from '../store/sessionStore'
+import { exportPublicKey, generateKeypair, toBase64 } from '../lib/crypto'
+import { PeerConnection } from '../lib/webrtc'
 
-/**
- * The codes the stubbed worker mints, and the code a peer's QR would carry. All three are
- * well-formed in the Phase 1 alphabet (no 0, 1, I, L, O or U).
- */
 const HOME_CODE = 'ABCDEFGH'
 const scannerStub = vi.hoisted(() => ({ peerCode: '23456789' }))
 const PEER_CODE = scannerStub.peerCode
 
-/**
- * The scanner, reduced to the codes it reports. `QRScanner.test.tsx` covers the camera,
- * the detection paths and the teardown; what this page does with a code is what matters
- * here — including a malformed one, which the real component filters out before `onScan`
- * and which this page's guard must reject anyway.
- */
 vi.mock('../components/QRScanner', () => ({
   QRScanner: ({ onScan, onCancel }: { onScan: (code: string) => void; onCancel: () => void }) => (
     <div className="qr-scanner-stub">
@@ -89,6 +75,161 @@ vi.mock('../components/QRScanner', () => ({
   ),
 }))
 
+// ---------------------------------------------------------------------------
+// Fake WebSocket and PeerConnection for full host session testing
+// ---------------------------------------------------------------------------
+
+let sockets: FakeWebSocket[] = []
+let fakePeers: FakeRTCPeerConnection[] = []
+
+class FakeWebSocket {
+  readonly url: string
+  readonly sent: string[] = []
+  readyState = 0
+  closed = false
+  onopen: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  onclose: ((event: CloseEvent) => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    sockets.push(this)
+  }
+
+  send(data: string): void {
+    this.sent.push(data)
+  }
+
+  close(): void {
+    this.closed = true
+    this.readyState = 3
+  }
+
+  fireOpen(): void {
+    this.readyState = 1
+    this.onopen?.(new Event('open'))
+  }
+
+  deliver(message: unknown): void {
+    const frame = JSON.stringify(message)
+    this.onmessage?.({ data: frame } as unknown as MessageEvent)
+  }
+
+  sentFrames(): { type: string; [key: string]: unknown }[] {
+    return this.sent.map((raw) => JSON.parse(raw) as { type: string; [key: string]: unknown })
+  }
+
+  sentOfType(type: string): { type: string; [key: string]: unknown } | null {
+    return this.sentFrames().find((frame) => frame.type === type) ?? null
+  }
+}
+
+class FakeDataChannel {
+  readonly label: string
+  readonly options: RTCDataChannelInit | undefined
+  readonly sent: unknown[] = []
+  remote: FakeDataChannel | null = null
+  readyState: RTCDataChannelState = 'connecting'
+  closed = false
+  bufferedAmountLowThreshold = 0
+  bufferedAmount = 0
+  onopen: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  onclose: ((event: Event) => void) | null = null
+  onbufferedamountlow: ((event: Event) => void) | null = null
+
+  constructor(label: string, options?: RTCDataChannelInit) {
+    this.label = label
+    this.options = options
+  }
+
+  send(data: unknown): void {
+    this.sent.push(data)
+    this.remote?.receive(data)
+  }
+
+  close(): void {
+    this.closed = true
+    this.readyState = 'closed'
+  }
+
+  open(): void {
+    this.readyState = 'open'
+    this.onopen?.(new Event('open'))
+  }
+
+  receive(payload: unknown): void {
+    this.onmessage?.({ data: payload } as unknown as MessageEvent)
+  }
+}
+
+class FakeRTCPeerConnection {
+  readonly createdChannels: FakeDataChannel[] = []
+  readonly receivedChannels: FakeDataChannel[] = []
+  readonly config: RTCConfiguration | undefined
+  onDataChannelCreated: ((channel: FakeDataChannel) => void) | null = null
+  connectionState: RTCPeerConnectionState = 'new'
+  localDescription: RTCSessionDescriptionInit | null = null
+  remoteDescription: RTCSessionDescriptionInit | null = null
+  closed = false
+  onicecandidate: ((event: RTCPeerConnectionIceEvent) => void) | null = null
+  ondatachannel: ((event: RTCDataChannelEvent) => void) | null = null
+  onconnectionstatechange: ((event: Event) => void) | null = null
+
+  constructor(config?: RTCConfiguration) {
+    this.config = config
+    fakePeers.push(this)
+  }
+
+  createDataChannel(label: string, options?: RTCDataChannelInit): RTCDataChannel {
+    const channel = new FakeDataChannel(label, options)
+    this.createdChannels.push(channel)
+    this.onDataChannelCreated?.(channel)
+    return channel as unknown as RTCDataChannel
+  }
+
+  deliverDataChannel(channel: FakeDataChannel): void {
+    this.receivedChannels.push(channel)
+    this.ondatachannel?.({ channel: channel as unknown as RTCDataChannel } as RTCDataChannelEvent)
+  }
+
+  async createOffer(): Promise<RTCSessionDescriptionInit> {
+    return { type: 'offer', sdp: 'fake-offer-sdp' }
+  }
+
+  async createAnswer(): Promise<RTCSessionDescriptionInit> {
+    return { type: 'answer', sdp: 'fake-answer-sdp' }
+  }
+
+  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    this.localDescription = description
+  }
+
+  async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    this.remoteDescription = description
+  }
+
+  async addIceCandidate(): Promise<void> {
+    // No-op
+  }
+
+  close(): void {
+    this.closed = true
+    this.connectionState = 'closed'
+  }
+}
+
+function linkChannel(host: FakeRTCPeerConnection, guest: FakeRTCPeerConnection): void {
+  host.onDataChannelCreated = (channel) => {
+    const remote = new FakeDataChannel(channel.label, channel.options)
+    channel.remote = remote
+    remote.remote = channel
+    guest.deliverDataChannel(remote)
+  }
+}
+
 let container: HTMLDivElement | null = null
 let root: Root | null = null
 
@@ -115,36 +256,15 @@ function note(folderId: string, name: string): LibraryItem {
   }
 }
 
-/** The shape the signaling worker's `/session/new` route answers with. */
 function jsonResponse(body: unknown): unknown {
   return { ok: true, status: 200, json: async (): Promise<unknown> => body }
 }
 
-/**
- * What the session route could see, if the page navigated to it: the URL's query and the
- * host bundle the page handed over in router state. Without this the double-mint would be
- * invisible — the page would look identical whether it passed the minted code on or not.
- */
-function hostCodeFromState(state: unknown): string {
-  if (typeof state !== 'object' || state === null) return ''
-  const bundle = (state as { hostSession?: unknown }).hostSession
-  if (typeof bundle !== 'object' || bundle === null) return ''
-  const { code } = bundle as { code?: unknown }
-  return typeof code === 'string' ? code : ''
-}
-
 function SessionRoute() {
   const location = useLocation()
-  return (
-    <div
-      className="session-route"
-      data-search={location.search}
-      data-host-code={hostCodeFromState(location.state)}
-    />
-  )
+  return <div className="session-route" data-search={location.search} />
 }
 
-/** Renders Home with a `/session` route that records what the navigation carried. */
 function renderHome(): HTMLDivElement {
   const element = document.createElement('div')
   document.body.append(element)
@@ -166,10 +286,6 @@ function renderHome(): HTMLDivElement {
   return element
 }
 
-/**
- * The mount refresh and the store's own IDB round trips need real timer ticks, and a
- * fake-indexeddb request lands on a later one than the call that started it.
- */
 async function settle(): Promise<void> {
   for (let tick = 0; tick < 8; tick += 1) {
     await act(async () => {
@@ -178,13 +294,6 @@ async function settle(): Promise<void> {
   }
 }
 
-/**
- * Polls the page until it shows what the test is about to assert.
- *
- * The number of ticks a library load or write takes depends on the machine — under a
- * full parallel run a fixed count can be too few — so the tests wait for the outcome
- * rather than for a guess.
- */
 async function waitFor(condition: () => boolean, description: string): Promise<void> {
   for (let attempt = 0; attempt < 400; attempt += 1) {
     if (condition()) return
@@ -217,9 +326,13 @@ let mintFetch: Mock
 
 beforeEach(async () => {
   ;(globalThis as unknown as Record<string, unknown>)['IS_REACT_ACT_ENVIRONMENT'] = true
+  sockets = []
+  fakePeers = []
+  ;(globalThis as unknown as Record<string, unknown>)['WebSocket'] = FakeWebSocket
+  ;(globalThis as unknown as Record<string, unknown>)['RTCPeerConnection'] = FakeRTCPeerConnection
   useLibraryStore.setState({ folders: [], items: [], loading: false, error: null })
+  useSessionStore.getState().reset()
   takeQueuedLibrarySends()
-  // The QR is live from Phase 6: the page mints a code through the worker on mount.
   mintFetch = vi.fn(async (): Promise<unknown> => jsonResponse({ code: HOME_CODE }))
   ;(globalThis as unknown as Record<string, unknown>)['fetch'] = mintFetch
   await freshLibraryDatabase()
@@ -235,6 +348,19 @@ afterEach(async () => {
   root = null
   container = null
   ;(globalThis as unknown as Record<string, unknown>)['IS_REACT_ACT_ENVIRONMENT'] = undefined
+  for (const socket of sockets) {
+    socket.onmessage = null
+    socket.onopen = null
+    socket.onerror = null
+    socket.onclose = null
+    socket.close()
+  }
+  for (const peer of fakePeers) {
+    peer.close()
+  }
+  sockets = []
+  fakePeers = []
+  useSessionStore.getState().reset()
   takeQueuedLibrarySends()
   await closeLibraryDatabase()
 })
@@ -248,7 +374,6 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
     const element = renderHome()
     await waitFor(() => itemNames(element).length === 1, 'the library to load')
 
-    // The root is what the browser opens on.
     expect(itemNames(element)).toEqual(['Loose note'])
     expect(element.textContent).toContain('Uni Stuff')
 
@@ -288,13 +413,6 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
     if (!remove) throw new Error('test bug: no Delete menu item')
     click(remove)
 
-    /*
-     * The row menu asks; it does not delete (Phase 5 review P2). A deletion is only
-     * allowed to follow an answer, so the item has to still be on the page and still be
-     * in IndexedDB while the question is open — an implementation that deleted on the
-     * menu click would get past a test that merely clicked whatever confirm button it
-     * found, and this is the half that would catch it.
-     */
     const dialog = element.querySelector('[role="dialog"]')
     if (!(dialog instanceof HTMLElement)) throw new Error('test bug: no confirmation dialog')
     expect(itemNames(element)).toEqual(['Loose note'])
@@ -324,7 +442,6 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
     if (!scan) throw new Error('test bug: no Scan & Send button')
 
     expect(scan.disabled).toBe(false)
-    // Camera permission is requested when the scanner mounts, never on page load.
     expect(element.querySelector('.qr-scanner-stub')).toBe(null)
 
     click(scan)
@@ -336,7 +453,7 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
 })
 
 describe('Home — send selected (PLAN.md §7 flow A, decision D8)', () => {
-  it('queues the selected library items and opens a host session', async () => {
+  it('queues the selected library items for the live host session', async () => {
     const first = note(ROOT_FOLDER_ID, 'Portal password')
     const second = note(ROOT_FOLDER_ID, 'Thesis draft')
     const untouched = note(ROOT_FOLDER_ID, 'Not selected')
@@ -349,7 +466,6 @@ describe('Home — send selected (PLAN.md §7 flow A, decision D8)', () => {
 
     click(buttonByClass(element, 'library-browser__select'))
     const checkboxes = [...element.querySelectorAll<HTMLInputElement>('.library-item__checkbox')]
-    // Most recently updated first, so all three are there to choose from.
     expect(checkboxes).toHaveLength(3)
 
     const names = itemNames(element)
@@ -362,23 +478,14 @@ describe('Home — send selected (PLAN.md §7 flow A, decision D8)', () => {
     click(boxFor('Portal password'))
     click(boxFor('Thesis draft'))
 
-    // The code is minted before the selection is sent, so the host navigation can carry
-    // it and the Session page can render the QR immediately. Home no longer displays the
-    // code, so the wait is on the request rather than on text.
     await waitFor(() => mintFetch.mock.calls.length >= 1, 'the mint to complete')
 
     click(buttonByClass(element, 'library-browser__send-selected'))
 
-    // The route changed to the session page with no code — this device is the host —
-    // carrying the code its QR already shows rather than minting a second one.
-    const route = element.querySelector<HTMLElement>('.session-route')
-    expect(route).not.toBe(null)
-    expect(route?.getAttribute('data-search')).toBe('')
-    expect(route?.getAttribute('data-host-code')).toBe(HOME_CODE)
+    // Home is already the host session: it does not navigate away to /session,
+    // and the queued items wait in memory to be sent once a peer scans Home's QR.
+    expect(element.querySelector('.session-route')).toBe(null)
 
-    // The queue holds exactly the selected items, in memory: the Home page never wrote
-    // anything to get them across (the library is the only IndexedDB user, and nothing
-    // asked it to save).
     const queued = takeQueuedLibrarySends()
     expect(queued.map((item) => item.name).sort()).toEqual(['Portal password', 'Thesis draft'])
     expect(queued.map((item) => item.id).sort()).toEqual([first.id, second.id].sort())
@@ -399,35 +506,247 @@ describe('Home — send selected (PLAN.md §7 flow A, decision D8)', () => {
     if (!send) throw new Error('test bug: no Send menu item')
     click(send)
 
-    expect(element.querySelector('.session-route')).not.toBe(null)
     expect(takeQueuedLibrarySends().map((item) => item.id)).toEqual([only.id])
   })
 })
 
-describe('Home — receiving entry point (PLAN.md §7, §16 Phase 6)', () => {
-  it('mints a code on mount so showing the QR is instant', async () => {
-    renderHome()
+describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () => {
+  it('opening Home shows a QR for a code it has actually joined as host (assert the join happened, not just that a canvas exists)', async () => {
+    const element = renderHome()
+    await waitFor(() => sockets.length === 1, 'the host signaling socket')
+    const socket = sockets[0]!
+    socket.fireOpen()
+    await waitFor(() => socket.sentOfType('join') !== null, 'the host join frame')
 
-    await waitFor(() => mintFetch.mock.calls.length === 1, 'the mint request')
-    expect(mintFetch.mock.calls[0]?.[0]).toBe(buildNewSessionUrl())
+    const join = socket.sentOfType('join')
+    expect(socket.url).toContain(HOME_CODE)
+    expect(join?.['role']).toBe('host')
+    expect(typeof join?.['publicKey']).toBe('string')
+
+    // QR panel and honest status line are rendered for this genuinely listening session
+    await waitFor(() => element.querySelector('.session-qr') !== null, 'the QR panel')
+    expect(element.textContent).toContain(HOME_CODE)
+    expect(element.textContent).toContain(`${APP_URL}/session?code=${HOME_CODE}`)
+    expect(element.textContent).toContain('Host — waiting for another device to scan your code')
   })
 
-  /*
-   * The regression that made the app's headline flow unusable: Home drew a QR and
-   * promised "scan this to send files here", but only the Session page ever joins a
-   * session, so a phone that scanned Home's code waited on a host that never arrived.
-   * Home must therefore not present a code as scannable.
-   */
-  it('never shows a scannable QR it is not listening on', async () => {
+  it('a peer can join that code and the session proceeds to the sender-only phrase gate', async () => {
     const element = renderHome()
-    await waitFor(() => mintFetch.mock.calls.length === 1, 'the mint to settle')
+    await waitFor(() => sockets.length === 1, 'the host signaling socket')
+    const socket = sockets[0]!
+    socket.fireOpen()
+    await waitFor(() => socket.sentOfType('join') !== null, 'the host join frame')
+
+    const join = socket.sentOfType('join')
+    const hostPublicKey = join?.['publicKey'] as string
+    const hostFake = fakePeers[0]!
+
+    // A guest peer joins Home's code
+    const guestKeys = await generateKeypair()
+    const guest = new PeerConnection()
+    const guestFake = fakePeers[1]!
+    linkChannel(hostFake, guestFake)
+
+    guest.setSessionKey(
+      (await deriveSessionMaterial(guestKeys.privateKey, hostPublicKey, HOME_CODE)).sessionKey,
+    )
+
+    socket.deliver({
+      type: 'pubkey',
+      publicKey: toBase64(await exportPublicKey(guestKeys.publicKey)),
+    })
+    await waitFor(() => socket.sentOfType('offer') !== null, 'the host offer frame')
+    const offer = socket.sentOfType('offer')
+
+    const answer = await guest.receiveOffer({ type: 'offer', sdp: offer?.['sdp'] as string })
+    socket.deliver({ type: 'answer', sdp: answer.sdp })
+
+    await waitFor(() => guestFake.receivedChannels.length === 1, 'the guest data channel')
+    const hostChannel = hostFake.createdChannels[0]!
+    const guestChannel = guestFake.receivedChannels[0]!
+    hostChannel.open()
+    guestChannel.open()
     await settle()
 
-    expect(element.querySelector('canvas')).toBe(null)
-    expect(element.querySelector('.qr__canvas')).toBe(null)
-    // The minted code must not be rendered as a hand-typed URL either, or a user would
-    // reasonably treat it as the thing to point a camera at.
-    expect(element.textContent).not.toContain(`/session?code=${HOME_CODE}`)
+    // Host session on Home is now in pairing phase
+    await waitFor(() => useSessionStore.getState().phase === 'pairing', 'the pairing phase')
+    expect(element.querySelector('.safety-phrase')).not.toBe(null)
+
+    // Under D14: Receiver (host) sees the words without gating confirm button
+    const confirm = [...element.querySelectorAll('button')].find(
+      (btn) => btn.textContent === 'Confirmed',
+    )
+    expect(confirm).toBeUndefined()
+    const abort = [...element.querySelectorAll('button')].find(
+      (btn) => btn.textContent === 'Abort session',
+    )
+    expect(abort).not.toBeUndefined()
+  })
+
+  it('Home renders the session surface when active and hides the library', async () => {
+    const element = renderHome()
+    await waitFor(() => sockets.length === 1, 'the host signaling socket')
+    const socket = sockets[0]!
+    socket.fireOpen()
+    await waitFor(() => socket.sentOfType('join') !== null, 'the host join frame')
+
+    const join = socket.sentOfType('join')
+    const hostPublicKey = join?.['publicKey'] as string
+    const hostFake = fakePeers[0]!
+
+    const guestKeys = await generateKeypair()
+    const guest = new PeerConnection()
+    const guestFake = fakePeers[1]!
+    linkChannel(hostFake, guestFake)
+
+    guest.setSessionKey(
+      (await deriveSessionMaterial(guestKeys.privateKey, hostPublicKey, HOME_CODE)).sessionKey,
+    )
+
+    socket.deliver({
+      type: 'pubkey',
+      publicKey: toBase64(await exportPublicKey(guestKeys.publicKey)),
+    })
+    await waitFor(() => socket.sentOfType('offer') !== null, 'the host offer frame')
+    const offer = socket.sentOfType('offer')
+
+    const answer = await guest.receiveOffer({ type: 'offer', sdp: offer?.['sdp'] as string })
+    socket.deliver({ type: 'answer', sdp: answer.sdp })
+
+    await waitFor(() => guestFake.receivedChannels.length === 1, 'the guest data channel')
+    hostFake.createdChannels[0]!.open()
+    guestFake.receivedChannels[0]!.open()
+    await settle()
+
+    // Guest (sender) confirms phrase over wire
+    guest.send({ t: 'phrase-confirm' })
+    await guest.drain()
+    await waitFor(() => useSessionStore.getState().phase === 'active', 'the active phase')
+    await settle()
+
+    // Home renders session board in place of the library
+    expect(element.querySelector('.session-board')).not.toBe(null)
+    expect(element.querySelector('.safety-phrase')).toBe(null)
+    expect(element.querySelector('.library-browser')).toBe(null)
+    expect(element.textContent).not.toContain('Your Library')
+  })
+
+  it('the library is visible while waiting', async () => {
+    const element = renderHome()
+    await waitFor(() => sockets.length === 1, 'the host signaling socket')
+    sockets[0]!.fireOpen()
+    await settle()
+
+    expect(element.textContent).toContain('Your Library')
+    expect(element.querySelector('.library-browser')).not.toBe(null)
+    expect(element.querySelector('.home__scan')).not.toBe(null)
+    expect(element.querySelector('.manual-code')).not.toBe(null)
+  })
+
+  it('ending a session returns to the library with a FRESH live code', async () => {
+    const FRESH_CODE = '778899AA'
+    let mintCount = 0
+    mintFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/new')) {
+        mintCount += 1
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ code: mintCount === 1 ? HOME_CODE : FRESH_CODE }),
+        }
+      }
+      return { ok: true, status: 200, json: async () => ({}) }
+    })
+
+    const element = renderHome()
+    await waitFor(() => sockets.length === 1, 'first host socket')
+    sockets[0]!.fireOpen()
+    await waitFor(() => sockets[0]!.sentOfType('join') !== null, 'first join')
+
+    // Simulate clean session end (e.g. abort or peer ending)
+    act(() => {
+      useSessionStore.getState().endSession(null)
+    })
+
+    // Auto-recover fires, restarting with a fresh code
+    await waitFor(() => sockets.length === 2, 'second host socket')
+    sockets[1]!.fireOpen()
+    await waitFor(() => sockets[1]!.sentOfType('join') !== null, 'second join')
+
+    expect(sockets[1]!.url).toContain(FRESH_CODE)
+    const secondJoin = sockets[1]!.sentOfType('join')
+    expect(secondJoin?.['role']).toBe('host')
+
+    // Library view is restored with the fresh QR
+    expect(element.querySelector('.library-browser')).not.toBe(null)
+    expect(element.textContent).toContain('Your Library')
+    expect(element.textContent).toContain(FRESH_CODE)
+  })
+
+  it('a guest arriving at /session?code= is unaffected', async () => {
+    const GUEST_CODE = '99887766'
+    const element = document.createElement('div')
+    document.body.append(element)
+    const created = createRoot(element)
+
+    act(() => {
+      created.render(
+        <MemoryRouter initialEntries={[`/session?code=${GUEST_CODE}`]}>
+          <Routes>
+            <Route path="/session" element={<Session />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitFor(() => sockets.length === 1, 'guest socket')
+    const socket = sockets[0]!
+    socket.fireOpen()
+    await waitFor(() => socket.sentOfType('join') !== null, 'guest join')
+
+    expect(socket.url).toContain(GUEST_CODE)
+    const join = socket.sentOfType('join')
+    expect(join?.['role']).toBe('guest')
+
+    // Guest sees no host QR
+    expect(element.querySelector('.session-qr')).toBe(null)
+    expect(element.textContent).toContain('Session code')
+    expect(element.textContent).toContain(GUEST_CODE)
+
+    act(() => {
+      created.unmount()
+    })
+    element.remove()
+  })
+
+  it('StrictMode opens exactly one signaling socket and mints exactly one code', async () => {
+    const element = document.createElement('div')
+    document.body.append(element)
+    const created = createRoot(element)
+
+    act(() => {
+      created.render(
+        <StrictMode>
+          <MemoryRouter initialEntries={['/']}>
+            <Routes>
+              <Route path="/" element={<Home />} />
+            </Routes>
+          </MemoryRouter>
+        </StrictMode>,
+      )
+    })
+
+    await settle()
+    await waitFor(() => sockets.length === 1, 'the single socket')
+
+    expect(mintFetch.mock.calls.filter(([req]) => String(req).endsWith('/new'))).toHaveLength(1)
+    expect(sockets).toHaveLength(1)
+
+    act(() => {
+      created.unmount()
+    })
+    element.remove()
   })
 
   it('retries the mint when the worker cannot be reached', async () => {
@@ -443,25 +762,11 @@ describe('Home — receiving entry point (PLAN.md §7, §16 Phase 6)', () => {
     if (!(retry instanceof HTMLButtonElement)) throw new Error('test bug: no retry button')
     click(retry)
 
-    await waitFor(() => mintFetch.mock.calls.length === 2, 'the retry mint')
-    expect(element.querySelector('.home__qr-error')).toBe(null)
-  })
-
-  it('opens the host session with the code it already minted, never a second one', async () => {
-    const element = renderHome()
-    await waitFor(() => mintFetch.mock.calls.length === 1, 'the minted code')
-
-    const start = [...element.querySelectorAll<HTMLButtonElement>('button')].find(
-      (candidate) => candidate.textContent?.includes('Show my QR code') === true,
+    await waitFor(
+      () => mintFetch.mock.calls.filter(([req]) => String(req).endsWith('/new')).length >= 2,
+      'the retry mint',
     )
-    if (!start) throw new Error('test bug: no show-QR button')
-    click(start)
-
-    const route = element.querySelector<HTMLElement>('.session-route')
-    expect(route?.getAttribute('data-host-code')).toBe(HOME_CODE)
-    expect(route?.getAttribute('data-search')).toBe('')
-    // One user intent, one session: the page never asks the worker for a second code.
-    expect(mintFetch).toHaveBeenCalledTimes(1)
+    expect(element.querySelector('.home__qr-error')).toBe(null)
   })
 
   it('offers the typed-code fallback next to Scan & Send (PLAN.md §16 Phase 6)', async () => {
@@ -474,7 +779,6 @@ describe('Home — receiving entry point (PLAN.md §7, §16 Phase 6)', () => {
 })
 
 describe('Home — Scan & Send, PLAN.md §7 flow A (PLAN.md §16 Phase 6, D8)', () => {
-  /** Selects items in the browser by their display names, as a user with checkboxes would. */
   function selectItems(element: HTMLElement, names: string[]): void {
     click(buttonByClass(element, 'library-browser__select'))
     const displayed = itemNames(element)
@@ -504,12 +808,8 @@ describe('Home — Scan & Send, PLAN.md §7 flow A (PLAN.md §16 Phase 6, D8)', 
     click(buttonByClass(element, 'scanner__scan-valid'))
 
     const route = element.querySelector<HTMLElement>('.session-route')
-    // The scanned code is the PEER's session, so this device is the guest: the code is in
-    // the URL and no host bundle travels with it.
     expect(route?.getAttribute('data-search')).toBe(`?code=${PEER_CODE}`)
-    expect(route?.getAttribute('data-host-code')).toBe('')
 
-    // Exactly the selection, in memory only — never written anywhere to survive the hop.
     const queued = takeQueuedLibrarySends()
     expect(queued.map((item) => item.id).sort()).toEqual([first.id, second.id].sort())
     expect(queued.map((item) => item.name).sort()).toEqual(['Portal password', 'Thesis draft'])
@@ -538,8 +838,6 @@ describe('Home — Scan & Send, PLAN.md §7 flow A (PLAN.md §16 Phase 6, D8)', 
     click(buttonByClass(element, 'scanner__scan-malformed'))
 
     expect(element.querySelector('.session-route')).toBe(null)
-    // The real scanner stops its camera after reporting a code, so the overlay closes
-    // rather than staying up over a dead preview.
     expect(element.querySelector('.qr-scanner-stub')).toBe(null)
     expect(takeQueuedLibrarySends()).toEqual([])
   })

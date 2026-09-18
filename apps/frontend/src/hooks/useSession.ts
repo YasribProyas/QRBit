@@ -650,16 +650,38 @@ export async function deriveSessionMaterial(
 }
 
 /**
- * PLAN.md §8 Phase 2: the session advances to 'active' only once BOTH devices have
- * confirmed the safety phrase; until then the overlay stays up and no item traffic
- * flows. Pure so the gate can be pinned by a test without a React harness.
+ * D14: Derived confirmation gate.
+ * Only the sender (role 'guest') gates the session on confirming the phrase.
+ * On sender ('guest'), true when this device has confirmed (phraseConfirmed).
+ * On receiver ('host'), true when the peer has confirmed (peerConfirmed).
+ * If role is null/unspecified, falls back to requiring both flags.
+ */
+export function isSenderConfirmed(
+  role: SessionRole | null,
+  phraseConfirmed: boolean,
+  peerConfirmed: boolean,
+): boolean {
+  if (role === 'guest') return phraseConfirmed
+  if (role === 'host') return peerConfirmed
+  return phraseConfirmed && peerConfirmed
+}
+
+/**
+ * PLAN.md §8 Phase 2, decision D14:
+ * The session advances to 'active' once the SENDER confirms the safety phrase.
+ * Role 'guest' is the sender (phraseConfirmed gates).
+ * Role 'host' is the receiver (peerConfirmed gates — sender's confirmation over the wire).
+ * Until the sender confirms, the session stays in 'pairing'.
+ * Pure so the gate can be pinned by a test without a React harness.
  */
 export function nextPhaseForConfirmations(
   phase: SessionPhase,
   phraseConfirmed: boolean,
   peerConfirmed: boolean,
+  role?: SessionRole | null,
 ): SessionPhase {
-  return phase === 'pairing' && phraseConfirmed && peerConfirmed ? 'active' : phase
+  if (phase !== 'pairing') return phase
+  return isSenderConfirmed(role ?? null, phraseConfirmed, peerConfirmed) ? 'active' : phase
 }
 
 /**
@@ -716,14 +738,6 @@ export function describeSessionStatus(
 export interface UseSessionOptions {
   /** The `code` URL param. Present means guest; absent means host (PLAN.md §8). */
   code: string | null
-  /**
-   * A host code this device already minted (PLAN.md §16 Phase 6). Used ONLY when `code`
-   * is absent, and only on the first attempt: the host joins this code instead of
-   * creating a second session. `restart()` is a new session (PLAN.md §19 decision 10)
-   * and mints fresh like every other host. An absent or malformed code falls back to
-   * minting fresh rather than connecting to a code the worker will reject.
-   */
-  hostSession?: HostSession | null
 }
 
 export interface UseSessionResult {
@@ -824,7 +838,7 @@ export interface UseSessionResult {
 }
 
 export function useSession(options: UseSessionOptions): UseSessionResult {
-  const { code, hostSession } = options
+  const { code } = options
 
   const role = useSessionStore((state) => state.role)
   const phase = useSessionStore((state) => state.phase)
@@ -854,15 +868,6 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
   const removeItem = useSessionStore((state) => state.removeItem)
 
   const [attempt, setAttempt] = useState(0)
-  /**
-   * The pre-minted host bundle, read through a ref so the run effect's dependency list
-   * stays exactly what it was. Only the first attempt consumes it; `attempt` is already
-   * a dependency, so a restart re-runs the effect and this ref is simply ignored there.
-   */
-  const hostSessionRef = useRef<HostSession | null>(null)
-  useEffect(() => {
-    hostSessionRef.current = hostSession ?? null
-  }, [hostSession])
   /**
    * The two conditions that make the encrypted channel usable. Both are tracked
    * separately from the store because they gate *sends*, not what the UI shows.
@@ -1109,16 +1114,21 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
 
   const handlePeerMessage = useCallback(
     (message: WireMessage): void => {
-      // PLAN.md §8: the same classification the send gate uses — only the two control
-      // frames may be handled before BOTH devices confirmed the phrase, so a peer that
-      // holds the session key cannot populate the board while the safety-phrase overlay
-      // is still up.
-      //
-      // Read from the store per frame, never captured and never derived from the phase:
-      // the peer legitimately reaches 'active' a tick before this device's
-      // phase-transition effect runs, so a phase-based gate would drop legitimate
-      // frames arriving in that window.
-      if (isItemMessage(message) && !useSessionStore.getState().bothConfirmed()) return
+      // PLAN.md §8, decision D14: only the sender gates the session on confirming
+      // the safety phrase. Control frames may cross, but no item frames may be
+      // handled before the SENDER confirmed:
+      // - on receiver ('host'), sender confirmed when peerConfirmed arrives
+      // - on sender ('guest'), sender confirmed when phraseConfirmed is set
+      if (
+        isItemMessage(message) &&
+        !isSenderConfirmed(
+          roleRef.current,
+          useSessionStore.getState().phraseConfirmed,
+          useSessionStore.getState().peerConfirmed,
+        )
+      ) {
+        return
+      }
 
       switch (message.t) {
         case 'phrase-confirm': {
@@ -1850,27 +1860,11 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
         let activeCode = code
 
         if (activeCode === null || activeCode === '') {
-          /*
-           * PLAN.md §16 Phase 6: the Home screen mints this session's code so its QR can
-           * display it, and hands the bundle over when the user opens this page. Joining
-           * that code is what keeps one user intent to one session — minting again here
-           * would leave the peer that scanned the QR waiting on a code nobody ever joins.
-           *
-           * A malformed code is never produced by the worker; it can only arrive through
-           * a hand-crafted navigation, and minting fresh is the honest response (the
-           * alternative, connecting to it, would be rejected by the worker anyway).
-           */
-          const preMinted = attempt === 0 ? hostSessionRef.current : null
-          if (preMinted !== null && isValidSessionCode(preMinted.code)) {
-            activeCode = preMinted.code
-            setSessionCode(preMinted.code)
-          } else {
-            // Host: create the session, then display its code for the guest to scan.
-            const created = await requestNewSession()
-            if (isStale()) return
-            activeCode = created.code
-            setSessionCode(created.code)
-          }
+          // Host: create the session, then display its code for the guest to scan.
+          const created = await requestNewSession()
+          if (isStale()) return
+          activeCode = created.code
+          setSessionCode(created.code)
         }
 
         // Fetch TURN credentials for both roles using activeCode (ORCHESTRATION.md D10).
@@ -2063,13 +2057,13 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     }
   }, [phraseConfirmed, channelOpen, sessionKeyReady, send, endSession])
 
-  /** PLAN.md §8 Phase 2 gate: pairing → active only once both devices confirmed. */
+  /** PLAN.md §8 Phase 2, decision D14 gate: pairing → active once the sender confirms. */
   useEffect(() => {
-    const next = nextPhaseForConfirmations(phase, phraseConfirmed, peerConfirmed)
+    const next = nextPhaseForConfirmations(phase, phraseConfirmed, peerConfirmed, role)
     if (next !== phase) {
       setPhase(next)
     }
-  }, [phase, phraseConfirmed, peerConfirmed, setPhase])
+  }, [phase, phraseConfirmed, peerConfirmed, role, setPhase])
 
   // The signaling connection is closed on unmount so the worker's Durable Object
   // sees this device leave instead of waiting for its session to expire.

@@ -41,7 +41,7 @@ type MockedSession = UseSessionResult & ItemsApi
 
 const mocked = vi.hoisted(() => ({
   current: null as MockedSession | null,
-  options: null as { code: string | null; hostSession?: HostSession | null } | null,
+  options: null as { code: string | null } | null,
   confirmPhrase: vi.fn(),
   abort: vi.fn(),
   restart: vi.fn(),
@@ -49,9 +49,7 @@ const mocked = vi.hoisted(() => ({
 }))
 
 vi.mock('../hooks/useSession', () => ({
-  useSession: (options: { code: string | null; hostSession?: HostSession | null }) => {
-    // The page's whole contract with the hook is the source it names: a `?code=` URL is a
-    // guest, and a host session may come pre-minted from Home (PLAN.md §8, §16 Phase 6).
+  useSession: (options: { code: string | null }) => {
     mocked.options = options
     return mocked.current
   },
@@ -222,26 +220,44 @@ describe('Session page phase gating (PLAN.md §8)', () => {
     expect(element.textContent).toContain('Connected')
   })
 
-  it('shows this device confirmed while the peer is still pending', () => {
+  it('shows this device confirmed while awaiting activation', () => {
     mocked.current = makeResult({ phase: 'pairing', safetyPhrase: PHRASE, phraseConfirmed: true })
 
     const element = renderSession()
 
     expect(element.textContent).toContain('confirmed ✓')
-    expect(element.textContent).toContain('not confirmed yet')
     // The confirm button is a one-way action.
     expect(queryButton(element, 'Confirmed')?.disabled).toBe(true)
-    // Abort must stay available while waiting for the peer.
+    // Abort must stay available while waiting.
     expect(queryButton(element, 'Abort session')?.disabled).toBe(false)
   })
 
   it('reports the peer confirmation as soon as it arrives', () => {
-    mocked.current = makeResult({ phase: 'pairing', safetyPhrase: PHRASE, peerConfirmed: true })
+    mocked.current = makeResult({ role: 'host', phase: 'pairing', safetyPhrase: PHRASE, peerConfirmed: true })
 
-    const element = renderSession()
+    const element = renderSession('/session')
 
     const peerState = element.querySelector('.safety-phrase__status p:last-child')
     expect(peerState?.getAttribute('data-state')).toBe('confirmed')
+  })
+
+  it('renders safety phrase for receiver (host) without gating confirm button (decision D14)', () => {
+    mocked.current = makeResult({
+      role: 'host',
+      phase: 'pairing',
+      safetyPhrase: PHRASE,
+      connectionState: 'connected',
+    })
+
+    const element = renderSession('/session')
+
+    const overlay = element.querySelector('.safety-phrase')
+    expect(overlay).not.toBe(null)
+    for (const word of PHRASE) {
+      expect(element.textContent).toContain(word)
+    }
+    expect(queryButton(element, 'Confirmed')).toBe(null)
+    expect(queryButton(element, 'Abort session')).not.toBe(null)
   })
 
   it('wires Confirmed and Abort to the session hook', () => {
@@ -271,32 +287,17 @@ describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
     const element = renderSession('/session?code=A7X3K9P2')
 
     expect(mocked.options?.code).toBe('A7X3K9P2')
-    expect(mocked.options?.hostSession).toBe(null)
     expect(element.querySelector('.badge')?.textContent).toBe('guest')
   })
 
-  it('joins the pre-minted host code Home handed over in router state', () => {
-    const hostSession = { code: 'ABCDEFGH' }
-    mocked.current = makeResult({ role: 'host', sessionCode: 'ABCDEFGH' })
-
-    renderSession({ pathname: '/session', state: { hostSession } })
-
-    // One user intent, one session: the hook is told which code to join, so it never mints
-    // a second one behind the QR the peer already scanned.
-    expect(mocked.options?.code).toBe(null)
-    expect(mocked.options?.hostSession).toEqual({ code: 'ABCDEFGH' })
-  })
-
   /*
-   * The receiving flow's other half. Home used to own the QR while only this page held
-   * the session, so the scannable code and the waiting host never existed on the same
-   * screen and "scan this to send files here" could not work. The QR must be rendered
-   * here, by the host, and NOT by the guest (which already scanned one).
+   * The receiving flow's other half. Home and Session both render the QR only when
+   * actually listening as host.
    */
   it('renders the scannable QR for the host, who is the device that listens', () => {
     mocked.current = makeResult({ role: 'host', sessionCode: 'ABCDEFGH' })
 
-    const element = renderSession({ pathname: '/session', state: { hostSession: { code: 'ABCDEFGH' } } })
+    const element = renderSession('/session')
 
     const panel = element.querySelector('.session-qr')
     expect(panel).not.toBe(null)
@@ -316,38 +317,6 @@ describe('Session page session sources (PLAN.md §8, §16 Phase 6)', () => {
 
     expect(element.querySelector('.session-qr')).toBe(null)
     expect(element.querySelector('.qr')).toBe(null)
-  })
-
-  it('ignores a host bundle on a ?code= (guest) navigation', () => {
-    mocked.current = makeResult({ role: 'guest' })
-
-    renderSession({
-      pathname: '/session',
-      search: '?code=A7X3K9P2',
-      state: { hostSession: { code: 'ABCDEFGH' } },
-    })
-
-    expect(mocked.options?.code).toBe('A7X3K9P2')
-    expect(mocked.options?.hostSession).toBe(null)
-  })
-
-  it('ignores router state that is not a host bundle', () => {
-    mocked.current = makeResult({ role: 'host' })
-
-    renderSession({ pathname: '/session', state: { hostSession: { code: 42 } } })
-
-    expect(mocked.options?.hostSession).toBe(null)
-  })
-
-  it('ignores TURN credentials on router state since credentials come from the turn route (ORCHESTRATION.md D10)', () => {
-    mocked.current = makeResult({ role: 'host' })
-
-    renderSession({
-      pathname: '/session',
-      state: { hostSession: { code: 'ABCDEFGH', turnCredentials: { username: 'u', credential: 'c' } } },
-    })
-
-    expect(mocked.options?.hostSession).toEqual({ code: 'ABCDEFGH' })
   })
 
   it('shows the share landing hint when a shared file was not captured (PLAN.md §15, ORCHESTRATION.md D12)', () => {
