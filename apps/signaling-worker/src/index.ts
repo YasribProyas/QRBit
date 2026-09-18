@@ -29,20 +29,26 @@ const RATE_LIMIT_WINDOW_SECONDS = 60
 
 const SESSION_SOCKET_PATH = /^\/session\/([^/]+)\/ws$/
 
+const CSP_DIRECTIVES =
+  "default-src 'self'; connect-src wss://*.workers.dev https://turn.cloudflare.com; worker-src 'self'"
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     const cors = corsHeaders(request, env)
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: cors })
+      return new Response(null, { status: 204, headers: mergeHeaders(cors, securityHeaders()) })
     }
 
     if (url.pathname === '/healthz') {
-      return new Response('ok', { status: 200, headers: cors })
+      return new Response('ok', { status: 200, headers: mergeHeaders(cors, securityHeaders()) })
     }
 
     if (url.pathname === '/session/new') {
+      if (!isValidSessionNewFetch(request)) {
+        return json({ error: 'Forbidden' }, 403, cors)
+      }
       return createSession(env, cors)
     }
 
@@ -86,6 +92,12 @@ async function openSignalingSocket(
   code: string,
   cors: Headers,
 ): Promise<Response> {
+  // Sec-Fetch-* browser-CSRF defense: browsers always send Sec-Fetch-Mode: websocket
+  // for WebSocket upgrades. Rejects cross-origin fetch CSRF attempts.
+  if (!isValidSessionWsFetch(request)) {
+    return json({ error: 'Forbidden' }, 403, cors)
+  }
+
   // PLAN.md §17: the code is validated server-side BEFORE the Durable Object lookup,
   // so malformed input can never allocate or address a DO.
   if (!isValidSessionCode(code)) {
@@ -93,7 +105,7 @@ async function openSignalingSocket(
   }
 
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-    return json({ error: 'Expected WebSocket upgrade' }, 426, cors)
+    return json({ error: 'Expected WebSocket upgrade' }, 426, cors, { omitCsp: true })
   }
 
   if (await isRateLimited(request, env)) {
@@ -190,8 +202,68 @@ function corsHeaders(request: Request, env: Env): Headers {
   return headers
 }
 
-function json(body: unknown, status: number, headers: Headers): Response {
-  const responseHeaders = new Headers(headers)
+function json(
+  body: unknown,
+  status: number,
+  headers: Headers,
+  options?: { omitCsp?: boolean },
+): Response {
+  const responseHeaders = mergeHeaders(headers, securityHeaders(options))
   responseHeaders.set('Content-Type', 'application/json')
   return new Response(JSON.stringify(body), { status, headers: responseHeaders })
+}
+
+/**
+ * Returns security hardening headers (PLAN.md §16 Phase 8, §17).
+ *
+ * Content-Security-Policy is omitted on WebSocket upgrade responses (101) and the
+ * 426 upgrade challenge, as browsers silently discard CSP on 101 and some reject the
+ * handshake. It is included on all standard non-upgrade JSON responses and OPTIONS.
+ */
+function securityHeaders(options?: { omitCsp?: boolean }): Headers {
+  const headers = new Headers()
+  if (!options?.omitCsp) {
+    headers.set('Content-Security-Policy', CSP_DIRECTIVES)
+  }
+  headers.set('X-Content-Type-Options', 'nosniff')
+  headers.set('X-Frame-Options', 'DENY')
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  return headers
+}
+
+/** Merges security headers after CORS headers so CORS values are preserved. */
+function mergeHeaders(cors: Headers, security: Headers): Headers {
+  const merged = new Headers(cors)
+  for (const [key, value] of security.entries()) {
+    merged.set(key, value)
+  }
+  return merged
+}
+
+/**
+ * Sec-Fetch-* check on GET /session/new (PLAN.md §16 Phase 8).
+ * Accepts: Sec-Fetch-Mode: cors AND Sec-Fetch-Site: cross-site (or same-origin/same-site in local dev).
+ * Rejects other modes (e.g. 'navigate', 'no-cors') with 403.
+ * Missing headers pass through (non-browser clients, curl, Postman).
+ */
+function isValidSessionNewFetch(request: Request): boolean {
+  const mode = request.headers.get('Sec-Fetch-Mode')
+  if (mode === null) return true
+  if (mode !== 'cors') return false
+
+  const site = request.headers.get('Sec-Fetch-Site')
+  if (site === null) return true
+  return site === 'cross-site' || site === 'same-origin' || site === 'same-site'
+}
+
+/**
+ * Sec-Fetch-* check on GET /session/:code/ws (PLAN.md §16 Phase 8).
+ * WebSocket from a browser always sends Sec-Fetch-Mode: websocket.
+ * Rejects if the header is present but is NOT 'websocket' with 403.
+ * Missing headers pass through (non-browser clients, wrangler dev).
+ */
+function isValidSessionWsFetch(request: Request): boolean {
+  const mode = request.headers.get('Sec-Fetch-Mode')
+  if (mode === null) return true
+  return mode === 'websocket'
 }

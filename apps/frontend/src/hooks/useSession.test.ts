@@ -100,7 +100,7 @@ describe('describeSessionStatus', () => {
   it('is still connecting otherwise', () => {
     expect(describeSessionStatus('connecting', 'new', null)).toEqual({
       label: 'Connecting…',
-      tone: 'warn',
+      tone: 'idle',
     })
   })
 })

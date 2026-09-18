@@ -7,7 +7,9 @@
  * gating contract: the safety-phrase overlay is mounted only while the store is in
  * 'pairing', it carries both confirmation flags, Abort is wired through, and the
  * session board (PLAN.md §8 Phase 3) is the active view — with the add bar on the
- * sender only, and the Phase 1/2 channel-check panel gone for good.
+ * sender only, and the Phase 1/2 channel-check panel gone for good. The unload
+ * contract (PLAN.md §16 Phase 8) is here too: a `beforeunload` reaches the hook while
+ * the session can carry traffic, and never after it has ended.
  *
  * The ended screen's save section (PLAN.md §8 Phase 4) is exercised against a real
  * (fake-indexeddb) library: the received items are offered because they are in memory
@@ -42,6 +44,7 @@ const mocked = vi.hoisted(() => ({
   confirmPhrase: vi.fn(),
   abort: vi.fn(),
   restart: vi.fn(),
+  notifyUnload: vi.fn(),
 }))
 
 vi.mock('../hooks/useSession', () => ({
@@ -64,7 +67,7 @@ function makeResult(overrides: Partial<MockedSession> = {}): MockedSession {
     sessionCode: 'A7X3K9P2',
     connectionState: 'new',
     errorMessage: null,
-    status: { label: 'Connecting…', tone: 'warn' },
+    status: { label: 'Connecting…', tone: 'idle' },
     roleLabel: 'Guest — you opened the other device’s session',
     safetyPhrase: null,
     phraseConfirmed: false,
@@ -77,6 +80,9 @@ function makeResult(overrides: Partial<MockedSession> = {}): MockedSession {
     },
     restart: () => {
       mocked.restart()
+    },
+    notifyUnload: () => {
+      mocked.notifyUnload()
     },
     addTextItem: () => 'text-id',
     addRichTextItem: () => 'rich-id',
@@ -119,6 +125,26 @@ function queryButton(element: HTMLElement, label: string): HTMLButtonElement | n
     if (button.textContent?.includes(label)) return button
   }
   return null
+}
+
+/** Re-renders the mounted page, the way a phase change in the hook's result would. */
+function rerenderSession(): void {
+  const mounted = root
+  if (!mounted) throw new Error('test bug: no page is mounted to re-render')
+  act(() => {
+    mounted.render(
+      <MemoryRouter initialEntries={['/session?code=A7X3K9P2']}>
+        <Session />
+      </MemoryRouter>,
+    )
+  })
+}
+
+/** Fires the browser's teardown event at the page, as closing the tab would. */
+function fireBeforeUnload(): void {
+  act(() => {
+    window.dispatchEvent(new Event('beforeunload'))
+  })
 }
 
 beforeEach(async () => {
@@ -389,6 +415,78 @@ describe('Session page recovery paths (PLAN.md §8 Phase 4)', () => {
     })
 
     expect(mocked.restart).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Unload behaviour (PLAN.md §16 Phase 8, §17)
+// ---------------------------------------------------------------------------
+
+/**
+ * A tab that goes away ends the session, so the peer is not left on a live board
+ * until the Durable Object's TTL closes its socket.
+ *
+ * The page's contract here is delegation, and that is what these cases pin: while a
+ * session can still carry traffic ('active' or 'pairing') a `beforeunload` asks the
+ * hook to tell the peer, the listener is absent while this device is still connecting,
+ * and it is gone once the session has ended — which is what stops a session the peer
+ * already heard end from being announced twice. The frame that actually crosses the
+ * data channel is asserted in useSession.test.tsx, against the real hook.
+ */
+describe('Session page unload behaviour (PLAN.md §16 Phase 8)', () => {
+  it('tells the peer the session ended when the page unloads while active', () => {
+    mocked.current = makeResult({
+      phase: 'active',
+      connectionState: 'connected',
+      status: { label: 'Connected', tone: 'ok' },
+    })
+    renderSession()
+
+    fireBeforeUnload()
+
+    expect(mocked.notifyUnload).toHaveBeenCalledTimes(1)
+  })
+
+  it('does the same while the session is still pairing', () => {
+    mocked.current = makeResult({ phase: 'pairing', safetyPhrase: PHRASE })
+    renderSession()
+
+    fireBeforeUnload()
+
+    expect(mocked.notifyUnload).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends nothing during the connecting phase, when there is no peer yet', () => {
+    mocked.current = makeResult({ phase: 'connecting' })
+    renderSession()
+
+    fireBeforeUnload()
+
+    expect(mocked.notifyUnload).not.toHaveBeenCalled()
+  })
+
+  it('stops listening once the session has ended cleanly', () => {
+    mocked.current = makeResult({
+      phase: 'active',
+      connectionState: 'connected',
+      status: { label: 'Connected', tone: 'ok' },
+    })
+    renderSession()
+    fireBeforeUnload()
+    expect(mocked.notifyUnload).toHaveBeenCalledTimes(1)
+
+    // A clean end (Abort, or the peer's own session-end) has already told the peer, so
+    // the phase leaves 'active' — and the listener leaves with it, rather than
+    // announcing the same end a second time from a later unload.
+    mocked.current = makeResult({
+      phase: 'ended',
+      errorMessage: null,
+      status: { label: 'Session ended', tone: 'idle' },
+    })
+    rerenderSession()
+    fireBeforeUnload()
+
+    expect(mocked.notifyUnload).toHaveBeenCalledTimes(1)
   })
 })
 

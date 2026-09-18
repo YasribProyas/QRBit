@@ -629,6 +629,19 @@ export const PEER_REJOINED_REASON = 'The other device reconnected — start a ne
 /**
  * Maps session state onto the status bar required by PLAN.md §8 Phase 1:
  * Connecting / Connected / Ended / Error.
+ *
+ * The precedence is the point, and it is ordered by what the user must act on:
+ *
+ *   1. a failure this device knows the reason for (`errorMessage`);
+ *   2. the session having ended, which is terminal;
+ *   3. a transport that FAILED or DROPPED — checked before the phase, because an
+ *      'active' session whose peer connection just died would otherwise keep reading
+ *      'Connected', which is the one label that can make a user wait for a transfer
+ *      that can never arrive;
+ *   4. connected — either the peer connection says so or both devices confirmed the
+ *      phrase (PLAN.md §8);
+ *   5. anything else is still connecting: PLAN.md §8's "Connecting…" with a spinner is
+ *      the expected wait, not a fault, so it is neutral rather than amber.
  */
 export function describeSessionStatus(
   phase: SessionPhase,
@@ -641,16 +654,16 @@ export function describeSessionStatus(
   if (phase === 'ended') {
     return { label: 'Session ended', tone: 'idle' }
   }
-  if (phase === 'active' || connectionState === 'connected') {
-    return { label: 'Connected', tone: 'ok' }
-  }
   if (connectionState === 'failed') {
     return { label: 'Connection failed', tone: 'error' }
   }
   if (connectionState === 'disconnected') {
     return { label: 'Connection lost', tone: 'warn' }
   }
-  return { label: 'Connecting…', tone: 'warn' }
+  if (connectionState === 'connected' || phase === 'active') {
+    return { label: 'Connected', tone: 'ok' }
+  }
+  return { label: 'Connecting…', tone: 'idle' }
 }
 
 export interface UseSessionOptions {
@@ -687,6 +700,13 @@ export interface UseSessionResult {
   abort: () => void
   /** Tears the current attempt down and starts a fresh one. */
   restart: () => void
+  /**
+   * Tells the peer the session is over, synchronously, for a page that is being
+   * torn down (PLAN.md §16 Phase 8: the `beforeunload` path). Sends nothing when
+   * there is no session that can still carry traffic, and changes no state of its
+   * own — unlike `abort()`, which also ends the session (see the implementation).
+   */
+  notifyUnload: () => void
 
   /**
    * The items API (PLAN.md §9/§10/§12), exactly the surface
@@ -2026,6 +2046,37 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
   }, [close, reset])
 
   /**
+   * The page-teardown half of `abort()`: the peer is told the session is over, and
+   * nothing else happens (PLAN.md §16 Phase 8, §17).
+   *
+   * A closing tab gives a handler no chance to await anything, so this is the
+   * synchronous path: `send()` puts the frame on the transport's queue and returns
+   * (ORCHESTRATION.md D3 — the encryption and the channel write follow on that queue).
+   * The ciphertext races the page teardown, which is the best an unload path can do:
+   * a close that wins the race costs the peer a delayed end, never a wrong one, and
+   * its socket teardown ends the session anyway.
+   *
+   * Deliberately state-free. The page is being torn down, so nothing here may call
+   * `endSession`, `close` or `reset`: a React state write from an unload handler is a
+   * write into a tree that is already going away, and dropping the transport would
+   * discard the very frame this exists to send. The phase is read from the store per
+   * call rather than captured, because the caller subscribes from an unload listener
+   * that can be a commit behind the store — only a session that can still carry
+   * traffic sends anything ('active', or 'pairing', where the channel is already up
+   * and the phrase-confirm travels the same way).
+   */
+  const notifyUnload = useCallback((): void => {
+    const { phase: currentPhase } = useSessionStore.getState()
+    if (currentPhase !== 'active' && currentPhase !== 'pairing') return
+
+    try {
+      send({ t: 'session-end' })
+    } catch {
+      // The channel was not usable, so there is nobody to notify.
+    }
+  }, [send])
+
+  /**
    * The overlay's Abort button (PLAN.md §8 Phase 2).
    *
    * Tells the peer the session is over, then tears the connection down. The frame is
@@ -2084,6 +2135,7 @@ export function useSession(options: UseSessionOptions): UseSessionResult {
     confirmPhrase,
     abort,
     restart,
+    notifyUnload,
     addTextItem,
     addRichTextItem,
     addFileItem,

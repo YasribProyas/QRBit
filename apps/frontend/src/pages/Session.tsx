@@ -38,6 +38,37 @@ export function Session() {
   const session = useSession({ code, hostSession })
 
   /*
+   * PLAN.md §16 Phase 8 / §17: a session that is abandoned by closing the tab (or by
+   * navigating away) tells the peer it is over, instead of leaving the other device on
+   * a live board until the Durable Object's 300s TTL closes its socket.
+   *
+   * `beforeunload`, not `unload`: only `beforeunload` runs while the page can still put
+   * a frame on the wire ('unload' is deprecated and fires after the transport is already
+   * going away). The listener is installed for exactly as long as a session can carry
+   * traffic — not while this device is merely connecting (there is no peer to notify
+   * yet), and not once the session has ended, because the cleanup removes it on the
+   * phase change. That is what keeps a clean end (Abort, or the peer ending the session)
+   * from being announced a second time: the peer already heard that `session-end`.
+   *
+   * The handler sends and does nothing else. `notifyUnload` is deliberately state-free
+   * for the same reason: a React state write here would land in a tree that is being
+   * torn down.
+   */
+  const { notifyUnload } = session
+  const phase = session.phase
+  useEffect(() => {
+    if (phase !== 'active' && phase !== 'pairing') return
+
+    const handleBeforeUnload = (): void => {
+      notifyUnload()
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [phase, notifyUnload])
+
+  /*
    * PLAN.md §15's share target POSTs to `/session` with the file as multipart form data,
    * and only a service worker of our own can read that body. This build ships
    * vite-plugin-pwa's generated worker, which has no share-target handler, so a share

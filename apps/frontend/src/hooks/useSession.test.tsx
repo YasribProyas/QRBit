@@ -2445,6 +2445,78 @@ describe('useSession pending sends (PLAN.md §7, §16 Phase 5, D8)', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Page teardown (PLAN.md §16 Phase 8, §17)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `beforeunload` path, at the level where the frame is real.
+ *
+ * `pages/Session.tsx` owns the listener and decides when it exists; these cases pin
+ * what the hook does when it is asked: the peer is told the session is over, the
+ * session itself is left running (the tab is what is going away, not the transport,
+ * which is what still has to carry the frame), and nothing is sent once the session
+ * has ended.
+ */
+describe('useSession unload notification (PLAN.md §16 Phase 8)', () => {
+  it('puts session-end on the wire and leaves the session running', async () => {
+    const devices = await pairDevices()
+
+    session().notifyUnload()
+
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'session-end').length === 1,
+      'the session-end frame',
+    )
+    expect(framesOf(devices.hostReceived, 'session-end')).toEqual([{ t: 'session-end' }])
+    // Deliberately NOT abort(): the session is still up and the peer is not cut off.
+    expect(useSessionStore.getState().phase).toBe('pairing')
+    expect(useSessionStore.getState().errorMessage).toBe(null)
+    expect(devices.guestChannel.closed).toBe(false)
+  })
+
+  it('sends from an active session as well', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+
+    session().notifyUnload()
+
+    await waitFor(
+      () => framesOf(devices.hostReceived, 'session-end').length === 1,
+      'the session-end frame',
+    )
+  })
+
+  it('sends nothing once the session has ended, even with the channel still open', async () => {
+    const devices = await pairDevices()
+
+    // A clean end that leaves the channel up: exactly the state a second unload would
+    // find if the page did not stop listening on the phase change.
+    useSessionStore.getState().endSession(null)
+    session().notifyUnload()
+    await settle()
+
+    expect(framesOf(devices.hostReceived, 'session-end')).toEqual([])
+    expect(devices.guestChannel.closed).toBe(false)
+  })
+
+  it('reports a transport that fails mid-session instead of staying “Connected”', async () => {
+    const devices = await pairDevices()
+    await activatePairing(devices)
+    expect(session().status).toEqual({ label: 'Connected', tone: 'ok' })
+
+    // A dead peer connection during an active session is the one state in which
+    // 'Connected' would make a user wait for a transfer that can never arrive.
+    useSessionStore.getState().setConnectionState('failed')
+    await waitFor(() => session().status.tone === 'error', 'the failed status')
+    expect(session().status).toEqual({ label: 'Connection failed', tone: 'error' })
+
+    useSessionStore.getState().setConnectionState('disconnected')
+    await waitFor(() => session().status.tone === 'warn', 'the disconnected status')
+    expect(session().status).toEqual({ label: 'Connection lost', tone: 'warn' })
+  })
+})
+
 describe('useSession never touches IndexedDB (AGENTS.md, PLAN.md §1/§17)', () => {
   it('writes nothing during a whole session that never saves — queue included', async () => {
     // fake-indexeddb's own classes, so these spies see the real call sites the library
