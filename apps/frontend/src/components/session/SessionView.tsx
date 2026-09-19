@@ -85,6 +85,16 @@ export function SessionView({ session, showConnectingCode = true }: SessionViewP
           <p className="muted">
             On the other device, open <code>/session?code={session.sessionCode}</code>
           </p>
+          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
+            <Link
+              className="link button"
+              to="/"
+              style={{ textAlign: 'center', textDecoration: 'none', width: 'auto', padding: '0.6rem 1.5rem' }}
+              onClick={() => session.abort()}
+            >
+              Cancel &amp; Return Home
+            </Link>
+          </div>
         </section>
       ) : null}
 
@@ -226,11 +236,20 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {
         </p>
       ) : null}
 
-      {api.errorMessage === null ? (
-        <button type="button" className="button" onClick={api.restart}>
-          Start a new session
-        </button>
-      ) : null}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.75rem' }}>
+        {api.errorMessage === null ? (
+          <button type="button" className="button" onClick={api.restart}>
+            Start a new session
+          </button>
+        ) : null}
+        <Link
+          className="link"
+          to="/"
+          style={{ textAlign: 'center', padding: '0.4rem', textDecoration: 'none', color: 'var(--text-muted)' }}
+        >
+          ← Return to Home
+        </Link>
+      </div>
 
       {pickerOpen ? (
         <SaveToLibraryModal

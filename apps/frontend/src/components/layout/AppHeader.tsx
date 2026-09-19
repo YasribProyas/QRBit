@@ -1,6 +1,6 @@
 import { Badge, Box, Burger, Button, Group, Text, Tooltip } from '@mantine/core'
-import { IconCamera, IconKeyboard, IconSettings, IconShieldCheck } from '@tabler/icons-react'
-import { Link } from 'react-router-dom'
+import { IconCamera, IconKeyboard, IconSettings, IconX } from '@tabler/icons-react'
+import { Link, useNavigate } from 'react-router-dom'
 import type { UseSessionResult } from '../../hooks/useSession'
 
 export interface AppHeaderProps {
@@ -22,6 +22,7 @@ export function AppHeader({
   onToggleVault,
   mobileOnlyBurger = true,
 }: AppHeaderProps) {
+  const navigate = useNavigate()
   const statusTone = session?.status.tone ?? 'idle'
   const toneColorMap: Record<string, string> = {
     ok: 'emerald',
@@ -30,6 +31,8 @@ export function AppHeader({
     idle: 'gray',
   }
   const badgeColor = toneColorMap[statusTone] ?? 'gray'
+  const isSessionActiveOrConnecting =
+    session && (session.phase === 'connecting' || session.phase === 'pairing' || session.phase === 'active')
 
   return (
     <header className="page__header" style={{ width: '100%', marginBottom: '0.5rem' }}>
@@ -47,22 +50,14 @@ export function AppHeader({
           ) : null}
 
           <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}>
-            <Group gap={8} align="center" wrap="nowrap">
-              <Box
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 8,
-                  background: 'rgba(74, 222, 128, 0.12)',
-                  border: '1px solid rgba(74, 222, 128, 0.28)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#4ade80',
-                }}
-              >
-                <IconShieldCheck size={20} stroke={2} />
-              </Box>
+            <Group gap={10} align="center" wrap="nowrap">
+              <img
+                src="/favicon.svg"
+                alt="QRDrop"
+                width={32}
+                height={32}
+                style={{ borderRadius: 8, display: 'block', flexShrink: 0 }}
+              />
               <div>
                 <h1 className="page__title" style={{ margin: 0, lineHeight: 1.15, fontSize: '1.25rem' }}>
                   QRDrop
@@ -118,6 +113,24 @@ export function AppHeader({
 
         {/* Right: Quick Actions & Settings */}
         <Group gap="xs" align="center" wrap="nowrap">
+          {/* Quick Exit/Abort button when in session so users can exit without refreshing */}
+          {isSessionActiveOrConnecting ? (
+            <Tooltip label="Leave session and return to Home" position="bottom" withArrow>
+              <Button
+                variant="light"
+                color="red"
+                size="xs"
+                leftSection={<IconX size={15} />}
+                onClick={() => {
+                  session.abort()
+                  navigate('/')
+                }}
+              >
+                Exit
+              </Button>
+            </Tooltip>
+          ) : null}
+
           {onOpenScanner ? (
             <Tooltip label="Scan & Send via camera" position="bottom" withArrow>
               <Button

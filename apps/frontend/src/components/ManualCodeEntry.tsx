@@ -2,14 +2,14 @@
  * Manual session-code entry (PLAN.md §8's typed fallback, §16 Phase 6's "Manual code entry
  * fallback UI").
  *
- * Upgraded with Mantine UI: sleek monospace input field with validation,
- * inline action button, and accessible error message.
+ * Upgraded with Mantine UI: prominent, large monospace code field with centered tracking,
+ * matching-height submit button, and accessible error validation.
  */
 
 import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Box, Button, Group, Text, TextInput } from '@mantine/core'
+import { Box, Button, Text, TextInput } from '@mantine/core'
 import { IconArrowRight } from '@tabler/icons-react'
 
 import { SESSION_CODE_LENGTH, isValidSessionCode } from '../hooks/useSession'
@@ -47,7 +47,7 @@ function ManualCodeEntryForm() {
   }
 
   return (
-    <Box component="form" className="manual-code" onSubmit={join}>
+    <Box component="form" className="manual-code" onSubmit={join} style={{ width: '100%' }}>
       <Text
         component="label"
         className="manual-code__label"
@@ -55,45 +55,64 @@ function ManualCodeEntryForm() {
         size="sm"
         fw={500}
         c="dimmed"
-        mb={4}
+        mb={6}
         display="block"
       >
         Have a code instead? Type it in
       </Text>
-      <div className="manual-code__row">
-        <Group gap="xs" align="flex-start" wrap="nowrap" style={{ flex: 1 }}>
-          <TextInput
-            id={inputId}
-            classNames={{ input: 'manual-code__input' }}
-            styles={{
-              input: {
-                fontFamily:
-                  '"JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                letterSpacing: '0.1em',
-                textTransform: 'uppercase',
-                fontWeight: 600,
-              },
-            }}
-            value={code}
-            onChange={(event) => {
-              setCode(event.target.value.toUpperCase())
-              if (error !== null) setError(null)
-            }}
-            placeholder="A7X3K9P2"
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            maxLength={SESSION_CODE_LENGTH}
-            style={{ flex: 1 }}
-          />
-          <Button
-            type="submit"
-            className="button manual-code__submit"
-            rightSection={<IconArrowRight size={16} />}
-          >
-            Join session
-          </Button>
-        </Group>
+      <div
+        className="manual-code__row"
+        style={{ display: 'flex', gap: '0.75rem', alignItems: 'stretch', width: '100%' }}
+      >
+        <TextInput
+          id={inputId}
+          size="md"
+          classNames={{ input: 'manual-code__input' }}
+          style={{ flex: 1, minWidth: 0 }}
+          styles={{
+            root: { flex: 1 },
+            wrapper: { height: '48px' },
+            input: {
+              height: '48px',
+              fontFamily:
+                '"JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              letterSpacing: '0.18em',
+              fontSize: '1.2rem',
+              textAlign: 'center',
+              textTransform: 'uppercase',
+              fontWeight: 700,
+              background: '#0d0e11',
+              border: '1px solid rgba(255, 255, 255, 0.16)',
+            },
+          }}
+          value={code}
+          onChange={(event) => {
+            setCode(event.target.value.toUpperCase())
+            if (error !== null) setError(null)
+          }}
+          placeholder="A7X3K9P2"
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          maxLength={SESSION_CODE_LENGTH}
+        />
+        <Button
+          type="submit"
+          size="md"
+          className="button manual-code__submit"
+          style={{
+            width: 'auto',
+            minWidth: '130px',
+            height: '48px',
+            flexShrink: 0,
+            background: 'var(--accent)',
+            color: '#0f0f0f',
+            fontWeight: 650,
+          }}
+          rightSection={<IconArrowRight size={18} />}
+        >
+          Join session
+        </Button>
       </div>
       {error !== null ? (
         <Text

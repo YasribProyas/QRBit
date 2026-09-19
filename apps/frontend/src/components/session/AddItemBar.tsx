@@ -23,6 +23,14 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import {
+  IconBlockquote,
+  IconBooks,
+  IconLock,
+  IconNotes,
+  IconPaperclip,
+  IconPhoto,
+} from '@tabler/icons-react'
 import type { ItemsApi } from './SessionBoard'
 import { LockedItemComposeModal } from './LockedItemComposeModal'
 import type { LockedItemInput } from './LockedItemComposeModal'
@@ -79,8 +87,10 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
           onClick={() => {
             api.addTextItem()
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          T
+          <IconNotes size={18} />
+          <span style={{ display: 'none' }}>T</span>
         </button>
 
         <button
@@ -91,8 +101,10 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
           onClick={() => {
             api.addRichTextItem()
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          ¶
+          <IconBlockquote size={18} />
+          <span style={{ display: 'none' }}>¶</span>
         </button>
 
         <button
@@ -103,8 +115,10 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
           onClick={() => {
             imageInput.current?.click()
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          🖼
+          <IconPhoto size={18} />
+          <span style={{ display: 'none' }}>🖼</span>
         </button>
         <input
           ref={imageInput}
@@ -129,8 +143,10 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
           onClick={() => {
             fileInput.current?.click()
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          📎
+          <IconPaperclip size={18} />
+          <span style={{ display: 'none' }}>📎</span>
         </button>
         <input
           ref={fileInput}
@@ -153,8 +169,10 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
           onClick={() => {
             setLockedComposeOpen(true)
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          🔒
+          <IconLock size={18} />
+          <span style={{ display: 'none' }}>🔒</span>
         </button>
 
         <button
@@ -165,11 +183,15 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
           onClick={() => {
             setLibraryOpen(true)
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          📚
+          <IconBooks size={18} />
+          <span style={{ display: 'none' }}>📚</span>
         </button>
         <p className="add-item-bar__hint muted">
-          🔒 locked items also need a password to open — the label stays visible
+          <IconLock size={14} color="#f87171" style={{ verticalAlign: 'middle', marginRight: '4px' }} />
+          <span style={{ display: 'none' }}>🔒 </span>
+          locked items also need a password to open — the label stays visible
         </p>
       </div>
 

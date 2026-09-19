@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { IconCamera } from '@tabler/icons-react'
 import { LibraryBrowser } from '../components/library/LibraryBrowser'
 import { ManualCodeEntry } from '../components/ManualCodeEntry'
 import { QRScanner } from '../components/QRScanner'
@@ -169,8 +170,11 @@ export function Home() {
                 onClick={() => {
                   setScanning(true)
                 }}
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
               >
-                📷 Scan &amp; Send{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
+                <IconCamera size={18} />
+                <span style={{ display: 'none' }}>📷 </span>
+                Scan &amp; Send{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
               </button>
               <p className="muted">
                 Opens the camera to scan the other device’s code. Anything selected above sends as

@@ -26,6 +26,12 @@
 
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconDotsVertical,
+  IconFolderFilled,
+} from '@tabler/icons-react'
 import type { LibraryItem } from './LibraryItemRow'
 
 /** Mirrors PLAN.md §6.1's `LibraryFolder`. `parentId: null` is the tree's root. */
@@ -120,7 +126,12 @@ export function FolderNode({
             setExpanded(!expanded)
           }}
         >
-          {expanded ? '▾' : '▸'}
+          {expanded ? (
+            <IconChevronDown size={14} style={{ verticalAlign: 'middle' }} />
+          ) : (
+            <IconChevronRight size={14} style={{ verticalAlign: 'middle' }} />
+          )}
+          <span style={{ display: 'none' }}>{expanded ? '▾' : '▸'}</span>
         </button>
 
         {renaming ? (
@@ -174,7 +185,8 @@ export function FolderNode({
             }}
           >
             <span className="folder-node__icon" aria-hidden="true">
-              📁
+              <IconFolderFilled size={16} color="#4ade80" style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+              <span style={{ display: 'none' }}>📁</span>
             </span>{' '}
             {folder.name}
           </button>
@@ -197,7 +209,8 @@ export function FolderNode({
             setMenuOpen(!menuOpen)
           }}
         >
-          ···
+          <IconDotsVertical size={16} style={{ verticalAlign: 'middle' }} />
+          <span style={{ display: 'none' }}>···</span>
         </button>
       </div>
 
@@ -340,7 +353,8 @@ function FolderPickerOption({
       onClick={onSelect}
     >
       <span className="folder-picker__icon" aria-hidden="true">
-        📁
+        <IconFolderFilled size={16} color="#4ade80" style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+        <span style={{ display: 'none' }}>📁</span>
       </span>{' '}
       {name}
     </button>

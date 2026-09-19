@@ -38,6 +38,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, MouseEvent as ReactMouseEvent } from 'react'
+import {
+  IconDotsVertical,
+  IconFileText,
+  IconLock,
+  IconNotes,
+  IconPaperclip,
+  IconPhoto,
+} from '@tabler/icons-react'
 import { decryptItem } from '../../lib/crypto'
 import { UnlockModal } from '../session/UnlockModal'
 import { RichTextItem } from '../session/items/RichTextItem'
@@ -168,6 +176,21 @@ type LockedReveal =
   | { kind: 'text'; text: string }
   | { kind: 'richtext'; json: string }
   | { kind: 'file'; blob: Blob }
+
+function ItemTypeSvgIcon({ type }: { type: LibraryItemType }) {
+  switch (type) {
+    case 'text':
+      return <IconNotes size={16} color="#4ade80" style={{ verticalAlign: 'middle' }} />
+    case 'richtext':
+      return <IconFileText size={16} color="#60a5fa" style={{ verticalAlign: 'middle' }} />
+    case 'image':
+      return <IconPhoto size={16} color="#f472b6" style={{ verticalAlign: 'middle' }} />
+    case 'file':
+      return <IconPaperclip size={16} color="#fbbf24" style={{ verticalAlign: 'middle' }} />
+    case 'locked':
+      return <IconLock size={16} color="#f87171" style={{ verticalAlign: 'middle' }} />
+  }
+}
 
 export function LibraryItemRow({
   item,
@@ -331,8 +354,9 @@ export function LibraryItemRow({
           />
         ) : null}
 
-        <span className="library-item__icon" aria-hidden="true">
-          {ITEM_TYPE_ICONS[item.type]}
+        <span className="library-item__icon" aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <ItemTypeSvgIcon type={item.type} />
+          <span style={{ display: 'none' }}>{ITEM_TYPE_ICONS[item.type]}</span>
         </span>
 
         {renaming ? (
@@ -402,8 +426,10 @@ export function LibraryItemRow({
           aria-expanded={menuOpen}
           aria-label={`Actions for ${item.name}`}
           onClick={openMenu}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          ···
+          <IconDotsVertical size={16} style={{ verticalAlign: 'middle' }} />
+          <span style={{ display: 'none' }}>···</span>
         </button>
       </div>
 

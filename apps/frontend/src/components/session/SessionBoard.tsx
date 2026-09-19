@@ -12,6 +12,7 @@
  */
 
 import type { SessionRole } from '../../lib/signaling'
+import { IconX } from '@tabler/icons-react'
 import { useSessionStore } from '../../store/sessionStore'
 import type { ItemStatus, ItemType, SessionItem } from '../../store/sessionStore'
 import type { LockedItemInput } from './LockedItemComposeModal'
@@ -116,8 +117,10 @@ export function SessionBoard({ api, role }: SessionBoardProps) {
                   onClick={() => {
                     api.deleteItem(item.id)
                   }}
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                 >
-                  ✕
+                  <IconX size={14} />
+                  <span style={{ display: 'none' }}>✕</span>
                 </button>
               </div>
 

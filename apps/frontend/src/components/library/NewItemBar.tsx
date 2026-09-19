@@ -35,6 +35,13 @@
 
 import { useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
+import {
+  IconBlockquote,
+  IconLock,
+  IconNotes,
+  IconPaperclip,
+  IconPhoto,
+} from '@tabler/icons-react'
 import { ROOT_FOLDER_ID } from '../../lib/library'
 import type {
   LibraryFileItem,
@@ -272,8 +279,10 @@ export function NewItemBar({
           onClick={() => {
             setTextOpen(true)
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          T
+          <IconNotes size={18} />
+          <span style={{ display: 'none' }}>T</span>
         </button>
 
         <button
@@ -284,8 +293,10 @@ export function NewItemBar({
           onClick={() => {
             setRichTextOpen(true)
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          ¶
+          <IconBlockquote size={18} />
+          <span style={{ display: 'none' }}>¶</span>
         </button>
 
         <button
@@ -296,8 +307,10 @@ export function NewItemBar({
           onClick={() => {
             imageInputRef.current?.click()
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          🖼
+          <IconPhoto size={18} />
+          <span style={{ display: 'none' }}>🖼</span>
         </button>
         <input
           ref={imageInputRef}
@@ -317,8 +330,10 @@ export function NewItemBar({
           onClick={() => {
             fileInputRef.current?.click()
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          📎
+          <IconPaperclip size={18} />
+          <span style={{ display: 'none' }}>📎</span>
         </button>
         <input
           ref={fileInputRef}
@@ -338,15 +353,19 @@ export function NewItemBar({
           onClick={() => {
             setLockedOpen(true)
           }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          🔒
+          <IconLock size={18} />
+          <span style={{ display: 'none' }}>🔒</span>
         </button>
 
         <p className="add-item-bar__hint muted">
           Saved items are stored in your library on this device — nothing is sent anywhere
         </p>
         <p className="add-item-bar__hint new-item-bar__locked-hint muted">
-          🔒 There is no recovery for a locked item: lose its password and it is unreadable for good
+          <IconLock size={14} color="#f87171" style={{ verticalAlign: 'middle', marginRight: '4px' }} />
+          <span style={{ display: 'none' }}>🔒 </span>
+          There is no recovery for a locked item: lose its password and it is unreadable for good
         </p>
       </div>
 

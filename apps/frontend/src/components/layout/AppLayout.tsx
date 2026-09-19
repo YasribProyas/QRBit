@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { Box } from '@mantine/core'
+import { Box, Drawer, ScrollArea } from '@mantine/core'
 import { AppHeader } from './AppHeader'
 import type { UseSessionResult } from '../../hooks/useSession'
 import { WithMantine } from '../common/WithMantine'
@@ -41,14 +41,36 @@ export function AppLayout({
 
         {showVault && vaultContent ? (
           <div className="dual-pane-container">
-            <div className={`dual-pane-layout ${mobileVaultOpen ? 'mobile-vault-expanded' : ''}`}>
-              <aside className={`vault-pane ${mobileVaultOpen ? 'vault-pane--open' : ''}`} aria-label="Local Library Vault">
+            <div className="dual-pane-layout">
+              {/* Desktop Sticky Left Vault Pane */}
+              <aside className="vault-pane" aria-label="Local Library Vault">
                 {vaultContent}
               </aside>
+              {/* Right Session / QR / Actions Pane */}
               <section className="session-pane" aria-label="Session Surface">
                 {mainContent}
               </section>
             </div>
+
+            {/* Mobile Drawer for Vault: Opens when user taps hamburger on phone */}
+            <Drawer
+              opened={mobileVaultOpen}
+              onClose={() => setMobileVaultOpen(false)}
+              size="100%"
+              padding="md"
+              title="Local Encrypted Vault"
+              styles={{
+                header: { background: '#141517', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' },
+                body: { background: '#0d0e11', padding: '1rem' },
+                content: { background: '#0d0e11' },
+              }}
+              hiddenFrom="md"
+              keepMounted={false}
+            >
+              <ScrollArea h="calc(100vh - 80px)">
+                {mobileVaultOpen ? vaultContent : null}
+              </ScrollArea>
+            </Drawer>
           </div>
         ) : (
           <div className="single-pane-layout" style={{ maxWidth: '48rem', margin: '0 auto', width: '100%' }}>

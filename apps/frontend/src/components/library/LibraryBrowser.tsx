@@ -46,6 +46,14 @@
  */
 
 import { useEffect, useState } from 'react'
+import {
+  IconChevronDown,
+  IconFileText,
+  IconFolder,
+  IconFolderFilled,
+  IconFolderOpen,
+  IconPlus,
+} from '@tabler/icons-react'
 import { FolderNode, childFolders } from './FolderNode'
 import type { LibraryFolder } from './FolderNode'
 import { LibraryItemRow } from './LibraryItemRow'
@@ -350,8 +358,10 @@ export function LibraryBrowser({
   return (
     <div className="library-browser">
       <div className="library-browser__header">
-        <h3 className="library-browser__folder-name">
-          <span aria-hidden="true">📁</span> {currentName}
+        <h3 className="library-browser__folder-name" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+          <IconFolderFilled size={18} color="#4ade80" />
+          <span style={{ display: 'none' }}>📁</span>
+          <span>{currentName}</span>
         </h3>
 
         {selectionMode ? (
@@ -393,7 +403,9 @@ export function LibraryBrowser({
               onClick={() => {
                 setNewFolderOpen(true)
               }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
             >
+              <IconPlus size={14} />
               + New Folder
             </button>
           </div>
@@ -433,14 +445,21 @@ export function LibraryBrowser({
         </p>
       ) : (
         <>
+          {/* Section 1: Folder Tree */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', margin: '0.5rem 0 0.25rem 0', fontSize: '0.75rem', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#909296' }}>
+            <IconFolder size={14} />
+            <span>Folders</span>
+          </div>
+
           <ul className="library-browser__tree">
             <li
               className="folder-node folder-node--root"
               data-current={rootSelected ? 'true' : undefined}
             >
               <div className="folder-node__row">
-                <span className="folder-node__chevron folder-node__chevron--root" aria-hidden="true">
-                  ▾
+                <span className="folder-node__chevron folder-node__chevron--root" aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <IconChevronDown size={14} />
+                  <span style={{ display: 'none' }}>▾</span>
                 </span>
                 <button
                   type="button"
@@ -450,8 +469,9 @@ export function LibraryBrowser({
                     onSelectFolder(null)
                   }}
                 >
-                  <span className="folder-node__icon" aria-hidden="true">
-                    📁
+                  <span className="folder-node__icon" aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', marginRight: '6px', verticalAlign: 'middle' }}>
+                    <IconFolderFilled size={16} color="#4ade80" />
+                    <span style={{ display: 'none' }}>📁</span>
                   </span>{' '}
                   Root
                 </button>
@@ -477,6 +497,24 @@ export function LibraryBrowser({
               />
             ))}
           </ul>
+
+          {/* Section 2: Files in Selected Folder */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '1rem 0 0.25rem 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', fontWeight: 650, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#909296' }}>
+              <IconFileText size={14} />
+              <span>Files in {currentName} ({currentItems.length})</span>
+            </div>
+            {!rootSelected ? (
+              <button
+                type="button"
+                className="button button--link"
+                style={{ fontSize: '0.75rem', padding: '0.1rem 0.4rem', color: '#4ade80' }}
+                onClick={() => onSelectFolder(null)}
+              >
+                ↑ Back to Root
+              </button>
+            ) : null}
+          </div>
 
           <ul className="library-browser__items">
             {currentItems.map((item) => (

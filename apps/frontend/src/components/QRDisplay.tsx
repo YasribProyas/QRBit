@@ -1,33 +1,15 @@
 /**
  * This device's session QR panel (PLAN.md §3, §7, §16 Phase 6).
  *
- * Scanning this code is how a session starts, so what it encodes is the FULL session URL
- * built by `config.ts` — `https://<app>/session?code=XXXXXXXX`. A bare code would leave
- * the scanning camera app nothing to open (PLAN.md §3). Callers may hand over either an
- * already-built `url` (Home's call shape) or a `code` to build one from; never both, so
- * the code shown for manual entry cannot disagree with the code that was encoded.
- *
- * Three things make the result scannable by a phone at arm's length, and they are the
- * reason this is more than one line of `toCanvas`:
- *
- *   - Dark modules on a light panel. The app theme is dark, so the canvas paints its own
- *     light background and the renderer is given the QR palette explicitly; an inverted
- *     code is unreadable to most scanners.
- *   - A quiet zone, which the renderer draws from `margin` and which is pinned to the QR
- *     spec's four modules.
- *   - A bitmap at the device pixel ratio, so the modules stay crisp when the canvas is
- *     laid out at CSS size on a phone.
- *
- * A QR that will not draw must never block pairing, so the panel degrades along the path
- * Phase 1 already shipped: the raw code stays legible as text for manual entry at all
- * times (`/session?code=...` typed by hand), and a failed generation additionally prints
- * the whole URL for hand-copying.
+ * Upgraded with Mantine UI: sleek presentation card, large high-contrast canvas,
+ * and fullscreen projection modal on enlarge for easy scanning across rooms or displays.
  */
 
 import { toCanvas } from 'qrcode'
 import { useEffect, useRef, useState } from 'react'
-
+import { Modal } from '@mantine/core'
 import { APP_URL, buildSessionUrl } from '../config'
+import { WithMantine } from './common/WithMantine'
 
 /** Where the session URL comes from: one of the two, never both. */
 type SessionSource = { url: string; code?: undefined } | { url?: undefined; code: string }
@@ -118,6 +100,7 @@ export function QRDisplay(props: QRDisplayProps) {
   const { url, code } = resolveSource(props)
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const fullscreenCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const [status, setStatus] = useState<GenerationStatus>('generating')
   const [enlarged, setEnlarged] = useState(false)
 
@@ -128,13 +111,6 @@ export function QRDisplay(props: QRDisplayProps) {
     let cancelled = false
     setStatus('generating')
 
-    /*
-     * A code that will not draw is a normal outcome, not a crash: a browser with canvas
-     * disabled, a test environment without a renderer, or a renderer failure all land here
-     * and all must leave the manual fallback on screen. The 2D context is checked first
-     * because the renderer dereferences it without a guard, which would otherwise surface
-     * as an unhelpful TypeError from inside the library.
-     */
     const draw = async (): Promise<void> => {
       try {
         if (canvas.getContext('2d') === null) {
@@ -146,7 +122,10 @@ export function QRDisplay(props: QRDisplayProps) {
           errorCorrectionLevel: QR_ERROR_CORRECTION_LEVEL,
           margin: QR_QUIET_ZONE_MODULES,
           width: bitmapSize(size),
-          color: { dark: QR_DARK_MODULES, light: QR_LIGHT_MODULES },
+          color: {
+            dark: QR_DARK_MODULES,
+            light: QR_LIGHT_MODULES,
+          },
         })
 
         if (!cancelled) setStatus('ready')
@@ -165,67 +144,151 @@ export function QRDisplay(props: QRDisplayProps) {
 
     void draw()
 
-    // Unmount, a new URL, or a new size: whatever is in flight is stale and must not reach
-    // state, which is also what keeps React from being updated after unmount.
     return () => {
       cancelled = true
     }
   }, [url, size])
 
+  // Draw fullscreen canvas when enlarged modal is opened
+  useEffect(() => {
+    if (!enlarged) return
+    const fsCanvas = fullscreenCanvasRef.current
+    if (!fsCanvas || fsCanvas.getContext('2d') === null) return
+
+    void toCanvas(fsCanvas, url, {
+      errorCorrectionLevel: QR_ERROR_CORRECTION_LEVEL,
+      margin: QR_QUIET_ZONE_MODULES,
+      width: 480,
+      color: {
+        dark: QR_DARK_MODULES,
+        light: QR_LIGHT_MODULES,
+      },
+    }).catch(() => {})
+  }, [enlarged, url])
+
   const ariaLabel = code === null ? `QR code pairing for ${url}` : `QR code pairing for session ${code}`
 
   return (
-    <div className="qr">
-      <div className="qr__frame" style={enlarged ? { maxWidth: '100%' } : undefined}>
-        {status === 'generating' ? (
-          <span className="qr__placeholder-label" role="status">
-            Generating QR…
-          </span>
-        ) : null}
-        {status === 'error' ? (
-          <>
-            <span className="qr__placeholder-label">QR unavailable</span>
-            <code className="qr__url">{url}</code>
-          </>
-        ) : null}
-        <canvas
-          ref={canvasRef}
-          className="qr__canvas"
-          role="img"
-          aria-label={ariaLabel}
-          style={{
-            // Kept mounted so the draw always has a canvas to target; hidden until it holds
-            // something worth showing, so a half-drawn code is never on screen.
-            display: status === 'ready' ? 'block' : 'none',
-            width: '100%',
-            height: 'auto',
-            maxWidth: `${enlarged ? Math.min(size * ENLARGED_SCALE, ENLARGED_MAX_SIZE) : size}px`,
-            background: QR_LIGHT_PANEL,
-          }}
-        />
-      </div>
-      <p className="qr__caption">{caption}</p>
-      {/* PLAN.md §16 Phase 6's manual fallback: the code is always readable, QR or not. */}
-      <p className="qr__caption">
-        Manual entry: <code className="qr__url">{code ?? url}</code>
-      </p>
-      <div className="qr__actions">
-        <button
-          type="button"
-          className="button button--link"
-          aria-pressed={enlarged}
-          onClick={() => {
-            setEnlarged((current) => !current)
+    <WithMantine>
+      <div className="qr">
+        <div className="qr__frame" style={enlarged ? { maxWidth: '100%' } : undefined}>
+          {status === 'generating' ? (
+            <span className="qr__placeholder-label" role="status">
+              Generating QR…
+            </span>
+          ) : null}
+          {status === 'error' ? (
+            <>
+              <span className="qr__placeholder-label">QR unavailable</span>
+              <code className="qr__url">{url}</code>
+            </>
+          ) : null}
+          <canvas
+            ref={canvasRef}
+            className="qr__canvas"
+            role="img"
+            aria-label={ariaLabel}
+            style={{
+              // Kept mounted so the draw always has a canvas to target; hidden until it holds
+              // something worth showing, so a half-drawn code is never on screen.
+              display: status === 'ready' ? 'block' : 'none',
+              width: '100%',
+              height: 'auto',
+              maxWidth: `${enlarged ? Math.min(size * ENLARGED_SCALE, ENLARGED_MAX_SIZE) : size}px`,
+              background: QR_LIGHT_PANEL,
+            }}
+          />
+        </div>
+        <p className="qr__caption">{caption}</p>
+        {/* PLAN.md §16 Phase 6's manual fallback: the code is always readable, QR or not. */}
+        <p className="qr__caption">
+          Manual entry: <code className="qr__url">{code ?? url}</code>
+        </p>
+        <div className="qr__actions">
+          <button
+            type="button"
+            className="button button--link"
+            aria-pressed={enlarged}
+            onClick={() => {
+              setEnlarged((current) => !current)
+            }}
+          >
+            {enlarged ? 'Shrink QR' : 'Enlarge QR'}
+          </button>
+          {onRefresh ? (
+            <button type="button" className="button button--link" onClick={onRefresh}>
+              New code
+            </button>
+          ) : null}
+        </div>
+
+        {/* Fullscreen Enlarge Modal for easy scanning across rooms or on desktop */}
+        <Modal
+          opened={enlarged}
+          onClose={() => setEnlarged(false)}
+          fullScreen
+          title="Session QR Code"
+          styles={{
+            header: { background: '#121316', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' },
+            body: {
+              background: '#0a0b0e',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: 'calc(100vh - 60px)',
+              padding: '2rem',
+            },
           }}
         >
-          {enlarged ? 'Shrink QR' : 'Enlarge QR'}
-        </button>
-        {onRefresh ? (
-          <button type="button" className="button button--link" onClick={onRefresh}>
-            New code
+          <div
+            style={{
+              background: '#ffffff',
+              padding: '1.5rem',
+              borderRadius: '16px',
+              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.9)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <canvas
+              ref={fullscreenCanvasRef}
+              style={{
+                width: 'min(70vh, 80vw, 480px)',
+                height: 'min(70vh, 80vw, 480px)',
+                display: 'block',
+              }}
+            />
+          </div>
+          {code ? (
+            <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+              <p style={{ color: '#909296', margin: '0 0 0.5rem 0', fontSize: '0.95rem' }}>
+                Session Code
+              </p>
+              <code
+                style={{
+                  fontSize: '2.25rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.22em',
+                  fontFamily: 'monospace',
+                  color: '#4ade80',
+                }}
+              >
+                {code}
+              </code>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="button"
+            style={{ marginTop: '2rem', width: 'auto', padding: '0.75rem 2.5rem' }}
+            onClick={() => setEnlarged(false)}
+          >
+            Close Fullscreen
           </button>
-        ) : null}
+        </Modal>
       </div>
-    </div>
+    </WithMantine>
   )
 }
