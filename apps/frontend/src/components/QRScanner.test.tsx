@@ -379,7 +379,7 @@ describe('QRScanner — a decoded payload (PLAN.md §7 Flow A, §16 Phase 6)', (
     expect(onScan).toHaveBeenCalledTimes(1)
   })
 
-  it('ignores QR codes that are not QRDrop session URLs, and keeps scanning', async () => {
+  it('ignores QR codes that are not QRBit session URLs, and keeps scanning', async () => {
     const onScan = vi.fn()
     const source = fakeSource()
     renderScanner({ isNativeDetectorAvailable: () => false, sourceFactory: () => source, onScan })

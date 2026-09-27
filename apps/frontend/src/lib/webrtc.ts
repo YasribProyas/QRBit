@@ -70,7 +70,7 @@ export interface PeerConnectionOptions {
 }
 
 /** DataChannel label for the main control/data channel. */
-export const DATA_CHANNEL_LABEL = 'qrdrop-main'
+export const DATA_CHANNEL_LABEL = 'qrbit-main'
 
 const STUN_SERVERS: readonly RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }]
 

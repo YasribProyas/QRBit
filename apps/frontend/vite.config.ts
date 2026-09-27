@@ -33,7 +33,7 @@ function pagesSecurityHeaders(): Plugin {
   const TURN_HOSTS = ['https://turn.cloudflare.com']
 
   return {
-    name: 'qrdrop-pages-security-headers',
+    name: 'qrbit-pages-security-headers',
     apply: 'build',
     configResolved(resolved) {
       const env = loadEnv(resolved.mode, resolved.root, 'VITE_')

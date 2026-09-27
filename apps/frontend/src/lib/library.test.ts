@@ -50,7 +50,7 @@ import type {
 } from '../store/sessionStore'
 
 /** PLAN.md §6.3 names the database; pinning it here catches a rename. */
-const DB_NAME = 'qrdrop-library'
+const DB_NAME = 'qrbit-library'
 
 const NOW = 1_700_000_000_000
 

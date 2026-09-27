@@ -35,7 +35,7 @@ import type { LibraryFileItem, LibraryItem, LibraryTextItem } from '../lib/libra
 import { useLibraryStore } from './libraryStore'
 import type { SessionItem } from './sessionStore'
 
-const DB_NAME = 'qrdrop-library'
+const DB_NAME = 'qrbit-library'
 const NOW = 1_700_000_000_000
 
 /** Deterministic bytes, so a byte-identical comparison means something. */

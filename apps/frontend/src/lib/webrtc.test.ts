@@ -193,7 +193,7 @@ function turnUrls(servers: RTCIceServer[]): string[] {
 
 describe('DATA_CHANNEL_LABEL', () => {
   it('is the label both peers agree on', () => {
-    expect(DATA_CHANNEL_LABEL).toBe('qrdrop-main')
+    expect(DATA_CHANNEL_LABEL).toBe('qrbit-main')
   })
 })
 

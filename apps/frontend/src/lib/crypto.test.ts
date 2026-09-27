@@ -208,8 +208,8 @@ describe('interoperability — two independent devices must agree', () => {
 
   it('derives byte-identical session key material on both devices', async () => {
     const { hostSecret, guestSecret, hostSessionKey } = await pairUp()
-    const hostKeyBytes = await hkdfBytes(hostSecret, 'qrdrop-session-v1', 256)
-    const guestKeyBytes = await hkdfBytes(guestSecret, 'qrdrop-session-v1', 256)
+    const hostKeyBytes = await hkdfBytes(hostSecret, 'qrbit-session-v1', 256)
+    const guestKeyBytes = await hkdfBytes(guestSecret, 'qrbit-session-v1', 256)
     expect(new Uint8Array(hostKeyBytes)).toEqual(new Uint8Array(guestKeyBytes))
 
     const plaintext = utf8('cross-device key material')
@@ -240,11 +240,11 @@ describe('interoperability — two independent devices must agree', () => {
 })
 
 describe('domain separation (session key vs safety phrase)', () => {
-  it('uses HKDF info "qrdrop-session-v1" so both peers reproduce the session key', async () => {
+  it('uses HKDF info "qrbit-session-v1" so both peers reproduce the session key', async () => {
     const { hostSecret } = await pairUp()
     // Recompute the session key bytes from the spec parameters to pin the label:
     // if the label ever drifts, two devices would derive different keys.
-    const expected = await hkdfBytes(hostSecret, 'qrdrop-session-v1', 256)
+    const expected = await hkdfBytes(hostSecret, 'qrbit-session-v1', 256)
     const plaintext = new Uint8Array([9, 8, 7])
     const envelope = await encrypt(await deriveSessionKey(hostSecret, SESSION_ID), plaintext)
     await expect(decrypt(await importAesKey(expected), envelope)).resolves.toEqual(plaintext)
@@ -252,7 +252,7 @@ describe('domain separation (session key vs safety phrase)', () => {
 
   it('produces different bytes for the session key and the phrase', async () => {
     const { hostSecret, hostPhraseBytes, hostSessionKey } = await pairUp()
-    const sessionKeyBytes = new Uint8Array(await hkdfBytes(hostSecret, 'qrdrop-session-v1', 256))
+    const sessionKeyBytes = new Uint8Array(await hkdfBytes(hostSecret, 'qrbit-session-v1', 256))
 
     // The phrase bytes are the leading bytes of a *different* HKDF expansion.
     expect(hostPhraseBytes.byteLength).toBe(PHRASE_BYTE_LENGTH)
@@ -279,7 +279,7 @@ describe('domain separation (session key vs safety phrase)', () => {
 describe('encrypt / decrypt', () => {
   it('round-trips a payload', async () => {
     const { hostSessionKey } = await pairUp()
-    const plaintext = new TextEncoder().encode('QRDrop round trip')
+    const plaintext = new TextEncoder().encode('QRBit round trip')
     const envelope = await encrypt(hostSessionKey, plaintext)
     expect(await decrypt(hostSessionKey, envelope)).toEqual(plaintext)
   })
@@ -585,7 +585,7 @@ describe('base64 helpers', () => {
     expect(toBase64(new Uint8Array([102, 111]))).toBe('Zm8=')
     expect(toBase64(new Uint8Array([102, 111, 111]))).toBe('Zm9v')
     expect(toBase64(new Uint8Array([102, 111, 111, 98]))).toBe('Zm9vYg==')
-    expect(toBase64(new TextEncoder().encode('QRDrop'))).toBe('UVJEcm9w')
+    expect(toBase64(new TextEncoder().encode('QRBit'))).toBe('UVJCaXQ=')
   })
 
   it('correctly handles multi-megabyte payloads crossing chunk boundaries', () => {

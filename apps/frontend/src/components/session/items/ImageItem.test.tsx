@@ -39,7 +39,7 @@ function makeItem(overrides: Partial<ImageItemModel> = {}): ImageItemModel {
 let urlCounter = 0
 const createObjectURL = vi.fn((_source: Blob | MediaSource): string => {
   urlCounter += 1
-  return `blob:qrdrop/${urlCounter}`
+  return `blob:qrbit/${urlCounter}`
 })
 const revokeObjectURL = vi.fn()
 const previousCreateObjectURL = URL.createObjectURL
@@ -120,7 +120,7 @@ describe('ImageItem (PLAN.md §9)', () => {
     const { element } = renderItem({ item: makeItem({ blob: new Blob(['half']), progress: 60 }) })
 
     expect(createObjectURL).toHaveBeenCalledTimes(1)
-    expect(previewSrc(element)).toBe('blob:qrdrop/1')
+    expect(previewSrc(element)).toBe('blob:qrbit/1')
     expect(element.querySelector('img')?.getAttribute('alt')).toBe('holiday.jpg')
     expect(element.querySelector('.progress-ring')?.getAttribute('aria-valuenow')).toBe('60')
   })
@@ -131,8 +131,8 @@ describe('ImageItem (PLAN.md §9)', () => {
     update({ item: makeItem({ status: 'complete', blob: new Blob(['all of it']), progress: 100 }) })
 
     expect(element.querySelector('.progress-ring')).toBe(null)
-    expect(previewSrc(element)).toBe('blob:qrdrop/2')
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(previewSrc(element)).toBe('blob:qrbit/2')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
   })
 
   it('bounds the progressive reveal while a large image streams in', () => {
@@ -148,21 +148,21 @@ describe('ImageItem (PLAN.md §9)', () => {
     update({ item: makeItem({ status: 'complete', blob: new Blob(['final']), progress: 100 }) })
 
     expect(createObjectURL).toHaveBeenCalledTimes(MAX_PREVIEW_STEPS + 1)
-    expect(previewSrc(element)).toBe(`blob:qrdrop/${MAX_PREVIEW_STEPS + 1}`)
+    expect(previewSrc(element)).toBe(`blob:qrbit/${MAX_PREVIEW_STEPS + 1}`)
     expect(revokeObjectURL).toHaveBeenCalledTimes(MAX_PREVIEW_STEPS)
   })
 
   it('uses the URL the transport published instead of building a second one', () => {
     const { element, unmount } = renderItem({
-      item: makeItem({ objectURL: 'blob:qrdrop/published', blob: new Blob(['half']) }),
+      item: makeItem({ objectURL: 'blob:qrbit/published', blob: new Blob(['half']) }),
     })
 
     expect(createObjectURL).not.toHaveBeenCalled()
-    expect(previewSrc(element)).toBe('blob:qrdrop/published')
+    expect(previewSrc(element)).toBe('blob:qrbit/published')
 
     unmount()
 
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/published')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/published')
   })
 
   it('revokes the preview it built when the item goes away', () => {
@@ -172,7 +172,7 @@ describe('ImageItem (PLAN.md §9)', () => {
 
     unmount()
 
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
   })
 
   it('says so when the transfer errored', () => {

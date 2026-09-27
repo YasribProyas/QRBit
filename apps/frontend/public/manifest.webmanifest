@@ -1,6 +1,6 @@
 {
-  "name": "QRDrop",
-  "short_name": "QRDrop",
+  "name": "QRBit",
+  "short_name": "QRBit",
   "description": "Scan a QR code. Files appear. No login. No cloud. No trace.",
   "start_url": "/",
   "scope": "/",

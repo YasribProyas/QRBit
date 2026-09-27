@@ -1,5 +1,5 @@
 /**
- * QRDrop crypto core — key exchange, key derivation, session encryption,
+ * QRBit crypto core — key exchange, key derivation, session encryption,
  * locked-item encryption and export encryption (PLAN.md §11.1–§11.5, §2, §6.2, §10, §17).
  *
  * Everything here is native Web Crypto (`globalThis.crypto.subtle`). No
@@ -30,7 +30,7 @@
  *     the tuple PLAN.md §6.2 stores (in Phase 5) and sends (in Phase 4).
  *
  * Export-encryption rules (§11.5, at the bottom of this file):
- *   - A whole-library `.qrdrop` file is encrypted with the same PBKDF2 + AES-GCM
+ *   - A whole-library `.qrbit` file is encrypted with the same PBKDF2 + AES-GCM
  *     primitives as a locked item (§11.5: "same pattern as encryptItem"), but its
  *     salt travels inside the envelope because the file is self-contained.
  *   - Locked items are NOT decrypted on the way out of the library (PLAN.md §14,
@@ -50,8 +50,8 @@ export const SESSION_KEY_BYTE_LENGTH = 32
 export const PHRASE_BYTE_LENGTH = 3
 
 /** HKDF domain-separation labels. Must differ per derived value (PLAN.md §11.2). */
-const SESSION_KEY_INFO = 'qrdrop-session-v1'
-const PHRASE_INFO = 'qrdrop-phrase-v1'
+const SESSION_KEY_INFO = 'qrbit-session-v1'
+const PHRASE_INFO = 'qrbit-phrase-v1'
 
 /**
  * Generates an ephemeral P-256 ECDH keypair (PLAN.md §11.1).
@@ -142,8 +142,8 @@ export async function deriveSessionKey(
 }
 
 /**
- * HKDF (SHA-256) over the same shared secret, but with info `qrdrop-phrase-v1`
- * instead of `qrdrop-session-v1` (PLAN.md §11.2/§11.6).
+ * HKDF (SHA-256) over the same shared secret, but with info `qrbit-phrase-v1`
+ * instead of `qrbit-session-v1` (PLAN.md §11.2/§11.6).
  *
  * The distinct info string is the whole point: HKDF output for different info
  * values is computationally independent, so the phrase — which is displayed on

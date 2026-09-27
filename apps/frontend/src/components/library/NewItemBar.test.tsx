@@ -45,7 +45,7 @@ import { decryptItem } from '../../lib/crypto'
 import { parseRichTextContent } from '../session/items/RichTextItem'
 import { useLibraryStore } from '../../store/libraryStore'
 
-const DB_NAME = 'qrdrop-library'
+const DB_NAME = 'qrbit-library'
 
 interface Harness {
   element: HTMLDivElement

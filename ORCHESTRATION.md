@@ -1,4 +1,4 @@
-# Orchestration Notes — QRDrop
+# Orchestration Notes — QRBit
 
 Operating doc for the orchestrator (parent agent). Read this before spawning lanes.
 Source of truth for model routing is `AGENTS.md` → "If you're the orchestrator".

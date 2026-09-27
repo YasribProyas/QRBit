@@ -1,7 +1,7 @@
 import { createTheme, type MantineColorsTuple } from '@mantine/core'
 
 /**
- * QRDrop Sleek Minimalist Theme
+ * QRBit Sleek Minimalist Theme
  *
  * Dark-first, stealth utility register:
  * - High-contrast obsidian backgrounds (#0a0b0e, #111317, #181a1f)

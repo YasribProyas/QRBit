@@ -280,7 +280,7 @@ function editorOf(element: HTMLElement): Editor {
 let urlCounter = 0
 const createObjectURL = vi.fn((_source: Blob | MediaSource): string => {
   urlCounter += 1
-  return `blob:qrdrop/${urlCounter}`
+  return `blob:qrbit/${urlCounter}`
 })
 const revokeObjectURL = vi.fn()
 const previousCreateObjectURL = URL.createObjectURL
@@ -488,13 +488,13 @@ describe('LibraryItemRow — inline preview (PLAN.md §6.4)', () => {
     click(nameButton(harness.element))
 
     const image = bySelector(harness.element, '.library-item__thumbnail', HTMLImageElement)
-    expect(image.getAttribute('src')).toBe('blob:qrdrop/1')
+    expect(image.getAttribute('src')).toBe('blob:qrbit/1')
     expect(image.getAttribute('alt')).toBe('holiday.png')
     expect(createObjectURL).toHaveBeenCalledWith(item.blob)
 
     harness.unmount()
 
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
   })
 
   it('offers a file download through an object URL, revoked when the row folds', () => {
@@ -504,13 +504,13 @@ describe('LibraryItemRow — inline preview (PLAN.md §6.4)', () => {
     click(nameButton(harness.element))
 
     const link = bySelector(harness.element, '.library-item__download', HTMLAnchorElement)
-    expect(link.getAttribute('href')).toBe('blob:qrdrop/1')
+    expect(link.getAttribute('href')).toBe('blob:qrbit/1')
     expect(link.getAttribute('download')).toBe('thesis.pdf')
 
     click(nameButton(harness.element))
 
     expect(harness.element.querySelector('.library-item__download')).toBe(null)
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
   })
 })
 
@@ -592,7 +592,7 @@ describe('LibraryItemRow — locked items (PLAN.md §6.4, §11.4, §17)', () => 
     click(button(harness.element, '.library-item__lock-again'))
 
     expect(harness.element.querySelector('.library-item__download')).toBe(null)
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
   })
 
   it('renders an unlocked richtext payload read-only', async () => {

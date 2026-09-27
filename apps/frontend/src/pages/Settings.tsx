@@ -67,7 +67,7 @@ export function Settings() {
       setFile(null)
       setNeedsPassword(false)
       setHeaderReading(false)
-      setError(`That is not a ${EXPORT_FILE_EXTENSION} file. Choose a QRDrop export.`)
+      setError(`That is not a ${EXPORT_FILE_EXTENSION} file. Choose a QRBit export.`)
       return
     }
 
@@ -117,7 +117,7 @@ export function Settings() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
           <header className="page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Link className="link" to="/" style={{ textDecoration: 'none', color: 'var(--accent)', fontWeight: 550 }}>
-              ← QRDrop
+              ← QRBit
             </Link>
             <h1 className="page__title" style={{ margin: 0, fontSize: '1.25rem' }}>
               Settings
@@ -252,7 +252,7 @@ export function Settings() {
               Privacy
             </h2>
             <p className="muted" style={{ color: '#909296', fontSize: '0.875rem', lineHeight: 1.6 }}>
-              QRDrop keeps no history. Session data lives in memory only and is
+              QRBit keeps no history. Session data lives in memory only and is
               discarded when the session ends — it is never written to IndexedDB, the
               Cache API or localStorage.
             </p>

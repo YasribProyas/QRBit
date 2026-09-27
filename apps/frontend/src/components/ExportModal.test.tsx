@@ -143,7 +143,7 @@ beforeEach(() => {
   Object.defineProperty(URL, 'createObjectURL', {
     configurable: true,
     writable: true,
-    value: vi.fn(() => 'blob:qrdrop-export'),
+    value: vi.fn(() => 'blob:qrbit-export'),
   })
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: vi.fn() })
   exportLibraryMock.mockResolvedValue(EXPORTED_BLOB)
@@ -223,7 +223,7 @@ describe('ExportModal', () => {
     expect(exportLibraryMock).toHaveBeenCalledWith('all', { encrypt: false, password: undefined })
     expect(URL.createObjectURL).toHaveBeenCalledWith(EXPORTED_BLOB)
     expect(downloads).toEqual([suggestExportFilename(new Date())])
-    expect(downloads[0]).toMatch(/^qrdrop-export-\d{4}-\d{2}-\d{2}\.qrdrop$/)
+    expect(downloads[0]).toMatch(/^qrbit-export-\d{4}-\d{2}-\d{2}\.qrbit$/)
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 

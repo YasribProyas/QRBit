@@ -456,25 +456,25 @@ describe('worker security hardening & routes', () => {
       // changes one variable and the policy follows. This is the regression guard
       // against someone reintroducing a hardcoded workers.dev literal.
       const env = createMockEnv({
-        ALLOWED_ORIGINS: 'https://qrdrop.example.com, https://qrdrop.pages.dev',
+        ALLOWED_ORIGINS: 'https://qrbit.example.com, https://qrbit.pages.dev',
       })
       const res = await worker.fetch(
         new Request('https://worker.internal/session/new', {
-          headers: { Origin: 'https://qrdrop.example.com' },
+          headers: { Origin: 'https://qrbit.example.com' },
         }),
         env,
       )
 
       const csp = res.headers.get('Content-Security-Policy') ?? ''
       expect(csp).toContain("connect-src 'self'")
-      expect(csp).toContain('https://qrdrop.example.com')
-      expect(csp).toContain('wss://qrdrop.example.com')
-      expect(csp).toContain('https://qrdrop.pages.dev')
-      expect(csp).toContain('wss://qrdrop.pages.dev')
+      expect(csp).toContain('https://qrbit.example.com')
+      expect(csp).toContain('wss://qrbit.example.com')
+      expect(csp).toContain('https://qrbit.pages.dev')
+      expect(csp).toContain('wss://qrbit.pages.dev')
       expect(csp).toContain('https://turn.cloudflare.com')
       expect(csp).not.toContain('*.workers.dev')
       // CORS still reflects only the allowlisted origin that asked.
-      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://qrdrop.example.com')
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://qrbit.example.com')
     })
 
     it('WebSocket upgrade challenge (426) does NOT include Content-Security-Policy', async () => {

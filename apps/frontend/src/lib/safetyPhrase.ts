@@ -2,7 +2,7 @@
  * Safety phrase (PLAN.md §11.6 and §2 "active MITM during pairing").
  *
  * The phrase is a human-verifiable digest of the ECDH shared secret: after
- * `deriveSafetyPhraseBytes()` produces HKDF output for info `qrdrop-phrase-v1`,
+ * `deriveSafetyPhraseBytes()` produces HKDF output for info `qrbit-phrase-v1`,
  * this module maps one byte per word onto the 256-word list. Both devices derive
  * the same bytes from the same shared secret and session id, so the same three
  * words appear on both screens. A MITM who terminated ECDH on each side would

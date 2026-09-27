@@ -67,7 +67,7 @@ export async function generateTurnCredentials(
   const trimmedSecret = keySecret.trim()
   const trimmedCode = sessionCode.trim()
 
-  const customIdentifier = `qrdrop:${trimmedCode}`.slice(0, MAX_CUSTOM_IDENTIFIER_LENGTH)
+  const customIdentifier = `qrbit:${trimmedCode}`.slice(0, MAX_CUSTOM_IDENTIFIER_LENGTH)
   const ttl = clampTurnTtl(ttlSeconds)
 
   const url = `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(trimmedKeyId)}/credentials/generate`

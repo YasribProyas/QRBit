@@ -159,7 +159,7 @@ beforeEach(async () => {
 async function freshLibraryDatabase(): Promise<void> {
   await closeLibraryDatabase()
   await new Promise<void>((resolve, reject) => {
-    const request = indexedDB.deleteDatabase('qrdrop-library')
+    const request = indexedDB.deleteDatabase('qrbit-library')
     request.onsuccess = () => resolve()
     request.onerror = () => reject(request.error ?? new Error('deleteDatabase failed'))
     request.onblocked = () => reject(new Error('deleteDatabase blocked by an open connection'))

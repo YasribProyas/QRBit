@@ -1,12 +1,12 @@
 /**
  * Library export / import (PLAN.md §14) — the whole local library, or a chosen
- * part of it, as one `.qrdrop` file.
+ * part of it, as one `.qrbit` file.
  *
  * Two shapes of file come out of here, and the first four bytes tell them apart:
  *
  *   - a plain JSON manifest, `application/json`;
  *   - the same manifest UTF-8 encoded and encrypted through `crypto.encryptExport`
- *     (§11.5), prefixed with the 4-byte magic `QRDE` and served as
+ *     (§11.5), prefixed with the 4-byte magic `QRBE` and served as
  *     `application/octet-stream`.
  *
  * The magic is the only reliable discriminator: an encrypted export is binary, so
@@ -16,7 +16,7 @@
  *
  * Locked items are the one thing that never changes shape here. PLAN.md §14 and
  * §19 decision 4 require them to travel as their `{ciphertext, iv, salt}` tuple
- * whether or not the outer file is encrypted — so an unencrypted `.qrdrop` still
+ * whether or not the outer file is encrypted — so an unencrypted `.qrbit` still
  * holds them as opaque ciphertext, and an encrypted one double-locks them. This
  * module therefore never calls `decryptItem`/`encryptItem`: a locked item is
  * copied byte-for-byte into base64 and back, which is also why forwarding one
@@ -54,16 +54,16 @@ import {
 export const EXPORT_VERSION = 1
 
 /** The §14 file extension. The name is a convention; the header is the contract. */
-export const EXPORT_FILE_EXTENSION = '.qrdrop'
+export const EXPORT_FILE_EXTENSION = '.qrbit'
 
 /**
- * The first four bytes of an encrypted export: 'QRDE' in ASCII.
+ * The first four bytes of an encrypted export: 'QRBE' in ASCII.
  *
  * A constant rather than a literal so the writer, the reader and
  * `isEncryptedExport` cannot drift. Writing it as bytes (not a string) keeps the
  * comparison free of any text encoding question.
  */
-const MAGIC_BYTES: Uint8Array<ArrayBuffer> = new Uint8Array([0x51, 0x52, 0x44, 0x45])
+const MAGIC_BYTES: Uint8Array<ArrayBuffer> = new Uint8Array([0x51, 0x52, 0x42, 0x45])
 
 const JSON_MIME_TYPE = 'application/json'
 const ENCRYPTED_MIME_TYPE = 'application/octet-stream'
@@ -71,7 +71,7 @@ const ENCRYPTED_MIME_TYPE = 'application/octet-stream'
 /** The one message a failed decryption gets, whatever Web Crypto named the failure. */
 const WRONG_PASSWORD_MESSAGE = 'Wrong password or corrupted file'
 
-const NOT_EXPORT_MESSAGE = 'This file is not a QRDrop library export.'
+const NOT_EXPORT_MESSAGE = 'This file is not a QRBit library export.'
 
 // ---------------------------------------------------------------------------
 // Manifest types (PLAN.md §14)
@@ -113,7 +113,7 @@ export interface LibraryItemExport {
   blobMimeType?: string
 }
 
-/** The `.qrdrop` payload (PLAN.md §14). */
+/** The `.qrbit` payload (PLAN.md §14). */
 export interface ExportManifest {
   version: typeof EXPORT_VERSION
   exportedAt: number
@@ -196,12 +196,12 @@ async function buildManifest(
 }
 
 /**
- * Serializes the library (or the selected folders) to a `.qrdrop` file (§14).
+ * Serializes the library (or the selected folders) to a `.qrbit` file (§14).
  *
  * With `encrypt: false` the result is the JSON manifest, readable by anyone who
  * opens the file — except for locked items, which stay opaque inside it. With
  * `encrypt: true` the same JSON is encrypted under the password and the file is
- * binary: `QRDE` then `crypto.encryptExport`'s envelope. A missing password is a
+ * binary: `QRBE` then `crypto.encryptExport`'s envelope. A missing password is a
  * programming error, not a user one (the UI will not offer the encrypted path
  * without one), so it throws.
  */
@@ -228,9 +228,9 @@ export async function exportLibrary(
   return new Blob([file], { type: ENCRYPTED_MIME_TYPE })
 }
 
-/** `qrdrop-export-2026-09-15.qrdrop` — the §14 name with an ISO date. */
+/** `qrbit-export-2026-09-15.qrbit` — the §14 name with an ISO date. */
 export function suggestExportFilename(now: Date): string {
-  return `qrdrop-export-${now.toISOString().slice(0, 10)}${EXPORT_FILE_EXTENSION}`
+  return `qrbit-export-${now.toISOString().slice(0, 10)}${EXPORT_FILE_EXTENSION}`
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ interface ParsedManifest {
 }
 
 /**
- * Reads a `.qrdrop` file and merges it into the library (§14).
+ * Reads a `.qrbit` file and merges it into the library (§14).
  *
  * Folders are written before items, parents before children, because an item can
  * only be stored where a folder already exists. Every row is then stored through

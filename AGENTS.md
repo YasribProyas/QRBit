@@ -1,4 +1,4 @@
-# PairDrop Secure Agent Instructions
+# QRBit Agent Instructions
 
 ## If you're the orchestrator
 Use the sub-agents for this app to work in parrellal.

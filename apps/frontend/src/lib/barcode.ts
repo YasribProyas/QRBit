@@ -20,7 +20,7 @@
  * stopping every camera track) belongs to the component that mounts a source.
  *
  * The session-URL validation lives here too, because it is the decoder's counterpart:
- * a camera can decode anything, and only a QRDrop session URL may become a navigation.
+ * a camera can decode anything, and only a QRBit session URL may become a navigation.
  */
 
 import { APP_URL } from '../config'
@@ -86,7 +86,7 @@ export function isBarcodeDetectorAvailable(): boolean {
 /**
  * Wraps `globalThis.BarcodeDetector` as a {@link BarcodeDetectorLike}.
  *
- * QR only: the scanner's job is a QRDrop session URL, and narrowing the formats lets
+ * QR only: the scanner's job is a QRBit session URL, and narrowing the formats lets
  * the implementation skip work on the other symbologies.
  */
 export function createNativeDetector(): BarcodeDetectorLike {
@@ -108,7 +108,7 @@ let generatedSurfaceIds = 0
 function ensureElementId(surface: HTMLElement): string {
   if (surface.id !== '') return surface.id
   generatedSurfaceIds += 1
-  const id = `qrdrop-qr-surface-${generatedSurfaceIds}`
+  const id = `qrbit-qr-surface-${generatedSurfaceIds}`
   surface.id = id
   return id
 }
@@ -211,7 +211,7 @@ function isSessionCode(value: string): boolean {
 }
 
 /**
- * The session code inside a scanned payload, or `null` if the payload is not a QRDrop
+ * The session code inside a scanned payload, or `null` if the payload is not a QRBit
  * session URL.
  *
  * A camera can decode anything — a shop poster, another app's QR — so a scanned value

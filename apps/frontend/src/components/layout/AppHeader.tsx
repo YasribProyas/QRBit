@@ -53,14 +53,14 @@ export function AppHeader({
             <Group gap={10} align="center" wrap="nowrap">
               <img
                 src="/favicon.svg"
-                alt="QRDrop"
+                alt="QRBit"
                 width={32}
                 height={32}
                 style={{ borderRadius: 8, display: 'block', flexShrink: 0 }}
               />
               <div>
                 <h1 className="page__title" style={{ margin: 0, lineHeight: 1.15, fontSize: '1.25rem' }}>
-                  QRDrop
+                  QRBit
                 </h1>
                 <Text size="xs" c="dimmed" style={{ lineHeight: 1, letterSpacing: '0.02em' }}>
                   No login. No cloud. No trace.

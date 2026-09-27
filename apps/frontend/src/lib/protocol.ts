@@ -1,5 +1,5 @@
 /**
- * QRDrop wire protocol (PLAN.md §10) — the message union and its MessagePack
+ * QRBit wire protocol (PLAN.md §10) — the message union and its MessagePack
  * serialisation.
  *
  * Every application message is MessagePack-encoded (never JSON: PLAN.md §19

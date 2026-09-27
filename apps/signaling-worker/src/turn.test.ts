@@ -128,7 +128,7 @@ describe('generateTurnCredentials', () => {
 
     expect(body.ttl).toBe(300)
     expect(body.customIdentifier).toContain(SESSION_CODE)
-    expect(body.customIdentifier).toBe(`qrdrop:${SESSION_CODE}`)
+    expect(body.customIdentifier).toBe(`qrbit:${SESSION_CODE}`)
     expect(body.customIdentifier.length).toBeLessThanOrEqual(128)
   })
 

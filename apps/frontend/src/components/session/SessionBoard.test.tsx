@@ -27,7 +27,7 @@ import type {
   TextItem as TextItemModel,
 } from '../../store/sessionStore'
 
-const createObjectURL = vi.fn((_source: Blob | MediaSource): string => 'blob:qrdrop/1')
+const createObjectURL = vi.fn((_source: Blob | MediaSource): string => 'blob:qrbit/1')
 const revokeObjectURL = vi.fn()
 const previousCreateObjectURL = URL.createObjectURL
 const previousRevokeObjectURL = URL.revokeObjectURL

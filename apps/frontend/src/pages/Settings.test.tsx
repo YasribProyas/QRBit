@@ -203,12 +203,12 @@ describe('Settings', () => {
     expect(harness.element.querySelector('[role="dialog"]')).toBe(null)
   })
 
-  it('refuses a file that is not a .qrdrop export, and asks the library for nothing', async () => {
+  it('refuses a file that is not a .qrbit export, and asks the library for nothing', async () => {
     const harness = mount()
 
     await pickFile(harness.element, new File(['hello'], 'notes.txt', { type: 'text/plain' }))
 
-    expect(harness.element.textContent).toContain('That is not a .qrdrop file.')
+    expect(harness.element.textContent).toContain('That is not a .qrbit file.')
     expect(harness.element.querySelector('[aria-label="Import password"]')).toBe(null)
     // Nothing to import, so there is no Import button and no header to read.
     expect(importLibraryMock).not.toHaveBeenCalled()
@@ -221,7 +221,7 @@ describe('Settings', () => {
     importLibraryMock.mockResolvedValue({ imported: 2, errors: [] })
     const harness = mount()
 
-    await pickFile(harness.element, new File(['QRDE…'], 'backup.qrdrop'))
+    await pickFile(harness.element, new File(['QRBE…'], 'backup.qrbit'))
 
     expect(isEncryptedExportMock).toHaveBeenCalledTimes(1)
     const importButton = buttonByText(harness.element, 'Import')
@@ -243,7 +243,7 @@ describe('Settings', () => {
     importLibraryMock.mockResolvedValue({ imported: 1, errors: [] })
     const harness = mount()
 
-    await pickFile(harness.element, new File(['{"version":1}'], 'plain.qrdrop'))
+    await pickFile(harness.element, new File(['{"version":1}'], 'plain.qrbit'))
 
     expect(harness.element.querySelector('[aria-label="Import password"]')).toBe(null)
 
@@ -261,7 +261,7 @@ describe('Settings', () => {
     })
     const harness = mount()
 
-    await pickFile(harness.element, new File(['{"version":1}'], 'partial.qrdrop'))
+    await pickFile(harness.element, new File(['{"version":1}'], 'partial.qrbit'))
     click(buttonByText(harness.element, 'Import'))
     await act(async () => {})
 
@@ -270,7 +270,7 @@ describe('Settings', () => {
 
     // A file that cannot be opened at all says so, with the export layer's own words.
     importLibraryMock.mockRejectedValue(new Error('Wrong password or corrupted file'))
-    await pickFile(harness.element, new File(['QRDE…'], 'later.qrdrop'))
+    await pickFile(harness.element, new File(['QRBE…'], 'later.qrbit'))
     click(buttonByText(harness.element, 'Import'))
     await act(async () => {})
 

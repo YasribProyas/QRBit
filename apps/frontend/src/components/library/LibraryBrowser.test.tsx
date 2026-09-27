@@ -178,7 +178,7 @@ function askToDeleteFirstItem(element: HTMLElement): void {
   click(menuItem(element, 'Delete'))
 }
 
-const IDB_NAME = 'qrdrop-library'
+const IDB_NAME = 'qrbit-library'
 
 /**
  * Drops the library database.

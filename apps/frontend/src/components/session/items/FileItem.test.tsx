@@ -37,7 +37,7 @@ function makeItem(overrides: Partial<FileItemModel> = {}): FileItemModel {
 let urlCounter = 0
 const createObjectURL = vi.fn((_source: Blob | MediaSource): string => {
   urlCounter += 1
-  return `blob:qrdrop/${urlCounter}`
+  return `blob:qrbit/${urlCounter}`
 })
 const revokeObjectURL = vi.fn()
 const previousCreateObjectURL = URL.createObjectURL
@@ -130,7 +130,7 @@ describe('FileItem on complete (PLAN.md §9)', () => {
 
     const link = element.querySelector('a')
     expect(link?.getAttribute('download')).toBe('report.pdf')
-    expect(link?.getAttribute('href')).toBe('blob:qrdrop/1')
+    expect(link?.getAttribute('href')).toBe('blob:qrbit/1')
     expect(element.querySelector('.progress-ring')).toBe(null)
   })
 
@@ -139,12 +139,12 @@ describe('FileItem on complete (PLAN.md §9)', () => {
       item: makeItem({ status: 'complete', progress: 100, blob: new Blob(['pdf']) }),
     })
 
-    expect(element.querySelector('a')?.getAttribute('href')).toBe('blob:qrdrop/1')
+    expect(element.querySelector('a')?.getAttribute('href')).toBe('blob:qrbit/1')
     expect(revokeObjectURL).not.toHaveBeenCalled()
 
     unmount()
 
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
   })
 
   it('rebuilds the URL for a new blob and revokes the one it replaces', () => {
@@ -155,8 +155,8 @@ describe('FileItem on complete (PLAN.md §9)', () => {
     update({ item: makeItem({ status: 'complete', blob: new Blob(['second']) }) })
 
     expect(createObjectURL).toHaveBeenCalledTimes(2)
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
-    expect(element.querySelector('a')?.getAttribute('href')).toBe('blob:qrdrop/2')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
+    expect(element.querySelector('a')?.getAttribute('href')).toBe('blob:qrbit/2')
   })
 })
 

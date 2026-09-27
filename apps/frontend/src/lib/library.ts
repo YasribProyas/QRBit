@@ -126,7 +126,7 @@ export const ROOT_FOLDER_ID = 'root'
  * Not exported: this module is the only code that may open the database, and
  * nothing outside it should name the store (the boundary the library exists for).
  */
-const DB_NAME = 'qrdrop-library'
+const DB_NAME = 'qrbit-library'
 const DB_VERSION = 1
 
 interface LibraryDB extends DBSchema {
@@ -553,7 +553,7 @@ export async function renameFolder(id: string, name: string): Promise<void> {
  * Writes a folder as given, preserving the id it carries (ADDITIVE to PLAN.md §6.3).
  *
  * `createFolder` mints its own uuid, which is right for a folder the user just made
- * and wrong for one being restored: a `.qrdrop` export carries `folders[]` and every
+ * and wrong for one being restored: a `.qrbit` export carries `folders[]` and every
  * item's `folderId` (PLAN.md §14), so an import has to put a folder back under its own
  * id or the items pointing at it cannot be saved at all (`putItem` refuses a
  * `folderId` with no folder behind it).

@@ -33,7 +33,7 @@ import { closeLibraryDatabase, createFolder, saveItem } from '../../lib/library'
 import type { LibraryItem } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 
-const DB_NAME = 'qrdrop-library'
+const DB_NAME = 'qrbit-library'
 
 function makeApi(): AddItemBarProps['api'] {
   return {

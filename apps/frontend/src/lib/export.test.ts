@@ -1,5 +1,5 @@
 /**
- * Tests for the `.qrdrop` export / import format (PLAN.md §14).
+ * Tests for the `.qrbit` export / import format (PLAN.md §14).
  *
  * The file this module writes is a user's only backup, so the tests are about the
  * things that would silently lose data: does a whole library come back byte-for-byte
@@ -46,7 +46,7 @@ import {
   type LibraryTextItem,
 } from './library'
 
-const DB_NAME = 'qrdrop-library'
+const DB_NAME = 'qrbit-library'
 const NOW = 1_700_000_000_000
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ function lockedItem(overrides: Partial<LibraryLockedItem> = {}): LibraryLockedIt
 }
 
 /** The exported Blob as the File a file input would hand to `importLibrary`. */
-async function asFile(blob: Blob, name = 'qrdrop-export.qrdrop'): Promise<File> {
+async function asFile(blob: Blob, name = 'qrbit-export.qrbit'): Promise<File> {
   return new File([await blob.arrayBuffer()], name, { type: blob.type })
 }
 
@@ -340,7 +340,7 @@ describe('exportLibrary / importLibrary round trip', () => {
       new TextDecoder().decode(new Uint8Array(await blob.arrayBuffer()).slice(0, 4))
 
     expect(await firstFour(plain)).toBe('{"ve')
-    expect(await firstFour(encrypted)).toBe('QRDE')
+    expect(await firstFour(encrypted)).toBe('QRBE')
     expect(await isEncryptedExport(plain)).toBe(false)
     expect(await isEncryptedExport(encrypted)).toBe(true)
     // A file too short to hold a header is never treated as encrypted.
@@ -427,7 +427,7 @@ describe('importLibrary', () => {
         { meta: { ...orphan } },
       ],
     }
-    const file = new File([JSON.stringify(manifest)], 'handmade.qrdrop', {
+    const file = new File([JSON.stringify(manifest)], 'handmade.qrbit', {
       type: 'application/json',
     })
 
@@ -441,23 +441,23 @@ describe('importLibrary', () => {
   })
 
   it('refuses a file that is not an export, and a version it does not know', async () => {
-    await expect(importLibrary(new File(['not json at all'], 'junk.qrdrop'), {})).rejects.toThrow(
-      'This file is not a QRDrop library export.',
+    await expect(importLibrary(new File(['not json at all'], 'junk.qrbit'), {})).rejects.toThrow(
+      'This file is not a QRBit library export.',
     )
     await expect(
       importLibrary(new File([JSON.stringify({ nonsense: true })], 'other.json'), {}),
-    ).rejects.toThrow('This file is not a QRDrop library export.')
+    ).rejects.toThrow('This file is not a QRBit library export.')
 
     const future = new File(
       [JSON.stringify({ version: 2, exportedAt: NOW, encrypted: false, folders: [], items: [] })],
-      'future.qrdrop',
+      'future.qrbit',
     )
     await expect(importLibrary(future, {})).rejects.toThrow(/Unsupported export version 2/)
   })
 
-  it('names the exported file with the export date and the .qrdrop extension', () => {
+  it('names the exported file with the export date and the .qrbit extension', () => {
     expect(suggestExportFilename(new Date('2026-09-15T12:34:56.000Z'))).toBe(
-      'qrdrop-export-2026-09-15.qrdrop',
+      'qrbit-export-2026-09-15.qrbit',
     )
   })
 
@@ -478,7 +478,7 @@ describe('importLibrary', () => {
     // Fresh DB for import (beforeEach runs before each test; manually reset here
     // because we need two DB states in one test)
     await freshDatabase()
-    const { imported, errors } = await importLibrary(new File([blob], 'e.qrdrop'), {})
+    const { imported, errors } = await importLibrary(new File([blob], 'e.qrbit'), {})
     expect(errors).toEqual([])
     expect(imported).toBe(1)
     const restored = await getItem('zero-file')
@@ -514,7 +514,7 @@ describe('importLibrary', () => {
     expect(exported.size).toBeGreaterThan(0)
 
     await freshDatabase()
-    const result = await importLibrary(new File([exported], 'export.qrdrop'), {})
+    const result = await importLibrary(new File([exported], 'export.qrbit'), {})
     expect(result.errors).toEqual([])
     expect(result.imported).toBe(2)
 

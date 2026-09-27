@@ -67,7 +67,7 @@ interface ScannerFailureCopy {
 const FAILURE_COPY: Readonly<Record<ScannerFailureKind, ScannerFailureCopy>> = {
   'permission-denied': {
     title: 'Camera access is blocked',
-    message: 'QRDrop needs the camera to read a code.',
+    message: 'QRBit needs the camera to read a code.',
     hint:
       'Allow camera access for this site, then open the scanner again: tap the lock or ⓘ icon in the address bar → Permissions → Camera → Allow. On iOS, use Settings → Safari → Camera.',
   },
@@ -78,7 +78,7 @@ const FAILURE_COPY: Readonly<Record<ScannerFailureKind, ScannerFailureCopy>> = {
   },
   unavailable: {
     title: 'Scanning is not available here',
-    message: 'This browser has no QR scanner QRDrop can use.',
+    message: 'This browser has no QR scanner QRBit can use.',
     hint:
       'You can still pair: open the session link on the other device, or type the 8-character code by hand.',
   },
@@ -133,7 +133,7 @@ function stopTracks(stream: MediaStream): void {
 
 export interface QRScannerProps {
   /**
-   * A decoded QRDrop payload, reduced to the session CODE (never the URL). Called at
+   * A decoded QRBit payload, reduced to the session CODE (never the URL). Called at
    * most once per mount, after the camera has been stopped.
    */
   onScan: (code: string) => void
@@ -280,7 +280,7 @@ export function QRScanner({
 
     const handlePayload = (rawValue: string): void => {
       if (stopped) return
-      // Not a QRDrop session URL: keep scanning. A camera sees whatever is in front of
+      // Not a QRBit session URL: keep scanning. A camera sees whatever is in front of
       // it, and only our own session URLs may become a navigation (PLAN.md §16 Phase 6).
       const code = parseSessionCode(rawValue)
       if (code === null) return
@@ -397,7 +397,7 @@ export function QRScanner({
     >
       <div className="qr-scanner__panel" style={PANEL_STYLE}>
         <h2 className="qr-scanner__title" id={titleId}>
-          Scan a QRDrop code
+          Scan a QRBit code
         </h2>
 
         {failure === null ? (

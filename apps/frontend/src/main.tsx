@@ -11,7 +11,7 @@ import './styles.css'
 
 const container = document.getElementById('root')
 if (container === null) {
-  throw new Error('QRDrop cannot start: the #root element is missing from index.html')
+  throw new Error('QRBit cannot start: the #root element is missing from index.html')
 }
 
 /*

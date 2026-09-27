@@ -155,7 +155,7 @@ describe('createHtml5QrcodeSource — the html5-qrcode fallback', () => {
     const surface = fakeSurface('')
     await createHtml5QrcodeSource().start(surface)
 
-    expect(surface.id).toMatch(/^qrdrop-qr-surface-/)
+    expect(surface.id).toMatch(/^qrbit-qr-surface-/)
     expect(library.constructed.mock.calls[0]?.[0]).toBe(surface.id)
   })
 
@@ -188,10 +188,10 @@ describe('parseSessionCode', () => {
   })
 
   it('accepts any origin passed in, as an origin or a full URL', () => {
-    const url = 'https://qrdrop.example/session?code=23456789'
+    const url = 'https://qrbit.example/session?code=23456789'
 
-    expect(parseSessionCode(url, 'https://qrdrop.example')).toBe('23456789')
-    expect(parseSessionCode(url, 'https://qrdrop.example/')).toBe('23456789')
+    expect(parseSessionCode(url, 'https://qrbit.example')).toBe('23456789')
+    expect(parseSessionCode(url, 'https://qrbit.example/')).toBe('23456789')
     expect(parseSessionCode(url, APP_URL)).toBe(null)
   })
 
@@ -222,7 +222,7 @@ describe('parseSessionCode', () => {
   it('rejects anything that is not a URL at all', () => {
     expect(parseSessionCode('')).toBe(null)
     expect(parseSessionCode('A7X3K9P2')).toBe(null)
-    expect(parseSessionCode('QRDrop session A7X3K9P2')).toBe(null)
+    expect(parseSessionCode('QRBit session A7X3K9P2')).toBe(null)
     expect(parseSessionCode('{"code":"A7X3K9P2"}')).toBe(null)
   })
 

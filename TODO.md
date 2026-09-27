@@ -1,4 +1,4 @@
-# TODO — QRDrop
+# TODO — QRBit
 
 Everything here is genuinely open. Items completed on 2026-09-18 were moved out rather than
 left as stale checkboxes; the git log is the record.
@@ -23,7 +23,7 @@ left as stale checkboxes; the git log is the record.
       `apps/frontend/.env.production` **and** `ALLOWED_ORIGINS` in
       `apps/signaling-worker/wrangler.toml`, redeploy both, then re-run the origin
       verification commands in README. Do not assume a hostname is yours because it
-      resolves — `qrdrop.pages.dev` belongs to an unrelated account.
+      resolves — `qrbit.pages.dev` belongs to an unrelated account.
 - [ ] **Choose a license** (README has a placeholder section).
 
 ## Open engineering items

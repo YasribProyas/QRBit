@@ -1,12 +1,12 @@
-# QRDrop
+# QRBit
 
 **Scan a QR code. Files appear. No login. No cloud. No trace.**
 
 Symmetric, browser-based, end-to-end-encrypted P2P file transfer. Every device is both
 sender and receiver; the local library lives in IndexedDB and never leaves the device.
 
-**Live:** https://qrdrop-app.proyas.workers.dev
-**Signaling:** https://qrdrop-signaling.proyas.workers.dev
+**Live:** https://qrbit-app.proyas.workers.dev
+**Signaling:** https://qrbit-signaling.proyas.workers.dev
 
 ---
 
@@ -39,8 +39,8 @@ TODO.md                  open items, especially: needs a real device
 
 ```bash
 pnpm install
-pnpm --filter @qrdrop/frontend dev              # http://localhost:5173
-pnpm --filter @qrdrop/signaling-worker dev      # ws://localhost:8787 (local workerd)
+pnpm --filter @qrbit/frontend dev              # http://localhost:5173
+pnpm --filter @qrbit/signaling-worker dev      # ws://localhost:8787 (local workerd)
 ```
 
 The verification gate, in order — run all three before committing anything:
@@ -62,7 +62,7 @@ Both targets are already provisioned; these commands are the whole loop.
 
 ```bash
 # 1. Frontend — builds dist/ AND dist/_headers, then uploads as static assets
-pnpm --filter @qrdrop/frontend build
+pnpm --filter @qrbit/frontend build
 (cd apps/frontend && ../signaling-worker/node_modules/.bin/wrangler deploy)
 
 # 2. Signaling worker
@@ -90,7 +90,7 @@ domain means editing both rows and redeploying both.**
 
 > ### Verify any origin before encoding it in a QR
 >
-> `qrdrop.pages.dev` is **not ours** — Cloudflare Pages project names are effectively
+> `qrbit.pages.dev` is **not ours** — Cloudflare Pages project names are effectively
 > global, and that hostname serves a stock Vite scaffold owned by an unrelated account.
 > Deploying there would have shipped QR codes pointing at a stranger's site, and it fails
 > *quietly*: the app's CORS and CSP would still look internally consistent.
@@ -98,7 +98,7 @@ domain means editing both rows and redeploying both.**
 > After any origin change, confirm the deployment is really yours:
 >
 > ```bash
-> curl -s https://<origin>/ | grep -o "<title>[^<]*</title>"   # must print QRDrop
+> curl -s https://<origin>/ | grep -o "<title>[^<]*</title>"   # must print QRBit
 > curl -s -D- -o /dev/null https://<origin>/ | grep -i content-security-policy
 > curl -s -o /dev/null -w "%{http_code}\n" "https://<origin>/session?code=ABCDEFGH"  # 200 = SPA fallback
 > ```
@@ -119,13 +119,13 @@ This is not theoretical: Cloudflare bills TURN egress at $0.05/GB after 1,000 GB
 endpoint handing out time-limited (not single-use) credentials is a directly billable
 denial-of-wallet, which is what this layout closes. Set billing alerts at $5 and $20.
 
-Every credential carries `customIdentifier = "qrdrop:<session code>"`, so Cloudflare's TURN
+Every credential carries `customIdentifier = "qrbit:<session code>"`, so Cloudflare's TURN
 analytics attribute relay usage to the specific code that was used.
 
 ### Quick live checks
 
 ```bash
-W=https://qrdrop-signaling.proyas.workers.dev
+W=https://qrbit-signaling.proyas.workers.dev
 curl -s $W/session/new                       # {"code":"XXXXXXXX"}
 curl -s -o /dev/null -w "%{http_code}\n" -H 'Sec-Fetch-Mode: navigate' $W/session/new   # 403
 curl -s -w "%{http_code}\n" -H 'Sec-Fetch-Mode: cors' $W/session/ABCDEFGH/turn  # 404 never issued

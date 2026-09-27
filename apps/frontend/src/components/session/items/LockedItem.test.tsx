@@ -57,7 +57,7 @@ function docWith(text: string): string {
 let urlCounter = 0
 const createObjectURL = vi.fn((_source: Blob | MediaSource): string => {
   urlCounter += 1
-  return `blob:qrdrop/${urlCounter}`
+  return `blob:qrbit/${urlCounter}`
 })
 const revokeObjectURL = vi.fn()
 const previousCreateObjectURL = URL.createObjectURL
@@ -302,7 +302,7 @@ describe('LockedItem — the inline reveal (PLAN.md §9)', () => {
 
     const link = bySelector(element, '.locked-item__download', HTMLAnchorElement)
     expect(link.getAttribute('download')).toBe('codes.txt')
-    expect(link.getAttribute('href')).toBe('blob:qrdrop/1')
+    expect(link.getAttribute('href')).toBe('blob:qrbit/1')
   })
 
   it('falls back to the label when the plaintext has no file name', () => {
@@ -330,13 +330,13 @@ describe('LockedItem — the inline reveal (PLAN.md §9)', () => {
     })
 
     expect(element.querySelector('.locked-item__download')?.getAttribute('href')).toBe(
-      'blob:qrdrop/1',
+      'blob:qrbit/1',
     )
     expect(revokeObjectURL).not.toHaveBeenCalled()
 
     update({ item: makeItem({ innerType: 'file', unlocked: false }) })
 
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
     expect(element.querySelector('.locked-item__download')).toBe(null)
     expect(element.querySelector('.locked-item__reveal')).toBe(null)
   })
@@ -352,7 +352,7 @@ describe('LockedItem — the inline reveal (PLAN.md §9)', () => {
 
     unmount()
 
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrdrop/1')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
   })
 
   it('reports an unlocked item whose plaintext is missing instead of rendering nothing', () => {

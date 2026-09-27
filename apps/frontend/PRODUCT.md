@@ -13,11 +13,11 @@ web
 
 ## Product Purpose
 
-QRDrop is a dual-purpose privacy tool: a device-local encrypted vault and an instant, symmetric P2P beaming utility. It eliminates the friction, account surveillance, and cloud retention of traditional file-sharing tools. Success means pairing in under five seconds via a camera scan, transmitting files directly device-to-device with end-to-end encryption, and leaving zero trace on the network or signaling infrastructure.
+QRBit is a dual-purpose privacy tool: a device-local encrypted vault and an instant, symmetric P2P beaming utility. It eliminates the friction, account surveillance, and cloud retention of traditional file-sharing tools. Success means pairing in under five seconds via a camera scan, transmitting files directly device-to-device with end-to-end encryption, and leaving zero trace on the network or signaling infrastructure.
 
 ## Positioning
 
-Unlike cloud storage (Dropbox, Google Drive), QRDrop stores zero session data in the cloud and requires zero accounts. Unlike single-ecosystem tools (AirDrop, Quick Share), QRDrop is completely cross-platform via standard web browsers. Unlike basic WebRTC drop tools (Snapdrop, PairDrop), QRDrop features app-layer E2EE (P-256 ECDH + AES-256-GCM) with visual safety phrase verification, a persistent offline-first local library in IndexedDB, and military-grade double-encrypted locked items that remain ciphertext at rest and in transit.
+Unlike cloud storage (Dropbox, Google Drive), QRBit stores zero session data in the cloud and requires zero accounts. Unlike single-ecosystem tools (AirDrop, Quick Share), QRBit is completely cross-platform via standard web browsers. Unlike basic WebRTC drop tools (Snapdrop, PairDrop), QRBit features app-layer E2EE (P-256 ECDH + AES-256-GCM) with visual safety phrase verification, a persistent offline-first local library in IndexedDB, and military-grade double-encrypted locked items that remain ciphertext at rest and in transit.
 
 ## Operating Context
 
@@ -50,7 +50,7 @@ Unlike cloud storage (Dropbox, Google Drive), QRDrop stores zero session data in
 ## Evidence on Hand
 
 - Fully functional 930+ test suite covering crypto, signaling state machines, chunking, and local library IndexedDB CRUD.
-- Production deployment running on Cloudflare Workers + Static Assets (`https://qrdrop-app.proyas.workers.dev`).
+- Production deployment running on Cloudflare Workers + Static Assets (`https://qrbit-app.proyas.workers.dev`).
 
 ## Product Principles
 

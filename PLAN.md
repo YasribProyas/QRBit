@@ -1,11 +1,11 @@
-# QRDrop — Project Plan
+# QRBit — Project Plan
 > Scan a QR code. Files appear. No login. No cloud. No trace.
 
 ---
 
 ## 1. Project Overview
 
-QRDrop is a symmetric, browser-based P2P transfer tool. Every device running QRDrop has:
+QRBit is a symmetric, browser-based P2P transfer tool. Every device running QRBit has:
 - A **local library** — a persistent, organized folder/file store that lives in IndexedDB, never leaves the device, never touches a server
 - A **QR code** — so any other device can scan and open a session to send items to it
 
@@ -52,7 +52,7 @@ Any Device (PWA / Browser)        Signaling Worker            Any Other Device
 │   locked items: E2EE    │                                   │   locked items: E2EE     │
 └─────────────────────────┘                                   └──────────────────────────┘
          │                                                              │
-         │  User selects items                    User opens QRDrop    │
+         │  User selects items                    User opens QRBit     │
          │  QR reader opens          ──────────►  QR code displayed    │
          │  Scans peer QR                                               │
          ▼                                                              ▼
@@ -251,7 +251,7 @@ Key lives only in:    User's memory (the password they typed)
 ### 6.3 IndexedDB Schema (`lib/library.ts`)
 
 ```typescript
-// IDB database: "qrdrop-library", version 1
+// IDB database: "qrbit-library", version 1
 // Object stores:
 //   "folders"  — keyPath: "id"
 //   "items"    — keyPath: "id", indexes: ["folderId", "type", "updatedAt"]
@@ -301,7 +301,7 @@ The primary screen. Visible immediately on app open. No landing page, no "start 
 
 ```
 ┌────────────────────────────────────┐
-│  QRDrop                       ⚙️   │
+│  QRBit                        ⚙️   │
 │                                    │
 │   ┌──────────────────────────┐     │
 │   │                          │     │
@@ -328,8 +328,8 @@ Flow A — Pre-select then scan:
 
 Flow B — Scan first (or use native camera app):
 1. User opens native camera or QR app and scans peer's QR
-2. URL opens: `https://qrdrop.app/session?code=A7X3K9P2`
-3. QRDrop opens on Session page
+2. URL opens: `https://qrbit.app/session?code=A7X3K9P2`
+3. QRBit opens on Session page
 4. User selects what to send from library, or adds new items inline
 
 Both flows converge at the Session page.
@@ -342,7 +342,7 @@ Both flows converge at the Session page.
 
 The QR encodes a full URL:
 ```
-https://qrdrop.app/session?code=A7X3K9P2
+https://qrbit.app/session?code=A7X3K9P2
 ```
 
 Scanning with any QR reader (native or in-app) opens the session directly. No manual code entry needed in the happy path. Manual code entry (`/session?join` with a text input) exists as explicit fallback.
@@ -519,11 +519,11 @@ async function deriveSharedSecret(privateKey: CryptoKey, peerPublicKey: CryptoKe
 ```typescript
 // Session encryption key
 async function deriveSessionKey(sharedSecret: ArrayBuffer, sessionId: string): Promise<CryptoKey>
-// HKDF: hash=SHA-256, salt=sessionId bytes, info="qrdrop-session-v1"
+// HKDF: hash=SHA-256, salt=sessionId bytes, info="qrbit-session-v1"
 
 // Safety phrase bytes
 async function deriveSafetyPhraseBytes(sharedSecret: ArrayBuffer, sessionId: string): Promise<Uint8Array>
-// HKDF: hash=SHA-256, salt=sessionId bytes, info="qrdrop-phrase-v1"
+// HKDF: hash=SHA-256, salt=sessionId bytes, info="qrbit-phrase-v1"
 ```
 
 ### 11.3 Session Encryption (AES-256-GCM)
@@ -691,7 +691,7 @@ function generateTurnCredentials(secret: string): { username: string; credential
 
 ### Export
 
-Serializes the entire library (or a selected subset) to a single `.qrdrop` file (JSON wrapped in optional encryption).
+Serializes the entire library (or a selected subset) to a single `.qrbit` file (JSON wrapped in optional encryption).
 
 ```typescript
 interface ExportManifest {
@@ -720,7 +720,7 @@ async function exportLibrary(
   folderIds: string[] | 'all',
   options: { encrypt: boolean; password?: string }
 ): Promise<Blob>
-// Returns a .qrdrop file (JSON or encrypted binary)
+// Returns a .qrbit file (JSON or encrypted binary)
 
 async function importLibrary(
   file: File,
@@ -756,8 +756,8 @@ async function importLibrary(
 
 ```json
 {
-  "name": "QRDrop",
-  "short_name": "QRDrop",
+  "name": "QRBit",
+  "short_name": "QRBit",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f0f0f",
@@ -777,7 +777,7 @@ async function importLibrary(
 }
 ```
 
-Share target: user long-presses a file in Files app → Share → QRDrop → file pre-loaded into session. QR scanner opens immediately so they can scan and send in one motion.
+Share target: user long-presses a file in Files app → Share → QRBit → file pre-loaded into session. QR scanner opens immediately so they can scan and send in one motion.
 
 ### Service Worker
 
@@ -891,7 +891,7 @@ Share target: user long-presses a file in Files app → Share → QRDrop → fil
 ### Signaling Worker (`wrangler.toml`)
 
 ```toml
-name = "qrdrop-signaling"
+name = "qrbit-signaling"
 
 [vars]
 SESSION_TTL_SECONDS = "300"
@@ -907,8 +907,8 @@ class_name = "SessionDurableObject"
 ### Frontend (`.env`)
 
 ```env
-VITE_SIGNALING_URL=wss://qrdrop-signaling.YOUR_SUBDOMAIN.workers.dev
-VITE_APP_URL=https://qrdrop.app
+VITE_SIGNALING_URL=wss://qrbit-signaling.YOUR_SUBDOMAIN.workers.dev
+VITE_APP_URL=https://qrbit.app
 ```
 
 ---
@@ -921,7 +921,7 @@ VITE_APP_URL=https://qrdrop.app
 
 3. **Library locked items are never decrypted at rest** — the `{ ciphertext, iv, salt }` tuple sits in IndexedDB permanently. The PBKDF2 key is derived on unlock and used immediately; it is never stored in memory beyond the unlock operation.
 
-4. **Export preserves locked item encryption** — even an unencrypted `.qrdrop` export file contains locked items as opaque ciphertext. An attacker who gets the export file still cannot read locked items without each item's password.
+4. **Export preserves locked item encryption** — even an unencrypted `.qrbit` export file contains locked items as opaque ciphertext. An attacker who gets the export file still cannot read locked items without each item's password.
 
 5. **P-256 ECDH** — not X25519. Web Crypto API supports P-256 natively on all browsers including old lab PCs. X25519 via `@noble/curves` is a drop-in swap if desired.
 

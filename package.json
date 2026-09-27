@@ -1,5 +1,5 @@
 {
-  "name": "qrdrop",
+  "name": "qrbit",
   "version": "0.1.0",
   "private": true,
   "description": "Scan a QR code. Files appear. No login. No cloud. No trace.",
