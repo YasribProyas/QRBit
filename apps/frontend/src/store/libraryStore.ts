@@ -34,26 +34,38 @@ import { create } from 'zustand'
 
 import * as library from '../lib/library'
 import { ROOT_FOLDER_ID } from '../lib/library'
-import type { LibraryFolder, LibraryItem } from '../lib/library'
+import type { FileBlock, LibraryFile, LibraryFolder, LibraryItem } from '../lib/library'
 import type { SessionItem } from './sessionStore'
 
 export interface LibraryState {
   folders: LibraryFolder[]
   /** Every item in the library, whatever folder it is in (PLAN.md §6.4 needs them all). */
   items: LibraryItem[]
+  /** Every file (dossier) in the library. */
+  files: LibraryFile[]
   loading: boolean
   error: string | null
 
-  /** Reloads folders and items from IndexedDB. Never rejects: a failure shows in `error`. */
+  /** Reloads folders, items, and files from IndexedDB. Never rejects: a failure shows in `error`. */
   refresh(): Promise<void>
-  createFolder(name: string, parentId: string | null): Promise<LibraryFolder>
+  /** Seeds default folders & dossiers if library is completely empty. */
+  seedInitialLibrary(): Promise<void>
+  createFolder(name: string, parentId: string | null, color?: string): Promise<LibraryFolder>
   renameFolder(id: string, name: string): Promise<void>
   /**
-   * Deletes the folder, its subfolders and every item inside them (PLAN.md §6.3 —
-   * a folder tree dies whole). The state is then re-read, so the cascade is whatever
-   * IndexedDB actually did.
+   * Deletes the folder, its subfolders, and every item/file inside them.
    */
   deleteFolder(id: string): Promise<void>
+
+  // Dossier File CRUD
+  createFile(name: string, folderId: string, blocks?: FileBlock[]): Promise<LibraryFile>
+  saveFile(file: LibraryFile): Promise<void>
+  updateFile(id: string, patch: Partial<LibraryFile>): Promise<void>
+  deleteFile(id: string): Promise<void>
+  moveFile(id: string, targetFolderId: string): Promise<void>
+  filesIn(folderId: string): LibraryFile[]
+
+  // Legacy/loose item CRUD
   renameItem(id: string, name: string): Promise<void>
   deleteItem(id: string): Promise<void>
   /** `null` is the tree's Root, which the library layer spells with its own sentinel id. */
@@ -61,29 +73,28 @@ export interface LibraryState {
   /** Create or overwrite by id (the library id IS the store's key). */
   saveItem(item: LibraryItem): Promise<void>
   /**
-   * ADDITIVE to the Phase 5 store contract.
-   *
-   * Converts a §9 session item and stores it (PLAN.md §6.3's `saveFromSession`), which
-   * is what PLAN.md §8 Phase 4's ended screen needs. It lives on the store because the
-   * page must not import `lib/library.ts` — the store is the UI's single route to
-   * IndexedDB — and because the saved row has to land in `items` for the library view
-   * to be truthful without a manual refresh. Nothing is decrypted or re-encrypted on
-   * the way in: a locked item's tuple is copied byte-for-byte (decision D9), and an
-   * item whose transfer never completed throws rather than storing half a file.
+   * Converts a §9 session item and stores it.
    */
   saveFromSession(item: SessionItem, folderId: string | null): Promise<LibraryItem>
   /** The items directly in `folderId`; `ROOT_FOLDER_ID` is the root. */
   itemsIn(folderId: string): LibraryItem[]
 }
 
-/** The library as IndexedDB holds it, read through the §6.3 `folderId` index. */
-async function readLibrary(): Promise<{ folders: LibraryFolder[]; items: LibraryItem[] }> {
+/** The library as IndexedDB holds it, read through the §6.3 indexes. */
+async function readLibrary(): Promise<{
+  folders: LibraryFolder[]
+  items: LibraryItem[]
+  files: LibraryFile[]
+}> {
   const folders = await library.getFolders()
-  const lists = await Promise.all([
-    library.getItemsInFolder(ROOT_FOLDER_ID),
-    ...folders.map((folder) => library.getItemsInFolder(folder.id)),
+  const [itemLists, files] = await Promise.all([
+    Promise.all([
+      library.getItemsInFolder(ROOT_FOLDER_ID),
+      ...folders.map((folder) => library.getItemsInFolder(folder.id)),
+    ]),
+    library.getFiles(),
   ])
-  return { folders, items: lists.flat() }
+  return { folders, items: itemLists.flat(), files }
 }
 
 /** Anything the library layer throws, as a message safe to render. */
@@ -94,17 +105,14 @@ function describeLibraryError(cause: unknown): string {
 }
 
 export const useLibraryStore = create<LibraryState>()((set, get) => {
-  /** Re-reads folders and items after a write, so the state is never a stale copy. */
+  /** Re-reads folders, items, and files after a write, so the state is never a stale copy. */
   const syncFromIdb = async (): Promise<void> => {
-    const { folders, items } = await readLibrary()
-    set({ folders, items, error: null })
+    const { folders, items, files } = await readLibrary()
+    set({ folders, items, files, error: null })
   }
 
   /**
    * Runs one library write and re-reads the library behind it.
-   *
-   * The failure is recorded in `error` for the UI and rethrown for whoever awaited
-   * it, and a successful write clears a stale message.
    */
   const writeThenSync = async <T>(operation: () => Promise<T>): Promise<T> => {
     set({ error: null })
@@ -121,21 +129,25 @@ export const useLibraryStore = create<LibraryState>()((set, get) => {
   return {
     folders: [],
     items: [],
+    files: [],
     loading: false,
     error: null,
 
     refresh: async () => {
       set({ loading: true, error: null })
       try {
-        const { folders, items } = await readLibrary()
-        set({ folders, items, loading: false })
+        const { folders, items, files } = await readLibrary()
+        set({ folders, items, files, loading: false })
       } catch (cause: unknown) {
         set({ loading: false, error: describeLibraryError(cause) })
       }
     },
 
-    createFolder: (name, parentId) =>
-      writeThenSync(() => library.createFolder(name, parentId)),
+    seedInitialLibrary: () =>
+      writeThenSync(() => library.seedInitialLibrary()),
+
+    createFolder: (name, parentId, color) =>
+      writeThenSync(() => library.createFolder(name, parentId, color)),
 
     renameFolder: (id, name) =>
       writeThenSync(async () => {
@@ -147,10 +159,33 @@ export const useLibraryStore = create<LibraryState>()((set, get) => {
         await library.deleteFolder(id)
       }),
 
+    createFile: (name, folderId, blocks) =>
+      writeThenSync(() => library.createFile(name, folderId, blocks)),
+
+    saveFile: (file) =>
+      writeThenSync(async () => {
+        await library.saveFile(file)
+      }),
+
+    updateFile: (id, patch) =>
+      writeThenSync(async () => {
+        await library.updateFile(id, patch)
+      }),
+
+    deleteFile: (id) =>
+      writeThenSync(async () => {
+        await library.deleteFile(id)
+      }),
+
+    moveFile: (id, targetFolderId) =>
+      writeThenSync(async () => {
+        await library.moveFile(id, targetFolderId)
+      }),
+
+    filesIn: (folderId) => get().files.filter((file) => file.folderId === folderId),
+
     renameItem: (id, name) =>
       writeThenSync(async () => {
-        // `updateItem` merges the patch onto the stored item and re-validates it, so the
-        // type fields this rename does not name survive (PLAN.md §6.3).
         await library.updateItem(id, { name })
       }),
 

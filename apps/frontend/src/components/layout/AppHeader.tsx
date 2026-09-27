@@ -59,11 +59,16 @@ export function AppHeader({
                 style={{ borderRadius: 8, display: 'block', flexShrink: 0 }}
               />
               <div>
-                <h1 className="page__title" style={{ margin: 0, lineHeight: 1.15, fontSize: '1.25rem' }}>
-                  QRBit
-                </h1>
-                <Text size="xs" c="dimmed" style={{ lineHeight: 1, letterSpacing: '0.02em' }}>
-                  No login. No cloud. No trace.
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <h1 className="page__title" style={{ margin: 0, lineHeight: 1.15, fontSize: '1.25rem' }}>
+                    QRBit
+                  </h1>
+                  <span style={{ fontSize: '10px', fontFamily: 'monospace', padding: '1px 6px', background: 'rgba(29, 78, 216, 0.1)', color: '#1D4ED8', border: '1px solid rgba(29, 78, 216, 0.25)', borderRadius: '4px', fontWeight: 600 }}>
+                    P2P v2.4
+                  </span>
+                </div>
+                <Text size="xs" c="dimmed" style={{ lineHeight: 1.2, letterSpacing: '0.01em', marginTop: '2px' }}>
+                  Air-gapped structured transfer
                 </Text>
               </div>
             </Group>

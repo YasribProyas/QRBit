@@ -1,11 +1,5 @@
 # QRBit Agent Instructions
 
-## If you're the orchestrator
-Use the sub-agents for this app to work in parrellal.
-### Rules and contexts for orchestrator
-1. Use agy/gemini-3.8-flash-high [omnirouter] model for the sub-agents, I have pro so don't worry about token usage.
-2. If still yoou run out of agy then use (agentrouter-openai) deepseek-v4-flash , i have so much credits there it alone can build this project 10 times over and I won't mind spending all of it.
-
 ## Rules
 - TypeScript everywhere. Strict mode.
 - pnpm workspaces: frontend in apps/frontend, worker in apps/signaling-worker.

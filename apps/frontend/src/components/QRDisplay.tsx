@@ -171,7 +171,23 @@ export function QRDisplay(props: QRDisplayProps) {
   return (
     <WithMantine>
       <div className="qr">
-        <div className="qr__frame" style={enlarged ? { maxWidth: '100%' } : undefined}>
+        <div
+          className="qr__frame"
+          style={{
+            ...(enlarged ? { maxWidth: '100%' } : {}),
+            position: 'relative',
+          }}
+        >
+          {/* Optical alignment ticks at 4 corners */}
+          <div style={{ position: 'absolute', top: '6px', left: '6px', width: '10px', height: '10px', borderTop: '2px solid #1D4ED8', borderLeft: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
+          <div style={{ position: 'absolute', top: '6px', right: '6px', width: '10px', height: '10px', borderTop: '2px solid #1D4ED8', borderRight: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
+          <div style={{ position: 'absolute', bottom: '6px', left: '6px', width: '10px', height: '10px', borderBottom: '2px solid #1D4ED8', borderLeft: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
+          <div style={{ position: 'absolute', bottom: '6px', right: '6px', width: '10px', height: '10px', borderBottom: '2px solid #1D4ED8', borderRight: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
+
+          {/* Center reticle crosshair guides */}
+          <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', transform: 'translateY(-50%)', height: '1px', background: 'rgba(29, 78, 216, 0.12)', pointerEvents: 'none', zIndex: 2 }} />
+          <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '1px', background: 'rgba(29, 78, 216, 0.12)', pointerEvents: 'none', zIndex: 2 }} />
+
           {status === 'generating' ? (
             <span className="qr__placeholder-label" role="status">
               Generating QR…
@@ -198,6 +214,10 @@ export function QRDisplay(props: QRDisplayProps) {
               background: QR_LIGHT_PANEL,
             }}
           />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '8px', marginBottom: '2px', fontSize: '12px', fontWeight: 600, color: '#0F766E' }}>
+          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981', display: 'inline-block' }} />
+          <span>Beacon Ready · P2P Telemetry</span>
         </div>
         <p className="qr__caption">{caption}</p>
         {/* PLAN.md §16 Phase 6's manual fallback: the code is always readable, QR or not. */}

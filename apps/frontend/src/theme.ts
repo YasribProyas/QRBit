@@ -36,22 +36,64 @@ const darkScale: MantineColorsTuple = [
   '#0d0e11',
 ]
 
+const signalBlueScale: MantineColorsTuple = [
+  '#eff6ff',
+  '#dbeafe',
+  '#bfdbfe',
+  '#93c5fd',
+  '#60a5fa',
+  '#3b82f6',
+  '#1d4ed8',
+  '#1e40af',
+  '#1e3a8a',
+  '#172554',
+]
+
+const shieldOrangeScale: MantineColorsTuple = [
+  '#fff7ed',
+  '#ffedd5',
+  '#fed7aa',
+  '#fdba74',
+  '#fb923c',
+  '#f97316',
+  '#ea580c',
+  '#c2410c',
+  '#9a3412',
+  '#7c2d12',
+]
+
+const telemetryGreenScale: MantineColorsTuple = [
+  '#f0fdfa',
+  '#ccfbf1',
+  '#99f6e4',
+  '#5eead4',
+  '#2dd4bf',
+  '#14b8a6',
+  '#0d9488',
+  '#0f766e',
+  '#115e59',
+  '#134e4a',
+]
+
 export const theme = createTheme({
-  primaryColor: 'emerald',
-  primaryShade: 4,
+  primaryColor: 'signal',
+  primaryShade: 6,
   colors: {
+    signal: signalBlueScale,
+    shield: shieldOrangeScale,
+    telemetry: telemetryGreenScale,
     emerald: emeraldScale,
     dark: darkScale,
   },
   defaultRadius: 'md',
   fontFamily:
-    '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+    "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
   fontFamilyMonospace:
-    '"JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   headings: {
     fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-    fontWeight: '600',
+      "'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    fontWeight: '700',
   },
   cursorType: 'pointer',
   components: {

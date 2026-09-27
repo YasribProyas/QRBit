@@ -6,27 +6,42 @@
  */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
 
-  --bg: #0f0f0f;
-  --surface: #171717;
-  --surface-raised: #1f1f1f;
-  --border: #2e2e2e;
-  --border-strong: #3d3d3d;
+  --qrd-canvas: #EEF2F6;
+  --qrd-surface: #FFFFFF;
+  --qrd-ink: #0F172A;
+  --qrd-ink-muted: #5B6B82;
+  --qrd-border: #D1D9E4;
+  --qrd-signal: #1D4ED8;
+  --qrd-signal-hover: #1E40AF;
+  --qrd-shield: #C2410C;
+  --qrd-telemetry-ok: #0F766E;
 
-  --text: #f2f2f2;
-  --text-muted: #9a9a9a;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
-  --accent: #4ade80;
-  --warn: #fbbf24;
-  --error: #f87171;
+  --bg: #EEF2F6;
+  --surface: #FFFFFF;
+  --surface-raised: #F8FAFC;
+  --border: #D1D9E4;
+  --border-strong: #94A3B8;
+
+  --text: #0F172A;
+  --text-muted: #5B6B82;
+
+  --accent: #1D4ED8;
+  --warn: #C2410C;
+  --error: #DC2626;
 
   --radius: 12px;
   --radius-sm: 8px;
   --gap: 16px;
 
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: 'Space Grotesk', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 
   font-family: var(--font);
   line-height: 1.5;
@@ -36,6 +51,122 @@
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+body {
+  background-color: var(--qrd-canvas);
+  color: var(--qrd-ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Emil Kowalski Press Feedback (120ms with --ease-out, never transition: all) */
+.tactile-btn {
+  transition: transform 120ms var(--ease-out), background-color 120ms var(--ease-out), border-color 120ms var(--ease-out), color 120ms var(--ease-out), opacity 120ms var(--ease-out);
+}
+.tactile-btn:active {
+  transform: scale(0.97);
+}
+
+/* Modal and Sheet Animations with physical entrance */
+.modal-enter {
+  animation: modalEnter 180ms var(--ease-out) forwards;
+  transform-origin: center;
+}
+@keyframes modalEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.sheet-enter {
+  animation: sheetEnter 240ms var(--ease-drawer) forwards;
+}
+@keyframes sheetEnter {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Stagger item entrance */
+.stagger-item {
+  opacity: 0;
+  animation: staggerFade 200ms var(--ease-out) forwards;
+}
+@keyframes staggerFade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Optical Scanner Sweep */
+@keyframes scanSweep {
+  0% {
+    transform: translateY(0);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translateY(220px);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 0.2;
+  }
+}
+.animate-scan-sweep {
+  animation: scanSweep 2.2s var(--ease-in-out) infinite;
+  will-change: transform, opacity;
+}
+
+/* Radar Ping Telemetry */
+@keyframes radarPing {
+  0% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+.animate-radar-ping {
+  animation: radarPing 2.2s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+
+/* Fine-pointer hover */
+@media (hover: hover) and (pointer: fine) {
+  .hover-elevate:hover {
+    transform: translateY(-1px);
+    border-color: #94A3B8;
+  }
+  .hover-tint:hover {
+    background-color: #F8FAFC;
+  }
+}
+
+.scroll-contain {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* -------------------------------------------------------- browser surfaces -- */

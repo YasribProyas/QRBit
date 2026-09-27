@@ -5,6 +5,8 @@ import { QRDisplay } from '../QRDisplay'
 import { SafetyPhraseOverlay } from './SafetyPhraseOverlay'
 import { SessionBoard, isSenderRole } from './SessionBoard'
 import { SaveToLibraryModal } from '../library/SaveToLibraryModal'
+import { FolderPickerModal } from '../library/FolderPickerModal'
+import { sessionItemsToLibraryFile } from '../../lib/dossier'
 import { ITEM_TYPE_ICONS } from '../library/LibraryItemRow'
 import { APP_URL } from '../../config'
 import type { SaveableSessionItem } from '../library/SaveToLibraryModal'
@@ -52,6 +54,22 @@ export function SessionView({ session, showConnectingCode = true }: SessionViewP
       </div>
 
       <p className="muted">{session.roleLabel}</p>
+
+      {session.safetyPhrase !== null ? (
+        <div className="flex items-center justify-between text-xs py-2 px-3.5 bg-slate-900 text-white rounded-xl border border-slate-700/80 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[11px] text-slate-300 font-mono">Verification:</span>
+          </div>
+          <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-sky-400">
+            {session.safetyPhrase.map((w) => (
+              <span key={w} className="px-2 py-0.5 bg-slate-800 rounded border border-slate-700 uppercase">
+                {w}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {showConnectingCode &&
       session.sessionCode !== null &&
@@ -158,10 +176,14 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {
   const error = useLibraryStore((state) => state.error)
   const refresh = useLibraryStore((state) => state.refresh)
   const saveFromSession = useLibraryStore((state) => state.saveFromSession)
+  const createFolder = useLibraryStore((state) => state.createFolder)
+  const saveFile = useLibraryStore((state) => state.saveFile)
 
   /** Session item ids this device has already stored; the dialog shows them as 'Saved'. */
   const [savedIds, setSavedIds] = useState<string[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [dossierPickerOpen, setDossierPickerOpen] = useState(false)
+  const [dossierSaved, setDossierSaved] = useState(false)
 
   useEffect(() => {
     void refresh()
@@ -218,15 +240,31 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {
               </li>
             ))}
           </ul>
-          <button
-            type="button"
-            className="button session-ended__save"
-            onClick={() => {
-              setPickerOpen(true)
-            }}
-          >
-            Save to Library →
-          </button>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="button session-ended__save"
+              onClick={() => {
+                setPickerOpen(true)
+              }}
+            >
+              Save to Library →
+            </button>
+            <button
+              type="button"
+              className="button session-ended__save-dossier"
+              style={{
+                backgroundColor: '#1D4ED8',
+                color: '#ffffff',
+                border: 'none',
+              }}
+              onClick={() => {
+                setDossierPickerOpen(true)
+              }}
+            >
+              {dossierSaved ? 'Dossier File Saved ✓' : 'Save as Dossier File 📁'}
+            </button>
+          </div>
         </>
       )}
 
@@ -260,6 +298,26 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {
           onSaveAll={saveAll}
           onClose={() => {
             setPickerOpen(false)
+          }}
+        />
+      ) : null}
+
+      {dossierPickerOpen ? (
+        <FolderPickerModal
+          isOpen={dossierPickerOpen}
+          onClose={() => setDossierPickerOpen(false)}
+          folders={folders}
+          fileName="Incoming Dossier"
+          onSelectFolder={async (choice) => {
+            let targetFolderId = choice.folderId || folders[0]?.id || 'f-1'
+            if (choice.isNew && choice.folderName) {
+              const newFolder = await createFolder(choice.folderName, null)
+              targetFolderId = newFolder.id
+            }
+            const completeItems = received.filter((r) => r.status === 'complete')
+            const file = sessionItemsToLibraryFile('Incoming Dossier', targetFolderId, completeItems)
+            await saveFile(file)
+            setDossierSaved(true)
           }}
         />
       ) : null}

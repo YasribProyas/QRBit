@@ -20,20 +20,31 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   closeLibraryDatabase,
+  createFile,
   createFolder,
+  deleteFile,
   deleteFolder,
   deleteItem,
+  getFile,
+  getFiles,
+  getFilesInFolder,
   getFolders,
   getItem,
   getItemsInFolder,
   isItemCorrupt,
+  moveFile,
   moveItem,
   renameFolder,
   ROOT_FOLDER_ID,
+  saveFile,
   saveFolder,
   saveFromSession,
   saveItem,
+  seedInitialLibrary,
+  updateFile,
   updateItem,
+  type FileBlock,
+  type LibraryFile,
   type LibraryFileItem,
   type LibraryFolder,
   type LibraryImageItem,
@@ -1131,7 +1142,7 @@ describe('schema and indexes (PLAN.md §6.3)', () => {
     await getFolders()
 
     await withRawDatabase(async (db) => {
-      expect(Array.from(db.objectStoreNames).sort()).toEqual(['folders', 'items'])
+      expect(Array.from(db.objectStoreNames).sort()).toEqual(['files', 'folders', 'items'])
 
       const folders = db.transaction('folders').objectStore('folders')
       expect(folders.keyPath).toBe('id')
@@ -1142,6 +1153,12 @@ describe('schema and indexes (PLAN.md §6.3)', () => {
       expect(items.index('folderId').keyPath).toBe('folderId')
       expect(items.index('type').keyPath).toBe('type')
       expect(items.index('updatedAt').keyPath).toBe('updatedAt')
+
+      const files = db.transaction('files').objectStore('files')
+      expect(files.keyPath).toBe('id')
+      expect(Array.from(files.indexNames).sort()).toEqual(['folderId', 'updatedAt'])
+      expect(files.index('folderId').keyPath).toBe('folderId')
+      expect(files.index('updatedAt').keyPath).toBe('updatedAt')
     })
   })
 
@@ -1217,3 +1234,104 @@ describe('schema and indexes (PLAN.md §6.3)', () => {
     expect(await getItem(item.id)).toEqual(item)
   })
 })
+
+describe('files and blocks (dossier system)', () => {
+  it('creates, saves, retrieves, and lists files in folders', async () => {
+    const folder = await createFolder('Lab Dossiers', null)
+    const blocks: FileBlock[] = [
+      { id: 'b-1', type: 'heading', content: 'Cluster Alpha' },
+      { id: 'b-2', type: 'shortText', label: 'Host', value: '10.0.0.1' },
+      {
+        id: 'b-3',
+        type: 'locked',
+        label: 'Secret',
+        content: 'mypass',
+        isLocked: true,
+        password: 'pass',
+      },
+    ]
+
+    const file = await createFile('Lab Config', folder.id, blocks)
+    expect(file.id).toBeDefined()
+    expect(file.name).toBe('Lab Config')
+    expect(file.blocks).toHaveLength(3)
+
+    const fetched = await getFile(file.id)
+    expect(fetched).toBeDefined()
+    expect(fetched?.name).toBe('Lab Config')
+    expect(fetched?.blocks).toEqual(blocks)
+
+    const inFolder = await getFilesInFolder(folder.id)
+    expect(inFolder).toHaveLength(1)
+    expect(inFolder[0]?.id).toBe(file.id)
+
+    const allFiles = await getFiles()
+    expect(allFiles).toHaveLength(1)
+  })
+
+  it('updates a file with patched blocks or name', async () => {
+    const folder = await createFolder('Docs', null)
+    const file = await createFile('Initial Title', folder.id, [
+      { id: 'b-1', type: 'heading', content: 'Heading 1' },
+    ])
+
+    await updateFile(file.id, {
+      name: 'Renamed Title',
+      blocks: [
+        { id: 'b-1', type: 'heading', content: 'Updated Heading' },
+        { id: 'b-2', type: 'divider' },
+      ],
+    })
+
+    const updated = await getFile(file.id)
+    expect(updated?.name).toBe('Renamed Title')
+    expect(updated?.blocks).toHaveLength(2)
+    expect(updated?.blocks[0]?.content).toBe('Updated Heading')
+  })
+
+  it('moves a file to another folder and deletes a file', async () => {
+    const folderA = await createFolder('Folder A', null)
+    const folderB = await createFolder('Folder B', null)
+
+    const file = await createFile('My Doc', folderA.id)
+    expect((await getFilesInFolder(folderA.id))).toHaveLength(1)
+    expect((await getFilesInFolder(folderB.id))).toHaveLength(0)
+
+    await moveFile(file.id, folderB.id)
+    expect((await getFilesInFolder(folderA.id))).toHaveLength(0)
+    expect((await getFilesInFolder(folderB.id))).toHaveLength(1)
+
+    await deleteFile(file.id)
+    expect((await getFilesInFolder(folderB.id))).toHaveLength(0)
+    expect(await getFile(file.id)).toBeUndefined()
+  })
+
+  it('cascade deletes files when their parent folder is deleted', async () => {
+    const folder = await createFolder('Doomed Folder', null)
+    const file1 = await createFile('Doc 1', folder.id)
+    const file2 = await createFile('Doc 2', folder.id)
+
+    expect((await getFilesInFolder(folder.id))).toHaveLength(2)
+
+    await deleteFolder(folder.id)
+
+    expect(await getFile(file1.id)).toBeUndefined()
+    expect(await getFile(file2.id)).toBeUndefined()
+    expect((await getFiles())).toHaveLength(0)
+  })
+
+  it('seeds initial folders and files when library is empty', async () => {
+    expect((await getFolders())).toHaveLength(0)
+    expect((await getFiles())).toHaveLength(0)
+
+    await seedInitialLibrary()
+
+    const folders = await getFolders()
+    const files = await getFiles()
+
+    expect(folders.length).toBeGreaterThanOrEqual(3)
+    expect(files.length).toBeGreaterThanOrEqual(4)
+    expect(files.some((f) => f.name === 'Uni Credentials & Keys')).toBe(true)
+  })
+})
+

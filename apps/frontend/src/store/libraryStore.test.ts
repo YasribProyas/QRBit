@@ -412,3 +412,41 @@ describe('libraryStore.saveFromSession (PLAN.md §8 Phase 4)', () => {
     expect(stored.ciphertext).toEqual(original)
   })
 })
+
+describe('libraryStore files (dossiers)', () => {
+  it('creates, saves, and lists files by folder', async () => {
+    const folder = await store().createFolder('Work', null)
+    const file = await store().createFile('My Dossier', folder.id, [
+      { id: 'b-1', type: 'heading', content: 'Title' },
+    ])
+
+    expect(file.id).toBeDefined()
+    expect(store().files).toHaveLength(1)
+    expect(store().filesIn(folder.id)).toHaveLength(1)
+    expect(store().filesIn(folder.id)[0]?.name).toBe('My Dossier')
+
+    await store().updateFile(file.id, { name: 'Renamed Dossier' })
+    expect(store().filesIn(folder.id)[0]?.name).toBe('Renamed Dossier')
+
+    const otherFolder = await store().createFolder('Other', null)
+    await store().moveFile(file.id, otherFolder.id)
+
+    expect(store().filesIn(folder.id)).toHaveLength(0)
+    expect(store().filesIn(otherFolder.id)).toHaveLength(1)
+
+    await store().deleteFile(file.id)
+    expect(store().filesIn(otherFolder.id)).toHaveLength(0)
+  })
+
+  it('cascades folder delete to contained files in the store', async () => {
+    const folder = await store().createFolder('Doomed', null)
+    await store().createFile('F1', folder.id)
+    await store().createFile('F2', folder.id)
+
+    expect(store().filesIn(folder.id)).toHaveLength(2)
+
+    await store().deleteFolder(folder.id)
+    expect(store().files).toHaveLength(0)
+  })
+})
+

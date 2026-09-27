@@ -30,10 +30,60 @@ import type { FileItem, ImageItem, SessionItem } from '../store/sessionStore'
 export interface LibraryFolder {
   id: string
   name: string
+  color?: string
   /** null = lives in the root (PLAN.md §6.1). */
   parentId: string | null
   createdAt: number
   updatedAt: number
+}
+
+export type BlockType =
+  | 'heading'
+  | 'shortText'
+  | 'richText'
+  | 'image'
+  | 'fileAttachment'
+  | 'locked'
+  | 'divider'
+
+export interface EncryptedBlockData {
+  ciphertext: Uint8Array | string
+  iv: Uint8Array | string
+  salt: Uint8Array | string
+  innerType?: BlockType
+}
+
+export interface FileBlock {
+  id: string
+  type: BlockType
+  /** Optional custom or preset label, e.g. "Gateway Proxy", "Optical Frequency", "Cluster Root Keyphrase" */
+  label?: string
+  /** Content for heading, richText, locked (when unlocked/raw), etc. */
+  content?: string
+  /** Value for shortText pair (or other key-value) */
+  value?: string
+  /** Media / file attachment metadata */
+  fileName?: string
+  fileSize?: string | number
+  fileExt?: string
+  caption?: string
+  blob?: Blob
+  mimeType?: string
+  /** Security / locking */
+  isLocked?: boolean
+  password?: string
+  lockedData?: EncryptedBlockData
+  /** In-memory state */
+  isUnlocked?: boolean
+}
+
+export interface LibraryFile {
+  id: string
+  folderId: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  blocks: FileBlock[]
 }
 
 export type LibraryItemType = 'text' | 'richtext' | 'image' | 'file' | 'locked'
@@ -127,7 +177,7 @@ export const ROOT_FOLDER_ID = 'root'
  * nothing outside it should name the store (the boundary the library exists for).
  */
 const DB_NAME = 'qrbit-library'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 interface LibraryDB extends DBSchema {
   folders: { key: string; value: LibraryFolder }
@@ -136,21 +186,35 @@ interface LibraryDB extends DBSchema {
     value: LibraryItem
     indexes: { folderId: string; type: LibraryItemType; updatedAt: number }
   }
+  files: {
+    key: string
+    value: LibraryFile
+    indexes: { folderId: string; updatedAt: number }
+  }
 }
 
-type LibraryTransaction = IDBPTransaction<LibraryDB, ('folders' | 'items')[], 'readwrite'>
+type LibraryTransaction = IDBPTransaction<LibraryDB, ('folders' | 'items' | 'files')[], 'readwrite'>
 
 let database: Promise<IDBPDatabase<LibraryDB>> | null = null
 
 function getDatabase(): Promise<IDBPDatabase<LibraryDB>> {
   if (database === null) {
     const opening = openDB<LibraryDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        db.createObjectStore('folders', { keyPath: 'id' })
-        const items = db.createObjectStore('items', { keyPath: 'id' })
-        items.createIndex('folderId', 'folderId')
-        items.createIndex('type', 'type')
-        items.createIndex('updatedAt', 'updatedAt')
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore('folders', { keyPath: 'id' })
+          const items = db.createObjectStore('items', { keyPath: 'id' })
+          items.createIndex('folderId', 'folderId')
+          items.createIndex('type', 'type')
+          items.createIndex('updatedAt', 'updatedAt')
+        }
+        if (oldVersion < 2) {
+          if (!db.objectStoreNames.contains('files')) {
+            const files = db.createObjectStore('files', { keyPath: 'id' })
+            files.createIndex('folderId', 'folderId')
+            files.createIndex('updatedAt', 'updatedAt')
+          }
+        }
       },
     })
     // A failed open must not poison the cache: the next call tries again.
@@ -207,7 +271,7 @@ const TYPE_FIELDS: Record<LibraryItemType, readonly string[]> = {
   locked: ['label', 'innerType', 'ciphertext', 'iv', 'salt'],
 }
 
-const FOLDER_FIELDS: readonly string[] = ['id', 'name', 'parentId', 'createdAt', 'updatedAt']
+const FOLDER_FIELDS: readonly string[] = ['id', 'name', 'color', 'parentId', 'createdAt', 'updatedAt']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -464,9 +528,13 @@ function parseFolder(value: unknown): LibraryFolder {
     throw new Error('library: a folder needs a "parentId" that is a folder id or null')
   }
 
+  const rawColor = value['color']
+  const color = typeof rawColor === 'string' ? rawColor : undefined
+
   return {
     id: requireId(readString(value, 'id', 'folder'), 'a folder'),
     name: requireName(readString(value, 'name', 'folder'), 'a folder'),
+    color,
     parentId,
     createdAt: readTimestamp(value, 'createdAt', 'folder'),
     updatedAt: readTimestamp(value, 'updatedAt', 'folder'),
@@ -512,20 +580,25 @@ export async function getFolders(): Promise<LibraryFolder[]> {
   return folders.sort((a, b) => a.createdAt - b.createdAt || compareNames(a.name, b.name))
 }
 
-export async function createFolder(name: string, parentId: string | null): Promise<LibraryFolder> {
+export async function createFolder(
+  name: string,
+  parentId: string | null,
+  color?: string,
+): Promise<LibraryFolder> {
   const folderName = requireName(name, 'a folder')
   const parent = normaliseParentId(parentId)
   const now = Date.now()
   const folder: LibraryFolder = {
     id: globalThis.crypto.randomUUID(),
     name: folderName,
+    color,
     parentId: parent,
     createdAt: now,
     updatedAt: now,
   }
 
   const db = await getDatabase()
-  const tx = db.transaction(['folders', 'items'], 'readwrite')
+  const tx = db.transaction(['folders', 'items', 'files'], 'readwrite')
   await requireFolder(tx, parent)
   // `add`, not `put`: a colliding id must fail loudly rather than overwrite a folder tree.
   await tx.objectStore('folders').add(folder)
@@ -604,7 +677,7 @@ export async function deleteFolder(id: string): Promise<void> {
   if (folderId === ROOT_FOLDER_ID) throw new Error('library: the root folder cannot be deleted')
 
   const db = await getDatabase()
-  const tx = db.transaction(['folders', 'items'], 'readwrite')
+  const tx = db.transaction(['folders', 'items', 'files'], 'readwrite')
   const folderStore = tx.objectStore('folders')
   if ((await folderStore.get(folderId)) === undefined) {
     throw new Error(`library: no folder with id "${folderId}"`)
@@ -615,6 +688,12 @@ export async function deleteFolder(id: string): Promise<void> {
   for (const doomedFolderId of doomed) {
     for (const itemKey of await itemStore.index('folderId').getAllKeys(doomedFolderId)) {
       await itemStore.delete(itemKey)
+    }
+  }
+  const fileStore = tx.objectStore('files')
+  for (const doomedFolderId of doomed) {
+    for (const fileKey of await fileStore.index('folderId').getAllKeys(doomedFolderId)) {
+      await fileStore.delete(fileKey)
     }
   }
   for (const doomedFolderId of doomed) {
@@ -880,3 +959,388 @@ function nameForText(content: string): string {
   const lastSpace = clipped.lastIndexOf(' ')
   return `${lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped}…`
 }
+
+// ---------------------------------------------------------------------------
+// File & Block system (Glorified markdown files / dossiers)
+// ---------------------------------------------------------------------------
+
+const BLOCK_TYPES: readonly BlockType[] = [
+  'heading',
+  'shortText',
+  'richText',
+  'image',
+  'fileAttachment',
+  'locked',
+  'divider',
+]
+
+function isBlockType(value: unknown): value is BlockType {
+  return typeof value === 'string' && BLOCK_TYPES.some((t) => t === value)
+}
+
+export function parseBlock(value: unknown): FileBlock {
+  if (!isRecord(value)) throw new Error('library: a block must be an object')
+  const id = requireId(readString(value, 'id', 'block'), 'block')
+  const rawType = value['type']
+  const type: BlockType = isBlockType(rawType) ? rawType : 'shortText'
+
+  const block: FileBlock = {
+    id,
+    type,
+  }
+
+  if (typeof value['label'] === 'string') block.label = value['label']
+  if (typeof value['content'] === 'string') block.content = value['content']
+  if (typeof value['value'] === 'string') block.value = value['value']
+  if (typeof value['fileName'] === 'string') block.fileName = value['fileName']
+  if (typeof value['fileSize'] === 'string' || typeof value['fileSize'] === 'number') block.fileSize = value['fileSize']
+  if (typeof value['fileExt'] === 'string') block.fileExt = value['fileExt']
+  if (typeof value['caption'] === 'string') block.caption = value['caption']
+  if (typeof value['mimeType'] === 'string') block.mimeType = value['mimeType']
+  if (typeof value['isLocked'] === 'boolean') {
+    block.isLocked = value['isLocked']
+  } else if (type === 'locked') {
+    block.isLocked = true
+  }
+  if (typeof value['password'] === 'string') block.password = value['password']
+  if (typeof value['isUnlocked'] === 'boolean') block.isUnlocked = value['isUnlocked']
+
+  if (value['blob'] instanceof Blob) {
+    block.blob = value['blob']
+  }
+
+  if (isRecord(value['lockedData'])) {
+    const rawLocked = value['lockedData']
+    block.lockedData = {
+      ciphertext: rawLocked['ciphertext'] as Uint8Array | string,
+      iv: rawLocked['iv'] as Uint8Array | string,
+      salt: rawLocked['salt'] as Uint8Array | string,
+      innerType: isBlockType(rawLocked['innerType']) ? rawLocked['innerType'] : undefined,
+    }
+  }
+
+  return block
+}
+
+export function parseFile(value: unknown): LibraryFile {
+  if (!isRecord(value)) throw new Error('library: a file must be an object')
+  const what = 'file'
+  const id = requireId(readString(value, 'id', what), what)
+  const folderId = requireId(readString(value, 'folderId', what), what)
+  const name = requireName(readString(value, 'name', what), what)
+  const createdAt = readTimestamp(value, 'createdAt', what)
+  const updatedAt = readTimestamp(value, 'updatedAt', what)
+
+  const rawBlocks = value['blocks']
+  const blocks: FileBlock[] = Array.isArray(rawBlocks) ? rawBlocks.map(parseBlock) : []
+
+  return {
+    id,
+    folderId,
+    name,
+    createdAt,
+    updatedAt,
+    blocks,
+  }
+}
+
+/** All files in the library, most recently updated first. */
+export async function getFiles(): Promise<LibraryFile[]> {
+  const db = await getDatabase()
+  const files = (await db.getAll('files')).map(parseFile)
+  return files.sort((a, b) => b.updatedAt - a.updatedAt || compareNames(a.name, b.name))
+}
+
+/** The files directly in `folderId`, most recently updated first. */
+export async function getFilesInFolder(folderId: string): Promise<LibraryFile[]> {
+  const target = requireId(folderId, 'getFilesInFolder')
+  const db = await getDatabase()
+  const files = (await db.getAllFromIndex('files', 'folderId', target)).map(parseFile)
+  return files.sort((a, b) => b.updatedAt - a.updatedAt || compareNames(a.name, b.name))
+}
+
+/** `undefined` for an id with no file. */
+export async function getFile(id: string): Promise<LibraryFile | undefined> {
+  const fileId = requireId(id, 'getFile')
+  const db = await getDatabase()
+  const stored = await db.get('files', fileId)
+  return stored === undefined ? undefined : parseFile(stored)
+}
+
+/** Create or overwrite a file by id. */
+export async function saveFile(file: LibraryFile): Promise<void> {
+  const parsed = parseFile(file)
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items', 'files'], 'readwrite')
+  await requireFolder(tx, parsed.folderId)
+  await tx.objectStore('files').put(parsed)
+  await tx.done
+}
+
+/** Creates a new dossier file inside `folderId`. */
+export async function createFile(
+  name: string,
+  folderId: string,
+  blocks: FileBlock[] = [],
+): Promise<LibraryFile> {
+  const fileName = requireName(name, 'a file')
+  const target = requireId(folderId, 'createFile')
+  const now = Date.now()
+  const file: LibraryFile = {
+    id: globalThis.crypto.randomUUID(),
+    folderId: target,
+    name: fileName,
+    createdAt: now,
+    updatedAt: now,
+    blocks,
+  }
+
+  await saveFile(file)
+  return file
+}
+
+/** Applies a partial update to an existing file. */
+export async function updateFile(id: string, patch: Partial<LibraryFile>): Promise<void> {
+  const fileId = requireId(id, 'updateFile')
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items', 'files'], 'readwrite')
+  const store = tx.objectStore('files')
+  const existing = await store.get(fileId)
+  if (existing === undefined) throw new Error(`library: no file with id "${fileId}"`)
+
+  const merged = { ...existing, ...patch, updatedAt: Date.now() }
+  if (merged.id !== existing.id) {
+    throw new Error(`library: a file's id is immutable`)
+  }
+  if (merged.createdAt !== existing.createdAt) {
+    throw new Error(`library: a file's createdAt is immutable`)
+  }
+
+  const parsed = parseFile(merged)
+  await requireFolder(tx, parsed.folderId)
+  await store.put(parsed)
+  await tx.done
+}
+
+export async function deleteFile(id: string): Promise<void> {
+  const fileId = requireId(id, 'deleteFile')
+  const db = await getDatabase()
+  const tx = db.transaction('files', 'readwrite')
+  const store = tx.objectStore('files')
+  if ((await store.get(fileId)) === undefined) {
+    throw new Error(`library: no file with id "${fileId}"`)
+  }
+  await store.delete(fileId)
+  await tx.done
+}
+
+export async function moveFile(id: string, targetFolderId: string): Promise<void> {
+  const fileId = requireId(id, 'moveFile')
+  const target = requireId(targetFolderId, 'moveFile')
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items', 'files'], 'readwrite')
+  await requireFolder(tx, target)
+  const store = tx.objectStore('files')
+  const existing = await store.get(fileId)
+  if (existing === undefined) throw new Error(`library: no file with id "${fileId}"`)
+
+  await store.put(parseFile({ ...existing, folderId: target, updatedAt: Date.now() }))
+  await tx.done
+}
+
+// ---------------------------------------------------------------------------
+// Seed Data (Realistic mock folders and files)
+// ---------------------------------------------------------------------------
+
+export const INITIAL_FOLDERS: LibraryFolder[] = [
+  {
+    id: 'f-1',
+    name: 'Work & Credentials',
+    color: '#1D4ED8',
+    parentId: null,
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+  },
+  {
+    id: 'f-2',
+    name: 'Research Dossiers',
+    color: '#0F766E',
+    parentId: null,
+    createdAt: 1700000001000,
+    updatedAt: 1700000001000,
+  },
+  {
+    id: 'f-3',
+    name: 'Field Deployments',
+    color: '#7C3AED',
+    parentId: null,
+    createdAt: 1700000002000,
+    updatedAt: 1700000002000,
+  },
+]
+
+export const INITIAL_FILES: LibraryFile[] = [
+  {
+    id: 'file-1',
+    folderId: 'f-1',
+    name: 'Uni Credentials & Keys',
+    createdAt: 1700000000000,
+    updatedAt: Date.now() - 12 * 60 * 1000,
+    blocks: [
+      {
+        id: 'b-101',
+        type: 'heading',
+        content: 'CS Lab 402 — Auth Cluster',
+      },
+      {
+        id: 'b-102',
+        type: 'shortText',
+        label: 'Gateway Proxy',
+        value: 'gateway.ece.university.edu:8443',
+      },
+      {
+        id: 'b-103',
+        type: 'locked',
+        label: 'Cluster Root Keyphrase',
+        content: 'sys_x94#kK99!Alpha2',
+        password: 'pass',
+        isLocked: true,
+        isUnlocked: false,
+      },
+      {
+        id: 'b-104',
+        type: 'divider',
+      },
+      {
+        id: 'b-105',
+        type: 'richText',
+        content:
+          'Notes on cluster allocation:\n• Nodes 01–08 reserved for vision pipeline.\n• Daily checkpoint wipe at 04:00 UTC.\n• Mount scratch array via /mnt/scratch/shared.',
+      },
+      {
+        id: 'b-106',
+        type: 'fileAttachment',
+        fileName: 'slurm_cluster_rules.yaml',
+        fileSize: '24.8 KB',
+        fileExt: 'yaml',
+      },
+    ],
+  },
+  {
+    id: 'file-2',
+    folderId: 'f-2',
+    name: 'Robotics Vision Calibration',
+    createdAt: 1700000001000,
+    updatedAt: Date.now() - 60 * 60 * 1000,
+    blocks: [
+      {
+        id: 'b-201',
+        type: 'heading',
+        content: 'LiDAR Extrinsic Calibration Matrices',
+      },
+      {
+        id: 'b-202',
+        type: 'shortText',
+        label: 'Optical Frequency',
+        value: '64Hz @ 120k pts/sec (Velodyne VLP-16)',
+      },
+      {
+        id: 'b-203',
+        type: 'image',
+        fileName: 'sensor_rig_alignment.svg',
+        caption: 'Dual camera baseline offset (120mm)',
+        fileSize: '412 KB',
+      },
+      {
+        id: 'b-204',
+        type: 'locked',
+        label: 'Calibration Rig Access Token',
+        content: 'rig-tok_99182374182937491',
+        password: 'pass',
+        isLocked: true,
+        isUnlocked: false,
+      },
+      {
+        id: 'b-205',
+        type: 'fileAttachment',
+        fileName: 'calibration_weights_v4.bin',
+        fileSize: '14.2 MB',
+        fileExt: 'bin',
+      },
+    ],
+  },
+  {
+    id: 'file-3',
+    folderId: 'f-1',
+    name: 'SSH Bastion Tunnels',
+    createdAt: 1700000002000,
+    updatedAt: Date.now() - 24 * 60 * 60 * 1000,
+    blocks: [
+      {
+        id: 'b-301',
+        type: 'heading',
+        content: 'Internal Datacenter Gateway',
+      },
+      {
+        id: 'b-302',
+        type: 'shortText',
+        label: 'Bastion IPv4',
+        value: '10.240.18.2',
+      },
+      {
+        id: 'b-303',
+        type: 'locked',
+        label: 'Ed25519 Private Key',
+        content: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGf3Q+qF91Q97X28... admin@qrbit',
+        password: 'pass',
+        isLocked: true,
+        isUnlocked: false,
+      },
+    ],
+  },
+  {
+    id: 'file-4',
+    folderId: 'f-3',
+    name: 'Site Survey Telemetry Alpha',
+    createdAt: 1700000003000,
+    updatedAt: Date.now() - 3 * 24 * 60 * 60 * 1000,
+    blocks: [
+      {
+        id: 'b-401',
+        type: 'heading',
+        content: 'Antenna Array Coordinates',
+      },
+      {
+        id: 'b-402',
+        type: 'shortText',
+        label: 'Base Station Lat/Long',
+        value: '37.7749° N, 122.4194° W',
+      },
+      {
+        id: 'b-403',
+        type: 'richText',
+        content:
+          'Signal degradation observed beyond 450m radius when omnidirectional repeater is unpowered.',
+      },
+    ],
+  },
+]
+
+/** Seeds initial folders and files if database is currently empty. */
+export async function seedInitialLibrary(): Promise<void> {
+  const db = await getDatabase()
+  const existingFolders = await db.getAll('folders')
+  const existingFiles = await db.getAll('files')
+
+  if (existingFolders.length === 0 && existingFiles.length === 0) {
+    const tx = db.transaction(['folders', 'files'], 'readwrite')
+    for (const folder of INITIAL_FOLDERS) {
+      await tx.objectStore('folders').put(folder)
+    }
+    for (const file of INITIAL_FILES) {
+      await tx.objectStore('files').put(file)
+    }
+    await tx.done
+  }
+}
+

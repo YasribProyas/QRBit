@@ -39,6 +39,7 @@ import { itemsInFolder } from '../library/LibraryBrowser'
 import { ITEM_TYPE_ICONS } from '../library/LibraryItemRow'
 import type { LibraryItem } from '../library/LibraryItemRow'
 import { useLibraryStore } from '../../store/libraryStore'
+import { fileBlocksToLibraryItems } from '../../lib/dossier'
 
 /**
  * What this bar needs from the items API: the three add methods the board also
