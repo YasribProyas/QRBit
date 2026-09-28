@@ -75,15 +75,7 @@ export function Home() {
 
   // The library lives in IndexedDB, so the first render has no data to show.
   useEffect(() => {
-    void (async () => {
-      await refresh()
-      if (import.meta.env.MODE !== 'test') {
-        const state = useLibraryStore.getState()
-        if (state.folders.length === 0 && state.files.length === 0) {
-          await state.seedInitialLibrary()
-        }
-      }
-    })()
+    void refresh()
   }, [refresh])
 
   // When a session ends on Home without received items or errors, auto-recover by restarting

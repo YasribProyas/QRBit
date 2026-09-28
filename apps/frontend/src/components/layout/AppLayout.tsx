@@ -59,11 +59,6 @@ export function AppLayout({
               size="100%"
               padding="md"
               title="Local Encrypted Vault"
-              styles={{
-                header: { background: '#141517', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' },
-                body: { background: '#0d0e11', padding: '1rem' },
-                content: { background: '#0d0e11' },
-              }}
               hiddenFrom="md"
               keepMounted={false}
             >

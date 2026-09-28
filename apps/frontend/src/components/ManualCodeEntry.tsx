@@ -81,8 +81,6 @@ function ManualCodeEntryForm() {
               textAlign: 'center',
               textTransform: 'uppercase',
               fontWeight: 700,
-              background: '#0d0e11',
-              border: '1px solid rgba(255, 255, 255, 0.16)',
             },
           }}
           value={code}
@@ -106,7 +104,6 @@ function ManualCodeEntryForm() {
             height: '48px',
             flexShrink: 0,
             background: 'var(--accent)',
-            color: '#0f0f0f',
             fontWeight: 650,
           }}
           rightSection={<IconArrowRight size={18} />}
