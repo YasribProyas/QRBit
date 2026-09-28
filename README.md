@@ -73,6 +73,42 @@ One-time setup, already done: `wrangler login`; `wrangler kv namespace create RA
 (id committed in `apps/signaling-worker/wrangler.toml`); `wrangler secret put
 TURN_KEY_SECRET` once a TURN key exists.
 
+Only two Workers exist for this project: `qrbit-app` (frontend assets) and
+`qrbit-signaling`. The earlier `qrdrop-*` pair was deleted once everything pointed here,
+because leaving a superseded deployment live means someone eventually opens it, sees the old
+UI, and reasonably concludes the deploy failed.
+
+### Confirm the deploy actually shipped
+
+`pnpm --filter <name>` **silently does nothing** if the name no longer matches: it prints
+`No projects matched the filters` and exits successfully. Two renames in this repo have
+already made that happen, and the result looks identical to "I deployed it and nothing
+changed" — because the old bundle is still being served. So never trust a build you did not
+prove ran:
+
+```bash
+rm -rf apps/frontend/dist                      # so a stale bundle cannot pass as new
+pnpm --filter @qrbit/frontend build            # must print "built in"; grep for "No projects"
+
+# Then prove the served page IS the new build: the hashes must match.
+grep -oE "assets/[a-zA-Z0-9._-]+\.(css|js)" apps/frontend/dist/index.html | sort -u
+curl -s https://qrbit-app.proyas.workers.dev/ \
+  | grep -oE "assets/[a-zA-Z0-9._-]+\.(css|js)" | sort -u
+```
+
+If those two lists differ, the deploy did not happen (or Cloudflare served a cached page —
+check `cf-cache-status` on the response).
+
+Also worth a live sanity pass, since the security behaviour is only meaningful in production:
+
+```bash
+W=https://qrbit-signaling.proyas.workers.dev
+curl -s $W/healthz                                          # 200
+curl -s $W/session/new                                      # {"code":"…"} and NO turnCredentials
+curl -s -o/dev/null -w "%{http_code}\n" $W/session/ZZZZZZZZ/turn   # 404: unissued code gets no relay creds
+curl -s -o/dev/null -H 'Sec-Fetch-Mode: navigate' $W/session/new  # 403
+```
+
 ### The origin is one value in two places
 
 Because PLAN.md §8 makes the QR encode the **full app origin**, the app origin must agree
