@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath, URL } from 'node:url'
 import { writeFileSync } from 'node:fs'
@@ -87,6 +88,7 @@ function pagesSecurityHeaders(): Plugin {
 
 export default defineConfig({
   plugins: [
+    tailwindcss(),
     react(),
     pagesSecurityHeaders(),
     // PLAN.md §15: cache the app shell only. IndexedDB is owned by the page,

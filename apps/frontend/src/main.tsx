@@ -27,7 +27,7 @@ if (container === null) {
  */
 createRoot(container).render(
   <StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="dark">
+    <MantineProvider theme={theme} defaultColorScheme="light">
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Home />} />

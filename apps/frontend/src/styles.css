@@ -1,8 +1,8 @@
+@import "tailwindcss";
+
 /*
- * QRBit — dark theme, mobile-first.
- *
- * Colour values match the PWA manifest (PLAN.md §15): background/theme #0f0f0f.
- * No CSS framework is used; none is installed.
+ * QRBit — P2P structured file transfer.
+ * Design tokens and UI/UX from qrd-design with Tailwind CSS v4.
  */
 
 :root {
@@ -47,6 +47,40 @@
   line-height: 1.5;
 }
 
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+  }
+
+  /* Input zoom prevention on mobile (16px minimum per mobile-native skill) */
+  input, textarea, select {
+    font-size: 16px;
+  }
+  @media (min-width: 640px) {
+    input.desktop-sm, textarea.desktop-sm {
+      font-size: 13.5px;
+    }
+  }
+
+  /* Control text selection protection */
+  button, a, [role="button"], .tappable {
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Space Grotesk', -apple-system, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
 *,
 *::before,
 *::after {
@@ -58,6 +92,8 @@ body {
   color: var(--qrd-ink);
   font-family: var(--font);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
 }
 
 /* Emil Kowalski Press Feedback (120ms with --ease-out, never transition: all) */
