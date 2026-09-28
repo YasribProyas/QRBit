@@ -58,7 +58,23 @@ vitest 5 dropped `environmentMatchGlobs`; opt a file into jsdom with
 
 ## Deploy
 
-Both targets are already provisioned; these commands are the whole loop.
+Both targets are already provisioned. One command does the whole loop — gate, wipe, build,
+deploy, and **prove the served page is the build you just made**:
+
+```bash
+./scripts/deploy.sh                # frontend
+./scripts/deploy.sh --worker       # frontend + signaling worker
+./scripts/deploy.sh --only-worker  # worker alone (no frontend change)
+./scripts/deploy.sh --fast         # skip typecheck/tests
+```
+
+It exits non-zero if the build silently no-op'd, if `dist/_headers` is missing (that would
+ship the app with **no CSP**), or if the served asset hashes don't match the local build.
+
+<details>
+<summary>The manual equivalent</summary>
+
+These commands are the whole loop.
 
 ```bash
 # 1. Frontend — builds dist/ AND dist/_headers, then uploads as static assets
@@ -68,6 +84,8 @@ pnpm --filter @qrbit/frontend build
 # 2. Signaling worker
 (cd apps/signaling-worker && ./node_modules/.bin/wrangler deploy)
 ```
+
+</details>
 
 One-time setup, already done: `wrangler login`; `wrangler kv namespace create RATE_LIMIT`
 (id committed in `apps/signaling-worker/wrangler.toml`); `wrangler secret put
