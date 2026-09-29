@@ -24,7 +24,6 @@
     "canvas-confetti": "^1.9.4",
     "html5-qrcode": "^2.3.8",
     "idb": "^8.0.3",
-    "lucide-react": "^1.48.0",
     "qrcode": "^1.5.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

@@ -36,11 +36,39 @@
  * (PLAN.md §11.6), so it now says the phrase is not available yet. And the channel is
  * end-to-end-encrypted WebRTC over the data connection — P2P when ICE allows it, TURN when it does
  * not (PLAN.md §12) — never an air gap, so the subtitle stopped claiming one.
+ *
+ * ## Design-system conversion (DESIGN.md)
+ *
+ * This was the last hand-styled screen in the app, and it is now the sender twin of
+ * `ReceiverSessionView` rather than its opposite number: the same `WithMantine` wrapper, the same
+ * resting panel style (Raised, 1px Border, radius lg, no shadow), the same Title/body-secondary
+ * header line, the same Label-plus-Data rows, and the same `variant="default"` + `color="danger"`
+ * `IconPower` end-session control. The dark ink-coloured slab carrying white labels that opened
+ * this screen is gone: DESIGN.md decides the scheme once at `:root` and "never per component", so
+ * a component may not paint itself a dark world inside a light page, and the shadow under its
+ * sticky header broke "The Floating Only Rule" while nothing was floating. Every hand-written
+ * button element became a Mantine `Button` from the variant table, every literal colour value and
+ * palette utility class became a `--qrbit-*` token or a semantic Mantine colour, the icon package
+ * this app was told to drop became `@tabler/icons-react`, and the type comes from the seven roles
+ * — which is also why the counts and the phrase are `qrbit-text-data` with tabular figures: a
+ * header ratio whose digits change width as items complete makes the line beside it jump
+ * mid-transfer.
+ *
+ * Three claims went with the styling, because nothing on this side of the wire can verify them:
+ * the `peerName` default of `'Connected peer'` (there is no name field on the wire — the screen
+ * now says "Other device", the same correction the receiver twin took); the ungated green
+ * `animate-radar-ping` dot, which asserted a live peer connection on every paint of this screen
+ * while the receiver twin's dot is driven by `peerConfirmed` and this component's props carry no
+ * liveness signal at all; and the word "delivered" on the header ratio, since a sender's item
+ * reaches `complete` when its last frame is handed to the data channel (`useSession` also creates
+ * text items `complete`), which means *sent*, not *received*. The ratio's arithmetic is unchanged
+ * and still read from the store — only the claim in its label moved down to what is measured.
  */
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { PowerOff, Plus, SendHorizontal } from 'lucide-react'
+import { Button, Group, Paper, Stack, Text, Textarea } from '@mantine/core'
+import { IconDeviceMobile, IconPower, IconPlus, IconSend } from '@tabler/icons-react'
 import type { UseSessionResult } from '../../hooks/useSession'
 import type { BlockType, FileBlock, LibraryFile } from '../../lib/library'
 import { useSessionStore } from '../../store/sessionStore'
@@ -49,6 +77,7 @@ import { BlockItem } from '../library/BlockItem'
 import { AddBlockModal } from '../library/AddBlockModal'
 import { LockedItemComposeModal } from './LockedItemComposeModal'
 import type { LockedItemInput } from './LockedItemComposeModal'
+import { WithMantine } from '../common/WithMantine'
 
 export interface SenderSessionViewProps {
   /**
@@ -58,6 +87,11 @@ export interface SenderSessionViewProps {
    */
   session: SenderSessionApi
   sessionFile?: LibraryFile | null
+  /**
+   * What to call the other device. The app never learns a peer's name — there is no such
+   * field on the wire — so this is optional and there is no invented default: without it the
+   * screen says "Other device", which is the truth. `pages/Home.tsx` passes nothing.
+   */
   peerName?: string
   onEndSession: () => void
 }
@@ -74,6 +108,39 @@ interface SenderRow {
   /** The id the items API returned for what this row sent; `null` for a queued dossier block. */
   itemId: string | null
 }
+
+/** A resting panel: Raised, 1px Border, radius lg, no shadow at rest (DESIGN.md). */
+const PANEL_STYLE = {
+  background: 'var(--qrbit-raised)',
+  border: '1px solid var(--qrbit-border)',
+  borderRadius: 'var(--qrbit-radius-lg)',
+} as const
+
+/**
+ * A verification word, drawn exactly as `ReceiverSessionView` and `SessionView` draw it, so the
+ * words a user reads across from the other device look like the same object on both screens.
+ */
+const PHRASE_WORD_STYLE = {
+  background: 'var(--qrbit-sunken)',
+  border: '1px solid var(--qrbit-border)',
+  borderRadius: 'var(--qrbit-radius-sm)',
+  padding: '2px 8px',
+  color: 'var(--qrbit-ink)',
+} as const
+
+/**
+ * DESIGN.md's Inputs rule — Raised fill, 1px Border Strong, radius sm — on the one field the
+ * browser draws itself. The 16px floor is left to `styles.css`'s `input` rule rather than set
+ * here: a file field under it makes iOS zoom the page on focus.
+ */
+const FILE_FIELD_STYLE = {
+  width: '100%',
+  background: 'var(--qrbit-raised)',
+  border: '1px solid var(--qrbit-border-strong)',
+  borderRadius: 'var(--qrbit-radius-sm)',
+  padding: '8px 12px',
+  color: 'var(--qrbit-ink)',
+} as const
 
 /** The kinds the compose form takes text for. A rich-text item's content is Tiptap JSON, which a
  * one-line form cannot honestly produce, so all three go out as plain text items. */
@@ -103,10 +170,18 @@ function pillFor(item: SessionItem | undefined): 'pending' | 'in_progress' | 'se
   return item.status
 }
 
-export function SenderSessionView({
+export function SenderSessionView(props: SenderSessionViewProps) {
+  return (
+    <WithMantine>
+      <SenderSessionViewInner {...props} />
+    </WithMantine>
+  )
+}
+
+function SenderSessionViewInner({
   session,
   sessionFile,
-  peerName = 'Connected peer',
+  peerName,
   onEndSession,
 }: SenderSessionViewProps) {
   const [rows, setRows] = useState<SenderRow[]>(() =>
@@ -120,6 +195,7 @@ export function SenderSessionView({
   /** Why a send was refused, in words the user can act on. Cleared by the next edit. */
   const [composeError, setComposeError] = useState<string | null>(null)
   const [isLockedComposeOpen, setLockedComposeOpen] = useState(false)
+  const fileFieldId = useId()
 
   const items = useSessionStore((state) => state.items)
 
@@ -249,164 +325,233 @@ export function SenderSessionView({
   const isFileDialog = composing !== null && isFileType(composing)
 
   return (
-    <div className="session-board flex flex-col min-h-screen bg-[#EEF2F6] pb-14 text-[#0F172A]">
-      {/* Session Active Top Header */}
-      <header className="px-4 py-3 bg-[#0F172A] text-white sticky top-0 z-30 shadow-md">
-        <div className="flex items-center justify-between pb-2 border-b border-slate-700/60">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-radar-ping" />
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-display font-bold text-sm text-white">Active Channel</span>
-                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
-                  {completedCount} / {items.length} delivered
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-300 truncate max-w-[200px]">Peer: {peerName}</p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={onEndSession}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600/90 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition-colors tactile-btn cursor-pointer"
-          >
-            <PowerOff className="w-3.5 h-3.5" />
-            <span>End Session</span>
-          </button>
-        </div>
-
-        {/* Verification words, or the honest absence of them (PLAN.md §11.6). */}
-        <div className="pt-2 flex items-center justify-between text-xs">
-          <span className="text-[11px] text-slate-400 font-mono">Verification:</span>
-          {safetyWords === null ? (
-            <span className="text-[11px] font-mono text-amber-300" data-safety-phrase="absent">
-              not available until both keys are exchanged
-            </span>
-          ) : (
-            <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-sky-400">
-              {safetyWords.map((word) => (
-                <span key={word} className="px-1.5 py-0.5 bg-slate-800/80 rounded border border-slate-700 uppercase">
-                  {word}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="flex-1 px-4 py-5 max-w-xl mx-auto w-full space-y-5">
-        {/* File Container Title */}
-        <div className="flex items-center justify-between px-1">
-          <div className="flex items-center gap-2">
-            <SendHorizontal className="w-4 h-4 text-[#1D4ED8]" />
-            <div>
-              <h2 className="font-display font-bold text-base text-[#0F172A]">
-                {sessionFile?.name || 'Ad-hoc sends'}
-              </h2>
-              <p className="text-xs text-[#5B6B82]">
+    // `maw="36rem"` is the `max-w-xl` column this screen already used, kept as a token-scale
+    // number rather than a Tailwind utility; the canvas colour and the viewport height come from
+    // `body` in styles.css, so a component no longer paints its own page background.
+    <Stack gap="lg" p="lg" maw="36rem" className="session-board" style={{ marginInline: 'auto' }}>
+      {/*
+        The channel header: the same resting panel `ReceiverSessionView` opens with — Title role
+        for the screen's name, Body Secondary for what the channel is, and the end-session control
+        on the right. There is no status dot here. The receiver's is driven by `peerConfirmed`, and
+        this screen's props (`SenderSessionApi`) carry no liveness signal, so a green pulse would
+        have been the component asserting a connection it cannot observe.
+      */}
+      <Paper component="header" p="md" radius="lg" style={PANEL_STYLE}>
+        <Group justify="space-between" gap="md" wrap="wrap">
+          <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+            <IconSend
+              size={16}
+              aria-hidden="true"
+              style={{ color: 'var(--qrbit-ink-secondary)', flex: 'none' }}
+            />
+            <Stack gap={0} style={{ minWidth: 0 }}>
+              <Text className="qrbit-text-title">Active channel</Text>
+              <Text span className="qrbit-text-body-secondary" c="dimmed">
                 End-to-end encrypted over the peer data channel
-              </p>
-            </div>
-          </div>
+              </Text>
+            </Stack>
+          </Group>
 
-          <button
-            type="button"
-            onClick={() => setIsAddBlockOpen(true)}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white border border-[#D1D9E4] hover:border-[#1D4ED8] hover:text-[#1D4ED8] text-slate-700 text-xs font-semibold rounded-lg shadow-2xs tactile-btn cursor-pointer"
+          {/*
+            DESIGN.md's Danger row is for a destructive confirmation that names the data it
+            destroys, and ending a session destroys none of the user's own: the dossier stays in
+            the library and the peer keeps what already arrived. So it is the Default variant —
+            Raised fill, 1px Border Strong — carrying the danger hue on the label and the power
+            glyph, exactly the control the receiver twin puts in the same place.
+          */}
+          <Button
+            variant="default"
+            color="danger"
+            size="sm"
+            leftSection={<IconPower size={16} aria-hidden="true" />}
+            onClick={onEndSession}
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Block</span>
-          </button>
-        </div>
+            End session
+          </Button>
+        </Group>
+      </Paper>
 
-        {/* The mid-session compose form: text or file, and nothing leaves without being written. */}
+      {/*
+        What the store can actually say about this channel, one Label-plus-value row each, in the
+        receiver twin's order: who is on the other end, how much has left, and the words the key
+        exchange produced (or that it has not).
+      */}
+      <Paper p="md" radius="lg" style={PANEL_STYLE}>
+        <Stack gap="sm">
+          <Group gap="xs" wrap="nowrap">
+            <IconDeviceMobile
+              size={16}
+              aria-hidden="true"
+              style={{ color: 'var(--qrbit-ink-muted)', flex: 'none' }}
+            />
+            <Text span className="qrbit-text-body-secondary">
+              {peerName ?? 'Other device'}
+            </Text>
+          </Group>
+
+          {/*
+            "Sent", not "delivered": `complete` on this side is the last frame being handed to the
+            data channel, which says nothing about the peer having received it. The numbers are the
+            store's, and the Data role keeps their width fixed as they change mid-transfer.
+          */}
+          <Group justify="space-between" wrap="nowrap">
+            <Text span className="qrbit-text-label" c="dimmed">
+              Items sent
+            </Text>
+            <Text span className="qrbit-text-data">
+              {completedCount} / {items.length}
+            </Text>
+          </Group>
+
+          {/* Verification words, or the honest absence of them (PLAN.md §11.6). */}
+          <Stack gap="xs">
+            <Text span className="qrbit-text-label" c="dimmed">
+              Safety phrase
+            </Text>
+            {safetyWords === null ? (
+              <Text className="qrbit-text-body-secondary" c="dimmed" data-safety-phrase="absent">
+                Not available until both keys are exchanged.
+              </Text>
+            ) : (
+              <Group gap="xs" wrap="nowrap">
+                {safetyWords.map((word) => (
+                  <Text key={word} span className="qrbit-text-data" style={PHRASE_WORD_STYLE}>
+                    {word}
+                  </Text>
+                ))}
+              </Group>
+            )}
+          </Stack>
+        </Stack>
+      </Paper>
+
+      <Stack component="main" gap="md" style={{ flex: 1 }}>
+        {/* The dossier on the channel, and the way to put another block on it. */}
+        <Group justify="space-between" gap="sm" wrap="nowrap">
+          <Text
+            className="qrbit-text-title"
+            style={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' }}
+          >
+            {sessionFile?.name || 'Ad-hoc sends'}
+          </Text>
+
+          <Button
+            variant="default"
+            size="sm"
+            leftSection={<IconPlus size={16} aria-hidden="true" />}
+            onClick={() => {
+              setIsAddBlockOpen(true)
+            }}
+          >
+            Add block
+          </Button>
+        </Group>
+
+        {/*
+          The mid-session compose form: text or file, and nothing leaves without being written.
+          A real `<form>`, so Enter on the field runs the same submit path as the Send button.
+        */}
         {composing !== null ? (
           <form
-            className="bg-white rounded-xl border border-[#D1D9E4] p-3.5 space-y-2.5"
             onSubmit={(event) => {
               event.preventDefault()
               if (isFileDialog) handleSendFile()
               else handleSendText()
             }}
+            style={{
+              ...PANEL_STYLE,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--qrbit-space-md)',
+              padding: 'var(--qrbit-space-lg)',
+            }}
           >
-            <p className="text-xs font-semibold text-[#0F172A]">
-              {isFileDialog
-                ? `Choose the ${composing === 'image' ? 'image' : 'file'} to send`
-                : 'Write what the peer should receive'}
-            </p>
-
             {isFileDialog ? (
-              <input
-                type="file"
-                aria-label="File to send"
-                accept={composing === 'image' ? 'image/*' : undefined}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  setDraftFile(event.currentTarget.files?.[0] ?? null)
-                  setComposeError(null)
-                }}
-                className="w-full text-xs text-[#5B6B82] border border-[#D1D9E4] rounded px-2 py-1.5 bg-slate-50"
-              />
+              <>
+                <Text
+                  component="label"
+                  htmlFor={fileFieldId}
+                  className="qrbit-text-label"
+                  c="dimmed"
+                  display="block"
+                >
+                  File to send
+                </Text>
+                {/* The helper names the kind that was asked for; the bytes stay the user's choice. */}
+                <Text className="qrbit-text-body-secondary" c="dimmed">
+                  {`Choose the ${composing === 'image' ? 'image' : 'file'} to send.`}
+                </Text>
+                <input
+                  id={fileFieldId}
+                  type="file"
+                  aria-label="File to send"
+                  accept={composing === 'image' ? 'image/*' : undefined}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    setDraftFile(event.currentTarget.files?.[0] ?? null)
+                    setComposeError(null)
+                  }}
+                  style={FILE_FIELD_STYLE}
+                />
+              </>
             ) : (
-              <textarea
+              <Textarea
                 autoFocus
                 rows={3}
+                resize="vertical"
+                label="Text to send"
+                // DESIGN.md's Label role is 12px/600; Mantine's field label is 12px/500 and the
+                // weight is not a theme slot, so it is set here (as in `NewFolderModal`). The field
+                // itself keeps the 16px floor a focused field needs not to zoom iOS Safari.
+                description="Write what the peer should receive. Nothing is sent until you press Send."
+                styles={{ label: { fontWeight: 600 }, input: { fontSize: '16px' } }}
                 aria-label="Text to send"
                 value={draftText}
                 onChange={(event) => {
                   setDraftText(event.target.value)
                   setComposeError(null)
                 }}
-                placeholder="Type the message. Nothing is sent until you press Send."
-                className="w-full text-xs leading-relaxed text-[#0F172A] bg-slate-50/50 p-2.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8] resize-y"
               />
             )}
 
             {composeError !== null ? (
-              <p className="text-[11px] text-red-600" role="alert" data-compose-error="true">
+              <p className="item-error" role="alert" data-compose-error="true">
                 {composeError}
               </p>
             ) : null}
 
-            <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeForm}
-                className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg tactile-btn cursor-pointer"
-              >
+            {/* Dialog actions: quieter control first, then the one primary (DESIGN.md, Dialogs). */}
+            <Group justify="end" gap="sm">
+              <Button variant="subtle" size="sm" c="dimmed" onClick={closeForm}>
                 Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-3.5 py-1.5 bg-[#1D4ED8] hover:bg-blue-700 text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
-              >
+              </Button>
+              <Button type="submit" size="sm" color="signal">
                 Send
-              </button>
-            </div>
+              </Button>
+            </Group>
           </form>
         ) : null}
 
-        {/* Blocks streaming view */}
-        <div className="space-y-3">
+        {/*
+          The board. Rows are siblings on the canvas, not cards inside a panel: `BlockItem` draws
+          its own 1px border, and DESIGN.md forbids a bordered card in a bordered card.
+        */}
+        <Stack gap="md">
           {composeError !== null && composing === null ? (
-            <p
-              className="text-[11px] text-red-600 px-1"
-              role="alert"
-              data-compose-error="true"
-            >
+            <p className="item-error" role="alert" data-compose-error="true">
               {composeError}
             </p>
           ) : null}
 
           {rows.length === 0 ? (
-            <div className="bg-white rounded-xl border border-[#D1D9E4] p-8 text-center text-slate-400">
-              <p className="text-sm font-medium text-slate-700">Ready to transfer</p>
-              <p className="text-xs mt-1">
-                Use &quot;+ Add Block&quot; to compose an item on the live channel. Nothing is sent
-                until you write it.
-              </p>
-            </div>
+            <Stack gap="xs" py="xl" align="center">
+              <Text className="qrbit-text-body" c="dimmed">
+                Nothing has been sent on this channel yet.
+              </Text>
+              <Text className="qrbit-text-body-secondary" c="dimmed">
+                Use “Add block” to compose an item on the live channel. Nothing is sent until you
+                write it.
+              </Text>
+            </Stack>
           ) : (
             rows.map((row, index) => {
               const item = row.itemId === null ? undefined : items.find((candidate) => candidate.id === row.itemId)
@@ -430,8 +575,8 @@ export function SenderSessionView({
               )
             })
           )}
-        </div>
-      </main>
+        </Stack>
+      </Stack>
 
       {/* Add Block Modal */}
       <AddBlockModal
@@ -455,6 +600,6 @@ export function SenderSessionView({
           }}
         />
       ) : null}
-    </div>
+    </Stack>
   )
 }
