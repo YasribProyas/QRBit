@@ -13,11 +13,14 @@
  * ORCHESTRATION D16 changed what can be reached from this page. The `sr-only`
  * `LibraryBrowser` mount is gone (D16.4), and with it the only multi-select UI Home ever
  * shipped — so the "select items, then Scan & Send queues them" page tests went too,
- * because there is nothing on the page left to ask. `LibraryBrowser.test.tsx` still pins
- * that component directly. What replaces them is asserted through the library panel that
- * is now on screen: a dossier row opens the editor, `+ New file` writes into the folder
- * whose list it heads (the `folders[0]?.id || 'f-1'` fallback is dead, so a test seeds
- * two folders and proves the second one is the one that gets the dossier), `Scan & Send`
+ * because there is nothing on the page left to ask. `LibraryBrowser` itself has since been
+ * deleted as the orphan it was, together with its test file, so the queueing flow is
+ * pinned where it is actually reachable: Home's per-dossier send below, and
+ * `hooks/useSession.test.tsx`. What replaces the old page tests is asserted through the
+ * library panel that is now on screen: a dossier row opens the editor, `+ New file` writes
+ * into the folder whose list it heads (the `folders[0]?.id || 'f-1'` fallback is dead, so a
+ * test seeds two folders and proves the second one is the one that gets the dossier),
+ * `Scan & Send`
  * belongs to the QR panel rather than the header, and the header's Settings control
  * navigates.
  */
@@ -863,9 +866,10 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
 /*
  * The page-level "select library items, then Scan & Send queues them" tests lived here.
  * They drove the `sr-only` `LibraryBrowser` mount that D16.4 deleted, so the page has no
- * multi-select left to test — `LibraryBrowser.test.tsx` still pins that component, and the
- * surviving half of the flow (open the camera from the QR panel, join what it scanned) is
- * asserted below.
+ * multi-select left to test — and the browser component itself is gone, so there is no
+ * unreachable UI left to pin either. The surviving half of the flow (open the camera from
+ * the QR panel, join what it scanned) and the surviving queue entry point — Home's
+ * per-dossier send, which calls `queueLibrarySends` — are asserted below.
  */
 describe('Home — Scan & Send, PLAN.md §7 flow A (PLAN.md §16 Phase 6, D8, D16)', () => {
   it('joins the scanned session with an empty queue when nothing was sent first', async () => {

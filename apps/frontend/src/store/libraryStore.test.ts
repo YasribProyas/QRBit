@@ -12,6 +12,9 @@
  *     against the store's own copy, so "no stale copies" is checked and not assumed;
  *   - the cascade delete (PLAN.md §6.3), which is the one mutation whose result the
  *     store cannot compute locally;
+ *   - that a locked item is stored as its ciphertext tuple only, with no plaintext in the
+ *     stored row (PLAN.md §6.2, §19.3) — moved here from the deleted `NewItemBar` tests so
+ *     removing that UI could not remove the guarantee with it;
  *   - error surfacing: a failure lands in `error` AND rejects, and the next successful
  *     action clears it;
  *   - the boundary: `refresh` reads and never writes, and no action of the store is
@@ -31,7 +34,13 @@ import {
   ROOT_FOLDER_ID,
   saveItem as saveItemInLibrary,
 } from '../lib/library'
-import type { LibraryFileItem, LibraryItem, LibraryTextItem } from '../lib/library'
+import type {
+  LibraryFileItem,
+  LibraryItem,
+  LibraryLockedItem,
+  LibraryTextItem,
+} from '../lib/library'
+import { decryptItem, encryptItem } from '../lib/crypto'
 import { useLibraryStore } from './libraryStore'
 import type { SessionItem } from './sessionStore'
 
@@ -208,6 +217,73 @@ describe('libraryStore items (PLAN.md §6.3)', () => {
 
     expect(store().items).toEqual([item])
     expect(await getItem(item.id)).toEqual(item)
+  })
+
+  /*
+   * Moved here from `NewItemBar.test.tsx` when that offline-creation bar was deleted
+   * (ORCHESTRATION D16.4). The bar was only the UI that reached this write; the contract
+   * belongs to the store and `lib/library.ts`, and it is the one worth keeping: a locked
+   * item lands in IndexedDB as the `{ ciphertext, iv, salt }` tuple and its plaintext
+   * label ONLY — never the secret itself (PLAN.md §6.2, §19.3) — and that tuple still
+   * decrypts with the password that was typed. Deleting the component must not be allowed
+   * to quietly delete this guarantee with it.
+   */
+  it('stores a locked item as the ciphertext tuple alone, with the plaintext provably absent', async () => {
+    const SECRET_TEXT = 'extremely-sensitive-credential-9988'
+    const PASSWORD = 'correct-horse-battery-staple'
+    const folder = await store().createFolder('Secrets', null)
+    const tuple = await encryptItem(PASSWORD, new TextEncoder().encode(SECRET_TEXT))
+
+    const item: LibraryLockedItem = {
+      id: globalThis.crypto.randomUUID(),
+      folderId: folder.id,
+      name: 'Server Credentials',
+      type: 'locked',
+      createdAt: NOW,
+      updatedAt: NOW,
+      label: 'Server Credentials',
+      innerType: 'text',
+      ciphertext: tuple.ciphertext,
+      iv: tuple.iv,
+      salt: tuple.salt,
+    }
+    await store().saveItem(item)
+
+    // Read the row back out of IndexedDB itself, not out of the store's copy.
+    await closeLibraryDatabase()
+    const stored = await getItem(item.id)
+    if (stored?.type !== 'locked') throw new Error('test bug: the stored item is not locked')
+
+    expect(stored.label).toBe('Server Credentials')
+    expect(stored.innerType).toBe('text')
+    expect(stored.ciphertext).toBeInstanceOf(Uint8Array)
+    expect(stored.iv).toBeInstanceOf(Uint8Array)
+    expect(stored.iv.byteLength).toBe(12)
+    expect(stored.salt).toBeInstanceOf(Uint8Array)
+    expect(stored.salt.byteLength).toBe(16)
+
+    // The plaintext is provably absent from the stored row (§6.2, §19.3).
+    expect(JSON.stringify(stored)).not.toContain(SECRET_TEXT)
+    expect(Object.keys(stored).sort()).toEqual([
+      'ciphertext',
+      'createdAt',
+      'folderId',
+      'id',
+      'innerType',
+      'iv',
+      'label',
+      'name',
+      'salt',
+      'type',
+      'updatedAt',
+    ])
+    const secretBytes = new TextEncoder().encode(SECRET_TEXT)
+    expect(Array.from(stored.ciphertext.slice(0, secretBytes.byteLength))).not.toEqual(
+      Array.from(secretBytes),
+    )
+
+    const decrypted = await decryptItem(PASSWORD, stored.salt, stored.iv, stored.ciphertext)
+    expect(new TextDecoder().decode(decrypted)).toBe(SECRET_TEXT)
   })
 
   it('overwrites by id instead of duplicating', async () => {

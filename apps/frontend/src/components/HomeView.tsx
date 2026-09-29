@@ -51,11 +51,6 @@ export interface HomeViewProps {
    * API and the library does not have to know the shell's.
    */
   library: ReactNode
-  /**
-   * Dossiers waiting to be sent, shown on the `Scan & Send` label (PLAN.md §7 flow A).
-   * `0` leaves the label bare.
-   */
-  selectedCount?: number
   /** The session's status line under the QR. */
   roleLabel?: string
   /** A signaling failure to surface, or `null`. */
@@ -68,7 +63,6 @@ export function HomeView({
   onOpenScanner,
   onJoinCode,
   library,
-  selectedCount = 0,
   roleLabel,
   errorMessage,
 }: HomeViewProps) {
@@ -198,7 +192,7 @@ export function HomeView({
                   leftSection={<IconCamera size={16} aria-hidden="true" />}
                   onClick={onOpenScanner}
                 >
-                  Scan &amp; Send{selectedCount > 0 ? ` (${selectedCount})` : ''}
+                  Scan &amp; Send
                 </Button>
 
                 {/* Manual pairing fallback. */}

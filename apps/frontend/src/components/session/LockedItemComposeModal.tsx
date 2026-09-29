@@ -46,9 +46,13 @@ export interface LockedItemComposeModalProps {
   onAdd: (input: LockedItemInput) => Promise<string>
   onClose: () => void
   /**
-   * Copy overrides for the offline library path. The same modal saves as well as sends
-   * (NewItemBar.tsx), and a "Send" button on a flow that sends nothing is how a user
-   * starts distrusting the interface. Defaults keep the in-session wording.
+   * Copy overrides for a caller that saves rather than sends.
+   *
+   * The only caller that needed them — the offline library row (`NewItemBar.tsx`) — was
+   * deleted with the orphaned `LibraryBrowser` (ORCHESTRATION D16.4), so today every call
+   * site takes the defaults, which keep the in-session wording. The overrides stay because
+   * a "Send" button on a flow that sends nothing is how a user starts distrusting the
+   * interface, and the next library surface to embed this modal will need the swap.
    */
   title?: string
   submitLabel?: string
