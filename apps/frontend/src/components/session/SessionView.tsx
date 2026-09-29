@@ -357,7 +357,7 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {  const folder
                 setPickerOpen(true)
               }}
             >
-              Save to Library →
+              Save to Library
             </Button>
             <Button
               className="session-ended__save-dossier"

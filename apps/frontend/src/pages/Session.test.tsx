@@ -225,7 +225,8 @@ describe('Session page phase gating (PLAN.md §8)', () => {
 
     const element = renderSession()
 
-    expect(element.textContent).toContain('confirmed ✓')
+    expect(element.textContent).toContain('confirmed')
+    expect(element.textContent).not.toContain('\u2713')
     // The confirm button is a one-way action.
     expect(queryButton(element, 'Confirmed')?.disabled).toBe(true)
     // Abort must stay available while waiting.
@@ -673,7 +674,7 @@ describe('Session page — saving received items (PLAN.md §8 Phase 4)', () => {
     expect(element.textContent).toContain('Session ended')
     expect(element.textContent).toContain('Portal password is hunter2')
     expect(element.textContent).toContain('half.bin')
-    expect(queryButton(element, 'Save to Library →')).not.toBe(null)
+    expect(queryButton(element, 'Save to Library')).not.toBe(null)
     // Nothing is stored until the user asks.
     expect(useLibraryStore.getState().items).toEqual([])
   })
@@ -682,14 +683,14 @@ describe('Session page — saving received items (PLAN.md §8 Phase 4)', () => {
     const element = await renderEnded([])
 
     expect(element.textContent).toContain('No items were received from the other device.')
-    expect(queryButton(element, 'Save to Library →')).toBe(null)
+    expect(queryButton(element, 'Save to Library')).toBe(null)
   })
 
   it('saves one received item into the chosen folder', async () => {
     const folder = await createFolder('Uni Stuff', null)
     const element = await renderEnded([receivedText(), receivedPartial()])
 
-    await clickButton(element, 'Save to Library →')
+    await clickButton(element, 'Save to Library')
     const rows = modalRows(element)
     expect(rows).toHaveLength(2)
 
@@ -730,7 +731,7 @@ describe('Session page — saving received items (PLAN.md §8 Phase 4)', () => {
       receivedPartial(),
     ])
 
-    await clickButton(element, 'Save to Library →')
+    await clickButton(element, 'Save to Library')
     await act(async () => {
       folderOption(element, 'Uni Stuff').dispatchEvent(
         new MouseEvent('click', { bubbles: true, cancelable: true }),
@@ -754,7 +755,7 @@ describe('Session page — saving received items (PLAN.md §8 Phase 4)', () => {
   it('cannot save an item whose transfer never finished, and says why', async () => {
     const element = await renderEnded([receivedPartial()])
 
-    await clickButton(element, 'Save to Library →')
+    await clickButton(element, 'Save to Library')
     const row = modalRows(element)[0]
     if (!row) throw new Error('test bug: no row')
 
@@ -768,7 +769,7 @@ describe('Session page — saving received items (PLAN.md §8 Phase 4)', () => {
     const locked = receivedLocked()
     const element = await renderEnded([locked])
 
-    await clickButton(element, 'Save to Library →')
+    await clickButton(element, 'Save to Library')
     await act(async () => {
       folderOption(element, 'Work').dispatchEvent(
         new MouseEvent('click', { bubbles: true, cancelable: true }),

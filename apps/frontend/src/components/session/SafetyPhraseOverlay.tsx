@@ -95,9 +95,14 @@ function SafetyPhraseOverlayInner({
               The word carries the meaning and the mark repeats it, so the state survives a
               screen reader, a colour-blind viewer and `prefers-reduced-motion` alike.
             */}
+            {/* A drawn mark, from the same icon set as every other control in the app -- the
+                U+2713 character that used to sit here was a glyph standing in for an icon, which
+                renders differently per platform and is not the app's icon language. The word below
+                still carries the meaning; this repeats it. */}
+            {confirmedLine ? <IconCheck size={14} aria-hidden="true" /> : null}
             <span>
               {confirmedLine
-                ? 'confirmed ✓'
+                ? 'confirmed'
                 : sender
                   ? 'not confirmed yet'
                   : 'waiting for confirmation…'}

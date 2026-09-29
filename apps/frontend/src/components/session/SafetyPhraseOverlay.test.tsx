@@ -161,7 +161,12 @@ describe('SafetyPhraseOverlay sender confirmation state (decision D14)', () => {
     const check = harness.container.querySelector('.safety-phrase__check')
     expect(check?.getAttribute('data-state')).toBe('confirmed')
     expect(check?.textContent).toContain('This device')
-    expect(check?.textContent).toContain('confirmed ✓')
+    expect(check?.textContent).toContain('confirmed')
+    // The mark is drawn, not typed: an <svg> from the app's icon set, decorative because
+    // the word above already carries the state. U+2713 used to sit here, which renders
+    // differently per platform and is not the app's icon language.
+    expect(check?.querySelector('svg[aria-hidden="true"]')).not.toBe(null)
+    expect(check?.textContent).not.toContain('\u2713')
   })
 
   it('indicates the session starts once the sender confirms (decision D14)', () => {
@@ -247,7 +252,12 @@ describe('SafetyPhraseOverlay receiver view (decision D14)', () => {
     const check = harness.container.querySelector('.safety-phrase__check')
     expect(check?.getAttribute('data-state')).toBe('confirmed')
     expect(check?.textContent).toContain('Sender')
-    expect(check?.textContent).toContain('confirmed ✓')
+    expect(check?.textContent).toContain('confirmed')
+    // The mark is drawn, not typed: an <svg> from the app's icon set, decorative because
+    // the word above already carries the state. U+2713 used to sit here, which renders
+    // differently per platform and is not the app's icon language.
+    expect(check?.querySelector('svg[aria-hidden="true"]')).not.toBe(null)
+    expect(check?.textContent).not.toContain('\u2713')
     expect(harness.text()).toContain('Sender confirmed — starting the session…')
   })
 
