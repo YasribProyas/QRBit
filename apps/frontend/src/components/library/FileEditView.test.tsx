@@ -171,9 +171,40 @@ function buttonInDialog(label: string): HTMLButtonElement {
   return found
 }
 
+/** A dialog button whose label contains `text` — the block-type rows carry a name and a description. */
+function dialogButtonContaining(text: string): HTMLButtonElement {
+  const found = dialogButtons().find((button) => (button.textContent ?? '').includes(text))
+  if (found === undefined) throw new Error(`test bug: no dialog button containing "${text}"`)
+  return found
+}
+
 function inDialog(text: string): boolean {
   const panel = document.body.querySelector('[role="dialog"]')
   return (panel?.textContent ?? '').includes(text)
+}
+
+/**
+ * The leave and encrypt prompts are Mantine `Modal`s: they float in a portal on `document.body`,
+ * which is mounted on a frame rather than inside the `act()` that opened it, so a test that reads
+ * one waits for it first. The helpers above stay container-scoped on purpose — a document-wide
+ * query would let an editor test pass while the row it claims to drive is absent.
+ */
+async function dialogOpened(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        resolve()
+      })
+    })
+  })
+}
+
+async function dialogClosed(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0)
+    })
+  })
 }
 
 function gripAt(index: number): HTMLButtonElement {
@@ -301,8 +332,10 @@ function backButton(): HTMLButtonElement {
 }
 
 function renameTrigger(): HTMLElement {
-  const trigger = element().querySelector<HTMLElement>('[title="Click to rename"]')
-  if (trigger === null) throw new Error('test bug: the title is not clickable')
+  // The pencil next to the heading is the control; the heading itself is text, so the rename
+  // path has a focusable door instead of a clickable div.
+  const trigger = element().querySelector<HTMLElement>('button[aria-label="Rename dossier"]')
+  if (trigger === null) throw new Error('test bug: the title cannot be renamed')
   return trigger
 }
 
@@ -435,47 +468,53 @@ describe('FileEditView — leaving a dirty draft (spec row 8)', () => {
     click(back)
 
     expect(host.onBack).toHaveBeenCalledTimes(1)
-    expect(byText('Discard changes?')).toBe(false)
+    expect(inDialog('Discard changes?')).toBe(false)
   })
 
-  it('stops the exit while the draft is dirty, and offers both real ways out', () => {
+  it('stops the exit while the draft is dirty, and offers both real ways out', async () => {
     const host = callbacks()
     mount({ file: makeFile(), folders: FOLDERS, ...host })
     const back = backButton()
 
     typeInto(headingInput(0), 'Alpha edited')
     click(back)
+    await dialogOpened()
 
     // The prompt is a decision, not a toast: nothing left, nothing was saved.
-    expect(byText('Discard changes?')).toBe(true)
+    expect(inDialog('Discard changes?')).toBe(true)
     expect(host.onBack).not.toHaveBeenCalled()
     expect(host.onSaveFile).not.toHaveBeenCalled()
 
-    click(buttonByLabel('Keep editing'))
-    expect(byText('Discard changes?')).toBe(false)
+    click(buttonInDialog('Keep editing'))
+    await dialogClosed()
+    expect(inDialog('Discard changes?')).toBe(false)
     expect(host.onBack).not.toHaveBeenCalled()
     expect(byText('Unsaved changes')).toBe(true)
 
     // Escape is the same answer as "Keep editing".
     click(back)
+    await dialogOpened()
     pressOn(document.body, 'Escape')
-    expect(byText('Discard changes?')).toBe(false)
+    await dialogClosed()
+    expect(inDialog('Discard changes?')).toBe(false)
     expect(host.onBack).not.toHaveBeenCalled()
 
     click(back)
-    click(buttonByLabel('Discard changes'))
+    await dialogOpened()
+    click(buttonInDialog('Discard unsaved edits'))
     expect(host.onBack).toHaveBeenCalledTimes(1)
     expect(host.onSaveFile).not.toHaveBeenCalled()
   })
 
-  it('"Save & leave" writes before it leaves', () => {
+  it('"Save & leave" writes before it leaves', async () => {
     const host = callbacks()
     mount({ file: makeFile(), folders: FOLDERS, ...host })
     const back = backButton()
 
     typeInto(headingInput(2), 'Charlie edited')
     click(back)
-    click(buttonByLabel('Save & leave'))
+    await dialogOpened()
+    click(buttonInDialog('Save & leave'))
 
     expect(host.onSaveFile).toHaveBeenCalledTimes(1)
     const saved = savedDraft(host)
@@ -627,7 +666,7 @@ describe('FileEditView — folder membership', () => {
 
     expect(byText('Credentials')).toBe(true)
 
-    click(buttonByLabel('Move to...'))
+    click(buttonByLabel('Move to folder…'))
     // The dialog names the action it performs. It moved to "Save to library" wording once the
     // shared picker was reused here without `purpose`, which is a mislabel, not a stale test.
     expect(inDialog('Move dossier')).toBe(true)
@@ -651,7 +690,7 @@ describe('FileEditView — folder membership', () => {
     vi.spyOn(useLibraryStore.getState(), 'moveFile').mockResolvedValue(undefined)
     mount({ file: makeFile(), folders: FOLDERS, ...host })
 
-    click(buttonByLabel('Move to...'))
+    click(buttonByLabel('Move to folder…'))
     const folderOption = dialogButtons().find((button) =>
       (button.textContent ?? '').includes('Field Notes'),
     )
@@ -717,7 +756,10 @@ describe('FileEditView — an attachment block holds a file the user chose', () 
     mount({ file: makeFile(), folders: FOLDERS, ...host })
 
     click(buttonContaining('Add Block to Dossier'))
-    click(buttonContaining('Image Payload'))
+    // The block type picker is a Mantine `Modal`, so its rows float in the document, not in the
+    // editor container.
+    await dialogOpened()
+    click(dialogButtonContaining('Image Payload'))
     await flush()
 
     // The row reads as what it is: a block waiting for a file.

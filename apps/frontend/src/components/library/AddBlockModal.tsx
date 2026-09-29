@@ -1,13 +1,30 @@
+/**
+ * The block type picker (ORCHESTRATION D16): the one way a dossier gains a block.
+ *
+ * It is a Mantine `Modal` — DESIGN.md's dialog shell: radius md, the sheet shadow, the title at
+ * the Title role, Escape cancelling, focus returning to the control that opened it. It used to be
+ * a hand-painted overlay with a bottom-sheet radius on phones and a different radius on
+ * desktop,
+ * and seven hand-rolled buttons that each carried their own colour of icon tile (blue, indigo,
+ * amber, violet, orange, slate) — seven hues where the design system has one accent and four
+ * status colours, none of which means "heading" or "attachment".
+ *
+ * The hues are gone. A row here is a choice of *what a block is*, and the only information it
+ * needs to carry is the name and what it holds, so every row is the same quiet control with the
+ * same neutral glyph.
+ */
+
+import { Button, Group, Modal, Stack, Text } from '@mantine/core'
 import {
-  Heading,
-  Type,
-  AlignLeft,
-  Image,
-  Paperclip,
-  KeyRound,
-  Minus,
-  X,
-} from 'lucide-react'
+  IconAlignLeft,
+  IconChevronRight,
+  IconMinus,
+  IconKey,
+  IconPaperclip,
+  IconPhoto,
+  IconTypography,
+  IconHeading,
+} from '@tabler/icons-react'
 import type { BlockType } from '../../lib/library'
 
 export interface AddBlockModalProps {
@@ -20,117 +37,132 @@ const BLOCK_DEFINITIONS: {
   type: BlockType
   name: string
   desc: string
-  icon: typeof Heading
-  color: string
+  icon: typeof IconHeading
 }[] = [
   {
     type: 'heading',
     name: 'Section Heading',
     desc: 'Primary title or topical header',
-    icon: Heading,
-    color: 'text-blue-600 bg-blue-50',
+    icon: IconHeading,
   },
   {
     type: 'shortText',
     name: 'Short Text Pair',
     desc: 'Key-value or labeled single-line string',
-    icon: Type,
-    color: 'text-indigo-600 bg-indigo-50',
+    icon: IconTypography,
   },
   {
     type: 'richText',
     name: 'Rich Text / Notes',
-    desc: 'Multiline formatted markdown or documentation',
-    icon: AlignLeft,
-    color: 'text-teal-600 bg-teal-50',
+    // The editor hands this block a plain multiline field; nothing here formats markdown, so the
+    // row no longer claims it does.
+    desc: 'Multiline note or documentation',
+    icon: IconAlignLeft,
   },
   {
     type: 'image',
     name: 'Image Payload',
-    desc: 'Sensor schematic, diagram or screenshot',
-    icon: Image,
-    color: 'text-amber-600 bg-amber-50',
+    desc: 'Diagram or screenshot chosen from disk',
+    icon: IconPhoto,
   },
   {
     type: 'fileAttachment',
     name: 'File Attachment',
     desc: 'Binary payload, yaml config, or dataset',
-    icon: Paperclip,
-    color: 'text-violet-600 bg-violet-50',
+    icon: IconPaperclip,
   },
   {
     type: 'locked',
     name: 'Locked Credential',
-    desc: 'Password-encrypted secret or private key',
-    icon: KeyRound,
-    color: 'text-orange-600 bg-orange-50',
+    // A new locked block arrives as plaintext and CANNOT be saved until a password is given
+    // (`encryptPrompt` in FileEditView), so the row says what the user has to do rather than
+    // claiming the block is already encrypted.
+    desc: 'Secret or key, encrypted when you give it a password',
+    icon: IconKey,
   },
   {
     type: 'divider',
     name: 'Divider Line',
     desc: 'Visual separator between blocks',
-    icon: Minus,
-    color: 'text-slate-600 bg-slate-100',
+    icon: IconMinus,
   },
 ]
 
 export function AddBlockModal({ isOpen, onClose, onSelectType }: AddBlockModalProps) {
-  if (!isOpen) return null
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-200"
-      onClick={onClose}
+    <Modal
+      opened={isOpen}
+      onClose={onClose}
+      title="Insert Block"
+      size="md"
+      padding="lg"
+      withCloseButton={false}
     >
-      <div
-        className="w-full max-w-md bg-white rounded-t-2xl sm:rounded-xl border border-[#D1D9E4] shadow-2xl p-5 modal-enter"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div>
-            <h3 className="font-display font-bold text-base text-[#0F172A]">Insert Block</h3>
-            <p className="text-xs text-[#5B6B82]">Select a block type to append to this dossier</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors tactile-btn cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+      <Text className="qrbit-text-body-secondary" c="dimmed" mb="md">
+        Select a block type to append to this dossier
+      </Text>
 
-        <div className="grid grid-cols-1 gap-2 pt-3 max-h-[60vh] overflow-y-auto scroll-contain">
-          {BLOCK_DEFINITIONS.map((item) => {
-            const Icon = item.icon
-            return (
-              <button
-                key={item.type}
-                type="button"
-                onClick={() => {
-                  onSelectType(item.type)
-                  onClose()
-                }}
-                className="w-full flex items-center gap-3 p-2.5 rounded-lg border border-transparent hover:border-[#D1D9E4] hover:bg-slate-50 text-left group tactile-btn cursor-pointer"
-              >
-                <div
-                  className={`w-9 h-9 rounded-lg flex items-center justify-center ${item.color} shrink-0`}
+      <Stack gap="xs">
+        {BLOCK_DEFINITIONS.map((item) => {
+          const Icon = item.icon
+          return (
+            <Button
+              key={item.type}
+              type="button"
+              variant="default"
+              size="md"
+              // A list of choices reads as a list: label left, glyph left of it, nothing centred.
+              styles={{
+                root: { width: '100%' },
+                inner: { justifyContent: 'flex-start' },
+                label: { whiteSpace: 'normal', textAlign: 'left', flex: '1 1 auto' },
+              }}
+              leftSection={
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 32,
+                    height: 32,
+                    flex: 'none',
+                    color: 'var(--qrbit-ink-secondary)',
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
                 >
-                  <Icon className="w-5 h-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-[13px] text-[#0F172A] group-hover:text-[#1D4ED8]">
+                  <Icon size={16} />
+                </span>
+              }
+              rightSection={
+                <IconChevronRight size={16} aria-hidden="true" style={{ opacity: 0.6 }} />
+              }
+              onClick={() => {
+                onSelectType(item.type)
+                onClose()
+              }}
+            >
+              <Group gap={0} wrap="nowrap" style={{ minWidth: 0, textAlign: 'left' }}>
+                <Stack gap={0} style={{ minWidth: 0 }}>
+                  <Text span className="qrbit-text-body" style={{ fontWeight: 600 }}>
                     {item.name}
-                  </div>
-                  <div className="text-[11.5px] text-[#5B6B82] truncate">{item.desc}</div>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-    </div>
+                  </Text>
+                  <Text
+                    span
+                    className="qrbit-text-body-secondary"
+                    c="dimmed"
+                    style={{ minWidth: 0 }}
+                    truncate
+                  >
+                    {item.desc}
+                  </Text>
+                </Stack>
+              </Group>
+            </Button>
+          )
+        })}
+      </Stack>
+    </Modal>
   )
 }

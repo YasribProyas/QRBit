@@ -1,24 +1,55 @@
+/**
+ * One block of a dossier — the row the editor builds, edits, reorders and locks, and the same
+ * row the two session screens reuse for a transfer.
+ *
+ * DESIGN.md calls the editor an Operate surface, so the row is a **flat, bordered surface with
+ * one division rhythm**: the header line (grip, type, state badge, toolbar) over the payload.
+ * Nothing inside it is another bordered card — the revealed secret is a sunken inset, the warning
+ * is a line of status-coloured text, and the controls are `ActionIcon`s on a transparent field.
+ *
+ * Two things the row must never get wrong, both learned the expensive way:
+ *
+ *  - the state it shows is derived from what is **stored**, not from the flag the user last
+ *    pressed (`isProtectedBlock` reads the ciphertext tuple). A lock icon over a plaintext
+ *    payload is a false claim about the user's secret, so an `Encrypted` badge is only ever
+ *    earned by real ciphertext;
+ *  - nothing is rendered that the user did not supply: no invented filename, no invented size,
+ *    no blurred demo secret painted over whatever the block held. See the comments on
+ *    `revealBlock`, `attachmentSizeLabel` and `ImagePreview`.
+ */
+
 import { useEffect, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
-  GripVertical,
-  Lock,
-  Unlock,
-  KeyRound,
-  FileCode,
-  Download,
-  Trash2,
-  Copy,
-  ChevronUp,
-  ChevronDown,
-  CheckCircle2,
-  Clock,
-  Loader2,
-  Shield,
-  ShieldOff,
-  Tag,
-} from 'lucide-react'
-import { IconX } from '@tabler/icons-react'
+  ActionIcon,
+  Badge,
+  Button,
+  Group,
+  Modal,
+  Progress,
+  Stack,
+  Text,
+  TextInput,
+  Textarea,
+} from '@mantine/core'
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconCircleCheck,
+  IconClock,
+  IconCopy,
+  IconDownload,
+  IconFile,
+  IconGripVertical,
+  IconKey,
+  IconLock,
+  IconLockOpen,
+  IconShieldLock,
+  IconShieldOff,
+  IconTag,
+  IconTrash,
+  IconX,
+} from '@tabler/icons-react'
 import type { FileBlock } from '../../lib/library'
 import {
   isLockedIntent,
@@ -32,6 +63,26 @@ import { formatByteSize, fileSizeText } from '../../lib/byteSize'
 import { AttachmentPicker, LIBRARY_ATTACHMENT_MAX_BYTES } from './AttachmentPicker'
 import type { AttachmentSelection } from './AttachmentPicker'
 import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
+
+/*
+ * Tokens, not hexes (DESIGN.md, "The No Raw Hex Rule"). The row's resting border is `border`
+ * (a division) and its hover border is `border-strong` (an affordance the user must find);
+ * both are Tailwind arbitrary values because a hover state cannot be written as an inline
+ * style, and an inline style would beat the class rather than complement it.
+ */
+const ROW_SURFACE =
+  'border border-[color:var(--qrbit-border)] hover:border-[color:var(--qrbit-border-strong)]'
+/** A protected row states its own condition, in 1px of `locked`, on the row it describes. */
+const ROW_PROTECTED = 'border-[color:color-mix(in_srgb,var(--qrbit-locked)_55%,var(--qrbit-border))]'
+/** An unprotected secret is a warning that is not yet a failure: 1px of `danger`. */
+const ROW_UNPROTECTED = 'border-[color:color-mix(in_srgb,var(--qrbit-danger)_55%,var(--qrbit-border))]'
+
+const DIVISION: CSSProperties = { borderBottom: '1px solid var(--qrbit-border)' }
+const INSET: CSSProperties = {
+  backgroundColor: 'var(--qrbit-sunken)',
+  borderRadius: 'var(--qrbit-radius-sm)',
+  padding: 'var(--qrbit-space-sm)',
+}
 
 export interface BlockItemProps {
   block: FileBlock
@@ -58,9 +109,10 @@ export interface BlockItemProps {
   onMoveDown?: (index: number) => void
   onUnlockCredential?: (id: string, plaintextContent: string) => void
   /**
-   * Props from `useReorderDrag().getHandleProps(index)`, spread onto the grip. The grip is a
-   * real `<button>` because that is what the hook needs: pointer down starts the drag, and
-   * ArrowUp/ArrowDown/Home/End on it are the keyboard path. Omitted = no grip rendered.
+   * Props from `useReorderDrag().getHandleProps(index)`, spread onto the grip. The grip stays a
+   * real button element (Mantine's `ActionIcon` renders one) because that is what the hook needs:
+   * pointer down starts the drag, and ArrowUp/ArrowDown/Home/End on it are the keyboard path.
+   * Omitted = no grip rendered.
    */
   reorderHandleProps?: ReorderHandleProps
   /** True while THIS row is the one under the pointer; it is the row that gets translated. */
@@ -141,20 +193,34 @@ export function BlockItem({
             ? 'note'
             : 'block'
 
-  /** The grabbed row is painted at the pointer, above its neighbours, and nothing else moves. */
-  const dragStyle = isReorderDragging
-    ? { transform: `translateY(${reorderOffset}px)`, zIndex: 1 }
-    : undefined
+  /**
+   * The grabbed row is painted at the pointer, above its neighbours, and nothing else moves. It
+   * also takes the sheet shadow: DESIGN.md's "Floating Only" rule makes depth a response to
+   * state, and a row under the pointer is the one thing on the page that is above the others.
+   */
+  const dragStyle: CSSProperties = isReorderDragging
+    ? {
+        transform: `translateY(${reorderOffset}px)`,
+        zIndex: 1,
+        position: 'relative',
+        boxShadow: 'var(--qrbit-shadow-sheet)',
+        borderColor: 'var(--qrbit-signal)',
+      }
+    : {}
 
-  /** The grip, rendered only when the editor handed this row a drag handle (D16.2). */
+  /**
+   * The grip, rendered only when the editor handed this row a drag handle (D16.2).
+   *
+   * It used to be painted `text-slate-400`, which measured 2.28:1 on the page — documented as
+   * the reason the handle read as a smudge rather than a handle. `c="dimmed"` is the `--mantine-color-dimmed`
+   * slot, which `theme.ts` points at `--qrbit-ink-secondary` (7.0:1 light, 8:1 dark), so the
+   * affordance clears the 3:1 floor in both schemes while staying quieter than the payload.
+   */
   const grip =
     isReorderRow && reorderHandleProps !== undefined ? (
-      <button
-        {...reorderHandleProps}
-        className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded p-0.5 tactile-btn"
-      >
-        <GripVertical className="w-3.5 h-3.5" aria-hidden="true" />
-      </button>
+      <ActionIcon variant="subtle" size="lg" c="dimmed" {...reorderHandleProps}>
+        <IconGripVertical size={16} aria-hidden="true" />
+      </ActionIcon>
     ) : null
 
   /** The field this block type keeps its text payload in, so a reveal lands where the row reads. */
@@ -310,54 +376,59 @@ export function BlockItem({
     setIsDecrypting(false)
   }
 
-  // Render Transfer Status Pill for session screens
+  /**
+   * Transfer status for the two session screens. A badge carries an icon *and* a word
+   * (DESIGN.md, "Badges and Chips"): colour alone is never the whole message.
+   */
   const renderStatusPill = (): ReactNode => {
     if (mode !== 'sender' && mode !== 'receiver') return null
     if (transferStatus === undefined) return null
 
     if (transferStatus === 'pending') {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
-          <Clock className="w-3 h-3 text-slate-400" />
-          <span>Pending</span>
-        </span>
+        <Badge variant="light" color="gray" radius="full" leftSection={<IconClock size={12} aria-hidden="true" />}>
+          Pending
+        </Badge>
       )
     }
 
     if (transferStatus === 'in_progress') {
       return (
-        <div className="flex items-center gap-2">
-          <div className="w-20 h-1.5 bg-blue-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-[#1D4ED8] rounded-full transition-all duration-300"
-              style={{ width: `${transferProgress}%` }}
-            />
-          </div>
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-[#1D4ED8] border border-blue-200">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            <span>{Math.round(transferProgress)}%</span>
-          </span>
-        </div>
+        <Group gap="xs" wrap="nowrap">
+          {/* The old bar was two hand-painted divs; Mantine's Progress is the same thing with
+              the token radius, the token track and a real value. */}
+          <Progress value={transferProgress} size="xs" radius="full" w={80} />
+          <Text span className="qrbit-text-data" c="dimmed">
+            {Math.round(transferProgress)}%
+          </Text>
+        </Group>
       )
     }
 
     if (transferStatus === 'error') {
       return (
-        <span
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-red-50 text-red-700 border border-red-200"
+        <Badge
+          variant="light"
+          color="danger"
+          radius="full"
+          leftSection={<IconX size={12} aria-hidden="true" />}
           data-transfer-error="true"
         >
-          <Clock className="w-3 h-3 text-red-500" />
-          <span>Not delivered</span>
-        </span>
+          Not delivered
+        </Badge>
       )
     }
 
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-        <span>Delivered</span>
-      </span>
+      <Badge
+        variant="light"
+        // Verified Green: "a completed transfer" (DESIGN.md, Status). Delivered is a completion.
+        color="success"
+        radius="full"
+        leftSection={<IconCircleCheck size={12} aria-hidden="true" />}
+      >
+        Delivered
+      </Badge>
     )
   }
 
@@ -371,23 +442,24 @@ export function BlockItem({
       >
         {grip !== null ? <span className="shrink-0">{grip}</span> : null}
         {mode === 'edit' && (
-          <div className="absolute -left-8 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              type="button"
-              onClick={() => onDelete?.(block.id)}
-              className="p-1 text-slate-400 hover:text-red-600 rounded tactile-btn cursor-pointer"
-              title="Delete divider"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          <ActionIcon
+            variant="subtle"
+            size="lg"
+            c="dimmed"
+            aria-label="Delete divider"
+            title="Delete divider"
+            onClick={() => onDelete?.(block.id)}
+          >
+            <IconTrash size={16} aria-hidden="true" />
+          </ActionIcon>
         )}
         <div className="w-full flex items-center gap-3">
-          <div className="h-[1px] flex-1 bg-[#D1D9E4]" />
-          <span className="text-[10px] tracking-wider text-slate-400 font-mono select-none">
+          {/* A division is `border`, and 1px of it. */}
+          <span style={{ flex: '1 1 auto', height: 1, backgroundColor: 'var(--qrbit-border)' }} />
+          <Text span className="qrbit-text-label" c="dimmed" style={{ textTransform: 'uppercase' }}>
             DIVIDER
-          </span>
-          <div className="h-[1px] flex-1 bg-[#D1D9E4]" />
+          </Text>
+          <span style={{ flex: '1 1 auto', height: 1, backgroundColor: 'var(--qrbit-border)' }} />
         </div>
         {renderStatusPill()}
       </div>
@@ -429,25 +501,31 @@ export function BlockItem({
 
   return (
     <div
-      className={`group relative bg-white rounded-lg border transition-all ${
-        isProtected
-          ? 'border-[#C2410C]/40 bg-orange-50/15'
-          : isUnprotected
-            ? 'border-red-300 bg-red-50/25'
-            : 'border-[#D1D9E4]'
-      } hover:border-[#94A3B8] shadow-2xs ${isReorderDragging ? 'shadow-md' : ''}`}
+      className={`group relative transition-colors ${ROW_SURFACE} ${
+        isProtected ? ROW_PROTECTED : isUnprotected ? ROW_UNPROTECTED : ''
+      } ${isReorderDragging ? '' : 'hover:shadow-(--qrbit-shadow-lift)'}`}
       data-reorder-item={isReorderRow ? '' : undefined}
       data-block-protected={isProtected ? 'true' : undefined}
       data-block-unprotected={isUnprotected ? 'true' : undefined}
-      style={dragStyle}
+      style={{ backgroundColor: 'var(--qrbit-raised)', borderRadius: 'var(--qrbit-radius-lg)', ...dragStyle }}
     >
       {/* Header bar of block */}
-      <div className="px-3.5 pt-2.5 pb-1.5 flex items-center justify-between border-b border-slate-100">
-        <div className="flex items-center gap-2">
+      <div
+        className="px-3 pt-2 pb-2 flex items-center justify-between gap-2"
+        style={DIVISION}
+      >
+        <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
           {grip !== null ? <span className="shrink-0">{grip}</span> : null}
-          <span className="text-[11px] font-mono font-medium text-[#5B6B82] uppercase">
+          <Text
+            span
+            className="qrbit-text-label"
+            c="dimmed"
+            // The block's type is a classification, not data a user reads back, so it is the
+            // sans at the Label role — the row used to set it in mono at 11px.
+            style={{ textTransform: 'uppercase', whiteSpace: 'nowrap' }}
+          >
             {block.type === 'shortText' ? 'Short Text' : block.type}
-          </span>
+          </Text>
 
           {/*
             The badge is derived from the ciphertext, never from `isLocked`: a lock icon over a
@@ -455,158 +533,195 @@ export function BlockItem({
             secret says so instead.
           */}
           {isProtected && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-[#C2410C]">
-              <Lock className="w-2.5 h-2.5" />
-              <span>Encrypted</span>
-            </span>
+            <Badge
+              variant="light"
+              // Locked Rust means encryption state and nothing else (DESIGN.md, Status).
+              color="locked"
+              radius="full"
+              leftSection={<IconLock size={12} aria-hidden="true" />}
+            >
+              Encrypted
+            </Badge>
           )}
 
           {isUnprotected && (
-            <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700"
+            <Badge
+              variant="light"
+              color="danger"
+              radius="full"
+              leftSection={<IconShieldOff size={12} aria-hidden="true" />}
               data-unprotected-badge="true"
             >
-              <ShieldOff className="w-2.5 h-2.5" />
-              <span>Not encrypted</span>
-            </span>
+              Not encrypted
+            </Badge>
           )}
 
           {/* Label tag indicator if entity has a label */}
           {block.label && block.type !== 'shortText' && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700">
-              <Tag className="w-2.5 h-2.5 text-slate-400" />
-              <span>{block.label}</span>
-            </span>
+            <Badge
+              variant="light"
+              color="gray"
+              radius="full"
+              leftSection={<IconTag size={12} aria-hidden="true" />}
+            >
+              {block.label}
+            </Badge>
           )}
-        </div>
+        </Group>
 
-        <div className="flex items-center gap-1.5">
+        <Group gap="xs" wrap="nowrap" style={{ flex: 'none' }}>
           {renderStatusPill()}
 
           {mode === 'edit' && (
-            <div className="flex items-center gap-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
+            <Group gap={0} wrap="nowrap">
               {/* Lock / Unlock Toggle Button */}
-              <button
-                type="button"
+              <ActionIcon
+                variant="subtle"
+                size="lg"
+                c={isProtected ? 'locked' : isUnprotected ? 'danger' : 'dimmed'}
+                aria-label={
+                  isProtected
+                    ? 'Manage encryption for this block'
+                    : 'Encrypt this block with a password'
+                }
+                title={
+                  isProtected
+                    ? 'Manage encryption for this block'
+                    : 'Encrypt this block with a password'
+                }
                 onClick={() => {
                   setLockError(null)
                   setShowLockConfigModal(true)
                 }}
-                className={`p-1 rounded tactile-btn cursor-pointer ${
-                  isProtected
-                    ? 'text-[#C2410C] hover:bg-orange-50'
-                    : isUnprotected
-                      ? 'text-red-600 hover:bg-red-50'
-                      : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
-                }`}
-                title={
-                  isProtected
-                    ? 'Manage encrypted block'
-                    : isUnprotected
-                      ? 'Encrypt this block with a password'
-                      : 'Lock this entity with password'
-                }
               >
                 {isProtected ? (
-                  <Lock className="w-3.5 h-3.5" />
+                  <IconLock size={16} aria-hidden="true" />
                 ) : isUnprotected ? (
-                  <ShieldOff className="w-3.5 h-3.5" />
+                  <IconShieldOff size={16} aria-hidden="true" />
                 ) : (
-                  <Shield className="w-3.5 h-3.5" />
+                  <IconShieldLock size={16} aria-hidden="true" />
                 )}
-              </button>
+              </ActionIcon>
 
-              <button
-                type="button"
+              <ActionIcon
+                variant="subtle"
+                size="lg"
+                c="dimmed"
                 onClick={() => onMoveUp?.(index)}
                 disabled={index === 0}
-                className="p-1 text-slate-500 hover:text-slate-800 disabled:opacity-30 rounded tactile-btn cursor-pointer"
                 title="Move up"
                 aria-label={`Move ${block.type} block up`}
               >
-                <ChevronUp className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
+                <IconChevronUp size={16} aria-hidden="true" />
+              </ActionIcon>
+              <ActionIcon
+                variant="subtle"
+                size="lg"
+                c="dimmed"
                 onClick={() => onMoveDown?.(index)}
                 disabled={index === totalBlocks - 1}
-                className="p-1 text-slate-500 hover:text-slate-800 disabled:opacity-30 rounded tactile-btn cursor-pointer"
                 title="Move down"
                 aria-label={`Move ${block.type} block down`}
               >
-                <ChevronDown className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
+                <IconChevronDown size={16} aria-hidden="true" />
+              </ActionIcon>
+              <ActionIcon
+                variant="subtle"
+                size="lg"
+                c="dimmed"
                 onClick={() => onDuplicate?.(block.id)}
-                className="p-1 text-slate-500 hover:text-slate-800 rounded tactile-btn cursor-pointer"
                 title="Duplicate block"
+                aria-label="Duplicate block"
               >
-                <Copy className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
+                <IconCopy size={16} aria-hidden="true" />
+              </ActionIcon>
+              <ActionIcon
+                variant="subtle"
+                size="lg"
+                c="dimmed"
                 onClick={() => onDelete?.(block.id)}
-                className="p-1 text-slate-500 hover:text-red-600 rounded tactile-btn cursor-pointer"
                 title="Delete block"
+                aria-label="Delete block"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                <IconTrash size={16} aria-hidden="true" />
+              </ActionIcon>
+            </Group>
           )}
-        </div>
+        </Group>
       </div>
 
       {/* Main Content Area based on block type */}
-      <div className="p-3.5 space-y-2">
+      <div className="p-3 space-y-2">
         {/* Optional Label field for entities when editing (User can choose to set label for each entity) */}
         {mode === 'edit' && block.type !== 'shortText' && (
-          <div className="flex items-center gap-2 pb-1">
-            <span className="text-[11px] font-medium text-[#5B6B82] w-12 shrink-0">Label:</span>
-            <input
+          <Group gap="sm" wrap="nowrap" pb="xs">
+            <Text span className="qrbit-text-label" c="dimmed" style={{ flex: 'none', width: 56 }}>
+              Label
+            </Text>
+            <TextInput
+              size="sm"
               type="text"
               value={block.label || ''}
               onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
-              placeholder="Entity label (optional)..."
-              className="flex-1 text-xs font-medium text-slate-600 bg-slate-50/70 px-2 py-1 rounded border border-slate-200 focus:outline-none focus:border-[#1D4ED8]"
+              placeholder="Label (optional)"
+              aria-label={`Label for this ${block.type} block`}
+              style={{ flex: '1 1 auto', minWidth: 0 }}
             />
-          </div>
+          </Group>
         )}
 
         {/* HEADING BLOCK */}
         {block.type === 'heading' && (
           <div>
             {canEditPayload ? (
-              <input
+              <TextInput
+                size="sm"
                 type="text"
                 value={block.content || ''}
                 onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
                 placeholder="Enter section heading..."
-                className="w-full font-display text-lg font-bold text-[#0F172A] bg-transparent border-0 border-b border-transparent focus:border-[#1D4ED8] focus:outline-none pb-0.5"
+                aria-label="Section heading"
+                styles={{ input: { font: 'var(--qrbit-text-title)', letterSpacing: 'var(--qrbit-text-title-tracking)' } }}
               />
             ) : (
-              <h3 className="font-display text-lg font-bold text-[#0F172A]">{block.content}</h3>
+              <Text className="qrbit-text-title">{block.content}</Text>
             )}
           </div>
         )}
 
         {/* SHORT TEXT BLOCK */}
         {block.type === 'shortText' && (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {mode === 'edit' ? (
               <>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-medium text-[#5B6B82] w-12 shrink-0">Label:</span>
-                  <input
+                <Group gap="sm" wrap="nowrap">
+                  <Text
+                    span
+                    className="qrbit-text-label"
+                    c="dimmed"
+                    style={{ flex: 'none', width: 56 }}
+                  >
+                    Label
+                  </Text>
+                  <TextInput
+                    size="sm"
                     type="text"
                     value={block.label || ''}
                     onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
                     placeholder="Field label..."
-                    className="flex-1 text-xs font-medium text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-200 focus:outline-none focus:border-[#1D4ED8]"
+                    aria-label="Field label"
+                    style={{ flex: '1 1 auto', minWidth: 0 }}
                   />
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-medium text-[#5B6B82] w-12 shrink-0">Value:</span>
+                </Group>
+                <Group gap="sm" wrap="nowrap">
+                  <Text
+                    span
+                    className="qrbit-text-label"
+                    c="dimmed"
+                    style={{ flex: 'none', width: 56 }}
+                  >
+                    Value
+                  </Text>
                   {/*
                     No editable value while the block is encrypted: the tuple is a ciphertext of
                     the bytes that were on the block when it was locked, so a field the user could
@@ -614,26 +729,31 @@ export function BlockItem({
                     The value appears below, after a real unlock.
                   */}
                   {canEditPayload ? (
-                    <input
+                    <TextInput
+                      size="sm"
                       type="text"
                       value={block.value || ''}
                       onChange={(e) => onUpdate?.(block.id, { value: e.target.value })}
                       placeholder="Single-line value..."
-                      className="flex-1 font-mono text-xs text-[#0F172A] bg-white px-2 py-1 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
+                      aria-label="Field value"
+                      style={{ flex: '1 1 auto', minWidth: 0 }}
                     />
                   ) : (
-                    <span className="flex-1 font-mono text-xs text-[#5B6B82]">
+                    <Text span className="qrbit-text-body-secondary" c="dimmed">
                       Encrypted value — unlock to reveal it
-                    </span>
+                    </Text>
                   )}
-                </div>
+                </Group>
               </>
             ) : (
               <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3">
-                <span className="text-[12px] font-medium text-[#5B6B82]">{block.label}</span>
-                <span className="font-mono text-[13px] text-[#0F172A] bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
+                <Text span className="qrbit-text-label" c="dimmed">
+                  {block.label}
+                </Text>
+                {/* A field's value is data the user may read back to someone: the Data role. */}
+                <Text span className="qrbit-text-data" style={INSET}>
                   {block.value}
-                </span>
+                </Text>
               </div>
             )}
           </div>
@@ -643,17 +763,18 @@ export function BlockItem({
         {block.type === 'richText' && (
           <div>
             {canEditPayload ? (
-              <textarea
-                rows={3}
+              <Textarea
+                size="sm"
+                minRows={3}
                 value={block.content || ''}
                 onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
                 placeholder="Write formatted notes or documentation..."
-                className="w-full text-xs leading-relaxed text-[#0F172A] bg-slate-50/50 p-2.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8] focus:bg-white resize-y"
+                aria-label="Note content"
               />
             ) : (
-              <p className="text-[13.5px] leading-relaxed text-[#0F172A] whitespace-pre-line">
+              <Text className="qrbit-text-body" style={{ whiteSpace: 'pre-line' }}>
                 {block.content}
-              </p>
+              </Text>
             )}
           </div>
         )}
@@ -661,12 +782,24 @@ export function BlockItem({
         {/* IMAGE BLOCK */}
         {block.type === 'image' && (
           <div className="space-y-2">
-            <div className="relative aspect-video max-h-48 w-full bg-[#0F172A] rounded-md overflow-hidden border border-[#D1D9E4] flex flex-col items-center justify-center p-4">
+            <div
+              className="relative w-full flex flex-col items-center justify-center overflow-hidden"
+              style={{
+                // The well is `sunken`, not near-black: a dark box was a stage for a picture
+                // that was not there.
+                backgroundColor: 'var(--qrbit-sunken)',
+                border: '1px solid var(--qrbit-border)',
+                borderRadius: 'var(--qrbit-radius-sm)',
+                padding: 'var(--qrbit-space-md)',
+                minHeight: 96,
+              }}
+            >
               {canPreviewImage && attachmentBlob instanceof Blob ? (
                 <ImagePreview blob={attachmentBlob} name={block.fileName ?? 'Chosen image'} />
               ) : (
                 <p
-                  className="text-[11px] font-mono text-slate-400 text-center px-4"
+                  className="qrbit-text-body-secondary text-center px-4"
+                  style={{ color: 'var(--qrbit-ink-muted)' }}
                   data-attachment-empty="true"
                 >
                   {attachmentBlob instanceof Blob
@@ -676,31 +809,37 @@ export function BlockItem({
               )}
 
               {transferStatus === 'in_progress' && (
-                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs flex flex-col items-center justify-center p-6">
-                  <span className="text-white text-xs font-mono mb-2">
-                    Streaming image data... {Math.round(transferProgress)}%
+                <div
+                  className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6"
+                  style={{ backgroundColor: 'var(--qrbit-sunken)' }}
+                >
+                  <span className="qrbit-text-body-secondary">
+                    Streaming image data… {Math.round(transferProgress)}%
                   </span>
-                  <div className="w-48 h-2 bg-slate-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-blue-500 rounded-full transition-all"
-                      style={{ width: `${transferProgress}%` }}
-                    />
-                  </div>
+                  <Progress value={transferProgress} size="sm" radius="full" w={192} />
                 </div>
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-2 text-xs text-[#5B6B82] pt-1">
-              <span className="font-mono text-slate-800 font-medium truncate">
+            <div className="flex items-center justify-between gap-2">
+              <Text span className="qrbit-text-body-secondary" style={{ minWidth: 0 }} truncate>
                 {block.fileName ?? 'No file chosen'}
-              </span>
-              <span className="shrink-0">
+              </Text>
+              {/* A byte count is data, so it is mono and tabular. */}
+              <Text
+                span
+                className="qrbit-text-data"
+                c="dimmed"
+                style={{ flex: 'none' }}
+              >
                 {attachmentSizeLabel ?? 'no size until a file is chosen'}
-              </span>
+              </Text>
             </div>
 
             {block.caption !== undefined && block.caption !== '' ? (
-              <p className="text-[11px] text-[#5B6B82]">{block.caption}</p>
+              <Text className="qrbit-text-body-secondary" c="dimmed">
+                {block.caption}
+              </Text>
             ) : null}
 
             {mode === 'edit' ? (
@@ -712,19 +851,31 @@ export function BlockItem({
         {/* FILE ATTACHMENT BLOCK */}
         {block.type === 'fileAttachment' && (
           <div className="space-y-2">
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-md border border-[#D1D9E4]">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded bg-white border border-[#D1D9E4] flex items-center justify-center text-[#1D4ED8] shrink-0">
-                  <FileCode className="w-5 h-5" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[13px] font-mono font-medium text-[#0F172A] truncate">
-                    {block.fileName ?? 'No file chosen'}
-                  </p>
-                  <p className="text-[11px] text-[#5B6B82]">
-                    {attachmentSizeLabel ?? 'no size until a file is chosen'}
-                  </p>
-                </div>
+            <Group gap="sm" wrap="nowrap">
+              {/* A decorative tile, not a control: nothing here is pressable, so nothing is a Button. */}
+              <span
+                aria-hidden="true"
+                style={{
+                  flex: 'none',
+                  width: 34,
+                  height: 34,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--qrbit-signal)',
+                  backgroundColor: 'var(--qrbit-sunken)',
+                  borderRadius: 'var(--qrbit-radius-sm)',
+                }}
+              >
+                <IconFile size={18} />
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <Text span className="qrbit-text-body" truncate>
+                  {block.fileName ?? 'No file chosen'}
+                </Text>
+                <Text span className="qrbit-text-data" c="dimmed">
+                  {attachmentSizeLabel ?? 'no size until a file is chosen'}
+                </Text>
               </div>
 
               {mode !== 'edit' ? (
@@ -740,12 +891,12 @@ export function BlockItem({
                 attachmentBlob instanceof Blob ? (
                   <AttachmentDownload blob={attachmentBlob} name={block.fileName ?? 'download'} />
                 ) : (
-                  <span className="text-[11px] text-[#5B6B82]" data-attachment-no-bytes="true">
+                  <Text span className="qrbit-text-body-secondary" c="dimmed" data-attachment-no-bytes="true">
                     No bytes to save
-                  </span>
+                  </Text>
                 )
               ) : null}
-            </div>
+            </Group>
 
             {mode === 'edit' ? (
               <AttachmentControls block={block} maxBytes={attachmentMaxBytes} onUpdate={onUpdate} />
@@ -756,19 +907,23 @@ export function BlockItem({
         {/* LOCKED BLOCK OR LOCKED ENTITY CONTENT */}
         {showsLockArea && (
           <div className="space-y-2 pt-1">
-            <div className="flex items-center justify-between">
-              <span
-                className={`text-[12px] font-semibold flex items-center gap-1.5 ${
-                  isProtected ? 'text-[#C2410C]' : 'text-red-700'
-                }`}
-              >
+            <Group justify="space-between" wrap="nowrap" gap="sm">
+              <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
                 {isProtected ? (
-                  <KeyRound className="w-3.5 h-3.5" />
+                  <IconKey size={16} aria-hidden="true" style={{ flex: 'none', color: 'var(--qrbit-locked)' }} />
                 ) : (
-                  <ShieldOff className="w-3.5 h-3.5" />
+                  <IconShieldOff size={16} aria-hidden="true" style={{ flex: 'none', color: 'var(--qrbit-danger)' }} />
                 )}
-                <span>{block.label || (isProtected ? 'Encrypted payload' : 'Secret field')}</span>
-              </span>
+                <Text
+                  span
+                  className="qrbit-text-label"
+                  c={isProtected ? 'locked' : 'danger'}
+                  style={{ minWidth: 0 }}
+                  truncate
+                >
+                  {block.label || (isProtected ? 'Encrypted payload' : 'Secret field')}
+                </Text>
+              </Group>
 
               {/*
                 No "Passphrase: •••••••• / (set)" readout, and no `(hint: pass)` anywhere in this
@@ -779,19 +934,20 @@ export function BlockItem({
                 ciphertext instead of from a field that no longer exists.
               */}
               {mode === 'edit' && !isProtected ? (
-                <button
-                  type="button"
+                <Button
+                  size="xs"
+                  color="locked"
+                  leftSection={<IconShieldLock size={14} aria-hidden="true" />}
+                  style={{ flex: 'none' }}
                   onClick={() => {
                     setLockError(null)
                     setShowLockConfigModal(true)
                   }}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-white bg-[#C2410C] hover:bg-[#9A3412] rounded tactile-btn cursor-pointer"
                 >
-                  <Shield className="w-3 h-3" />
-                  <span>Encrypt</span>
-                </button>
+                  Encrypt this {blockWord}
+                </Button>
               ) : null}
-            </div>
+            </Group>
 
             {isProtected ? (
               /*
@@ -800,49 +956,65 @@ export function BlockItem({
                 whatever it held, so the dark box always
                 looked like a hidden secret. What is shown now is the shape of what is actually
                 stored, and the plaintext only ever after a real decryption.
+
+                The dark bordered box is gone too: a bordered card inside a bordered row is the
+                nesting DESIGN.md bans, and a near-black well made a statement about "secrecy"
+                rather than about the bytes. The revealed plaintext sits in a `sunken` inset —
+                the same treatment the session board gives a secret — and nothing else.
               */
-              <div className="relative rounded-md border border-[#D1D9E4] bg-slate-900 text-slate-100 p-3 overflow-hidden font-mono text-[13px]">
-                {block.isUnlocked ? (
-                  <div className="flex items-center justify-between gap-2 transition-all duration-200">
-                    <span className="text-emerald-400 select-all break-all" data-revealed="true">
-                      {revealedPlaintext ??
-                        'The decrypted file is back on the block — see the preview above.'}
-                    </span>
-                    <span className="text-[11px] text-slate-400 px-1.5 py-0.5 bg-slate-800 rounded shrink-0">
-                      Unlocked
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-slate-400" data-ciphertext-state="true">
-                      Encrypted with PBKDF2 + AES-256-GCM. No plaintext is stored for this block.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUnlockError(false)
-                        setShowUnlockModal(true)
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-semibold rounded shadow-xs tactile-btn cursor-pointer shrink-0"
-                    >
-                      <Unlock className="w-3.5 h-3.5" />
-                      <span>Unlock</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+              block.isUnlocked ? (
+                <Group justify="space-between" wrap="nowrap" gap="sm" style={INSET}>
+                  <Text
+                    span
+                    className="qrbit-text-body"
+                    data-revealed="true"
+                    style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'all', minWidth: 0 }}
+                  >
+                    {revealedPlaintext ??
+                      'The decrypted file is back on the block — see the preview above.'}
+                  </Text>
+                  <Badge
+                    variant="light"
+                    color="success"
+                    radius="full"
+                    style={{ flex: 'none' }}
+                  >
+                    Revealed
+                  </Badge>
+                </Group>
+              ) : (
+                <Group justify="space-between" wrap="nowrap" gap="sm">
+                  <Text span className="qrbit-text-body-secondary" c="dimmed" data-ciphertext-state="true">
+                    Encrypted with PBKDF2 + AES-256-GCM. No plaintext is stored for this block.
+                  </Text>
+                  <Button
+                    size="sm"
+                    color="locked"
+                    leftSection={<IconLockOpen size={14} aria-hidden="true" />}
+                    style={{ flex: 'none' }}
+                    onClick={() => {
+                      setUnlockError(false)
+                      setShowUnlockModal(true)
+                    }}
+                  >
+                    Unlock
+                  </Button>
+                </Group>
+              )
             ) : (
               /*
                 The honest unprotected state — a locked block that carries plaintext and no tuple,
                 which is every locked row written before the editor encrypted on save. It is said
                 in the plainest terms available because the alternative is the bug: a lock badge
-                over a secret sitting in IndexedDB as text.
+                over a secret sitting in IndexedDB as text. It is a line of status-coloured prose,
+                not a bordered box inside the bordered row.
               */
-              <div
-                className="rounded-md border border-red-200 bg-red-50 p-3 space-y-2"
-                data-unprotected-note="true"
-              >
-                <p className="text-[11px] text-red-700">
+              <div className="space-y-2">
+                <p
+                  className="qrbit-text-body-secondary"
+                  style={{ color: 'var(--qrbit-danger)' }}
+                  data-unprotected-note="true"
+                >
                   {isEmptyLocked
                     ? 'Nothing has been written into this block yet, so there is nothing to encrypt.'
                     : `Not encrypted: this ${blockWord} is stored as plaintext in the library on this device.`}
@@ -855,43 +1027,52 @@ export function BlockItem({
                     this box is what `encryptBlockPayload` encrypts, and it is stored as plaintext
                     only until the user does.
                   */
-                  <textarea
-                    rows={2}
+                  <Textarea
+                    size="sm"
+                    minRows={2}
                     value={block.content ?? ''}
                     onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
                     placeholder="Write the secret to protect..."
                     aria-label="Secret to encrypt"
-                    className="w-full text-xs font-mono text-[#0F172A] bg-white p-2 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8] resize-y"
                   />
                 ) : null}
-                <p className="text-[11px] text-[#5B6B82]">
+                <p className="qrbit-text-body-secondary" style={{ color: 'var(--qrbit-ink-muted)' }}>
                   Encrypt it with a password you choose, or clear the lock to keep it as an
                   ordinary unprotected field.
                 </p>
               </div>
             )}
 
-            {/* Inline unlock form modal */}
+            {/*
+              Inline unlock form. This one stays inline rather than in a `Modal` on purpose: it is
+              the reveal field set for this row, it belongs beside the ciphertext it opens, and
+              `BlockItem.test.tsx` searches the container for it — a portal would turn several of
+              this file's security absence-assertions into checks of nothing at all.
+            */}
             {showUnlockModal && isProtected && !block.isUnlocked && (
               <form
                 onSubmit={handleUnlockSubmit}
-                className="modal-enter p-3 bg-white border border-[#C2410C] rounded-md shadow-md mt-2 flex flex-col gap-2"
+                className="flex flex-col gap-2"
+                style={{ marginTop: 'var(--qrbit-space-sm)' }}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-800">
-                    Enter Decryption Key for "{block.label || 'Encrypted payload'}"
-                  </span>
-                  <button
-                    type="button"
+                <Group justify="space-between" wrap="nowrap" gap="sm">
+                  <Text span className="qrbit-text-label">
+                    {`Enter the password for "${block.label || 'Encrypted payload'}"`}
+                  </Text>
+                  <Button
+                    variant="subtle"
+                    size="xs"
+                    c="dimmed"
                     onClick={() => setShowUnlockModal(false)}
-                    className="text-xs text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                    style={{ flex: 'none' }}
                   >
                     Cancel
-                  </button>
-                </div>
+                  </Button>
+                </Group>
 
-                <div className="flex items-center gap-2">
-                  <input
+                <Group gap="sm" wrap="nowrap">
+                  <TextInput
+                    size="sm"
                     type="password"
                     autoFocus
                     placeholder="Password for this block"
@@ -901,18 +1082,18 @@ export function BlockItem({
                       setPasswordInput(e.target.value)
                       setUnlockError(false)
                     }}
-                    className={`flex-1 text-xs px-2.5 py-1.5 rounded border ${
-                      unlockError ? 'border-red-500 bg-red-50' : 'border-[#D1D9E4]'
-                    } focus:outline-none focus:border-[#1D4ED8]`}
+                    style={{ flex: '1 1 auto', minWidth: 0 }}
                   />
-                  <button
+                  <Button
                     type="submit"
-                    disabled={isDecrypting}
-                    className="px-3.5 py-1.5 bg-[#1D4ED8] hover:bg-blue-700 text-white text-xs font-semibold rounded tactile-btn cursor-pointer"
+                    size="sm"
+                    color="signal"
+                    loading={isDecrypting}
+                    style={{ flex: 'none' }}
                   >
                     {isDecrypting ? 'Decrypting...' : 'Decrypt'}
-                  </button>
-                </div>
+                  </Button>
+                </Group>
                 {/*
                   One message for every failure. `revealBlock` reports a wrong password, a
                   tampered ciphertext and an unusable tuple identically, the way both other unlock
@@ -920,7 +1101,12 @@ export function BlockItem({
                   screen distinguishes "you typed it wrong" from "there is nothing here to open".
                 */}
                 {unlockError && (
-                  <p className="text-[11px] text-red-600" role="alert" data-unlock-error="true">
+                  <p
+                    className="qrbit-text-body-secondary"
+                    style={{ color: 'var(--qrbit-danger)' }}
+                    role="alert"
+                    data-unlock-error="true"
+                  >
                     Incorrect password. Please try again.
                   </p>
                 )}
@@ -928,121 +1114,128 @@ export function BlockItem({
             )}
           </div>
         )}
-
-        {/* Lock Configuration Modal (Allows locking any entity with custom password) */}
-        {showLockConfigModal && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs"
-            onClick={() => setShowLockConfigModal(false)}
-          >
-            <div
-              className="w-full max-w-sm bg-white rounded-xl border border-[#D1D9E4] shadow-2xl p-5 modal-enter"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="font-display font-bold text-sm text-[#0F172A] mb-1">
-                {isProtected ? 'Encrypted block' : 'Encrypt this block with a password'}
-              </h3>
-              <p className="text-xs text-[#5B6B82] mb-3">
-                {isProtected
-                  ? 'The payload of this block is stored as AES-256-GCM ciphertext, and nothing else: no plaintext and no password are kept for it.'
-                  : 'This encrypts the block\u2019s payload with Web Crypto PBKDF2-SHA256 (600,000 iterations) + AES-256-GCM. Only the ciphertext is stored. Each block can have its own password, and there is no recovery for one that is lost.'}
-              </p>
-
-              {!isProtected ? (
-                <form onSubmit={handleSetLockPassword} className="space-y-3">
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">
-                      Set Password for this Entity:
-                    </label>
-                    <input
-                      type="password"
-                      autoFocus
-                      required
-                      placeholder="Enter a password..."
-                      value={newLockPassword}
-                      onChange={(e) => setNewLockPassword(e.target.value)}
-                      className="w-full text-xs px-2.5 py-1.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
-                    />
-                  </div>
-                  {lockError !== null ? (
-                    <p className="text-[11px] text-red-600" role="alert" data-lock-error="true">
-                      {lockError}
-                    </p>
-                  ) : null}
-
-                  <div className="flex justify-end gap-2 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowLockConfigModal(false)}
-                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg tactile-btn cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isEncrypting}
-                      className="px-3.5 py-1.5 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
-                    >
-                      {isEncrypting ? 'Encrypting...' : 'Encrypt block'}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                /*
-                 * Removing a lock throws the ciphertext away, and a protected block keeps no
-                 * plaintext by design, so removal first proves the password opens it and puts the
-                 * payload back on the block. It used to be a one-click button that destroyed the
-                 * secret with the lock — a data-loss bug wearing a security label. A wrong
-                 * password here reports exactly as it does in the Unlock form above, and nothing
-                 * changes on the block.
-                 */
-                <form onSubmit={handleRemoveLock} className="space-y-3">
-                  <p className="text-xs text-slate-600 bg-orange-50 p-2.5 rounded border border-orange-200">
-                    To reveal this block, use Unlock. To stop encrypting it, open it here first:
-                    the password has to be right, or the payload would be discarded with the lock.
-                  </p>
-                  <input
-                    type="password"
-                    autoFocus
-                    required
-                    placeholder="Password for this block"
-                    aria-label="Password to remove the lock"
-                    value={removeLockPassword}
-                    onChange={(e) => {
-                      setRemoveLockPassword(e.target.value)
-                      setRemoveLockError(false)
-                    }}
-                    className={`w-full text-xs px-2.5 py-1.5 rounded border ${
-                      removeLockError ? 'border-red-500 bg-red-50' : 'border-[#D1D9E4]'
-                    } focus:outline-none focus:border-[#1D4ED8]`}
-                  />
-                  {removeLockError ? (
-                    <p className="text-[11px] text-red-600" role="alert" data-unlock-error="true">
-                      Incorrect password. Please try again.
-                    </p>
-                  ) : null}
-                  <div className="flex justify-between items-center pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowLockConfigModal(false)}
-                      className="px-3.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg tactile-btn cursor-pointer"
-                    >
-                      Keep it encrypted
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isDecrypting}
-                      className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
-                    >
-                      {isDecrypting ? 'Opening...' : 'Decrypt and remove lock'}
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          </div>
-        )}
       </div>
+
+      {/*
+        Lock dialog (DESIGN.md, "Dialogs"): a real Mantine `Modal` — radius md, the sheet shadow,
+        the Title role, Escape cancelling and focus returning to the grip that opened it. It
+        portals above the page rather than being a box painted inside the row it belongs to.
+      */}
+      <Modal
+        opened={showLockConfigModal}
+        onClose={() => setShowLockConfigModal(false)}
+        title={isProtected ? 'Encrypted block' : 'Encrypt this block with a password'}
+        size="sm"
+        centered
+        padding="lg"
+        withCloseButton={false}
+      >
+        <Stack gap="md">
+          <Text className="qrbit-text-body-secondary" c="dimmed">
+            {isProtected
+              ? 'The payload of this block is stored as AES-256-GCM ciphertext, and nothing else: no plaintext and no password are kept for it.'
+              : 'This encrypts the block\u2019s payload with Web Crypto PBKDF2-SHA256 (600,000 iterations) + AES-256-GCM. Only the ciphertext is stored. Each block can have its own password, and there is no recovery for one that is lost.'}
+          </Text>
+
+          {!isProtected ? (
+            <form onSubmit={handleSetLockPassword}>
+              <Stack gap="sm">
+                <TextInput
+                  size="sm"
+                  label="Password for this block"
+                  // DESIGN.md's Label role is 12px/600; Mantine's input label is 12px/500, and
+                  // the weight is not a theme slot (see theme.ts).
+                  styles={{ label: { fontWeight: 600 } }}
+                  type="password"
+                  autoFocus
+                  required
+                  placeholder="Enter a password..."
+                  value={newLockPassword}
+                  onChange={(e) => setNewLockPassword(e.target.value)}
+                />
+                {lockError !== null ? (
+                  <p
+                    className="qrbit-text-body-secondary"
+                    style={{ color: 'var(--qrbit-danger)' }}
+                    role="alert"
+                    data-lock-error="true"
+                  >
+                    {lockError}
+                  </p>
+                ) : null}
+
+                <Group justify="flex-end" gap="sm" wrap="nowrap">
+                  <Button
+                    type="button"
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => setShowLockConfigModal(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" size="sm" color="locked" loading={isEncrypting}>
+                    {isEncrypting ? 'Encrypting...' : 'Encrypt block'}
+                  </Button>
+                </Group>
+              </Stack>
+            </form>
+          ) : (
+            /*
+             * Removing a lock throws the ciphertext away, and a protected block keeps no
+             * plaintext by design, so removal first proves the password opens it and puts the
+             * payload back on the block. It used to be a one-click button that destroyed the
+             * secret with the lock — a data-loss bug wearing a security label. A wrong
+             * password here reports exactly as it does in the Unlock form above, and nothing
+             * changes on the block.
+             */
+            <form onSubmit={handleRemoveLock}>
+              <Stack gap="sm">
+                <Text className="qrbit-text-body-secondary" style={{ color: 'var(--qrbit-ink-secondary)' }}>
+                  To reveal this block, use Unlock. To stop encrypting it, open it here first:
+                  the password has to be right, or the payload would be discarded with the lock.
+                </Text>
+                <TextInput
+                  size="sm"
+                  type="password"
+                  autoFocus
+                  required
+                  placeholder="Password for this block"
+                  aria-label="Password to remove the lock"
+                  value={removeLockPassword}
+                  onChange={(e) => {
+                    setRemoveLockPassword(e.target.value)
+                    setRemoveLockError(false)
+                  }}
+                />
+                {removeLockError ? (
+                  <p
+                    className="qrbit-text-body-secondary"
+                    style={{ color: 'var(--qrbit-danger)' }}
+                    role="alert"
+                    data-unlock-error="true"
+                  >
+                    Incorrect password. Please try again.
+                  </p>
+                ) : null}
+                <Group justify="space-between" gap="sm" wrap="nowrap">
+                  <Button
+                    type="button"
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => setShowLockConfigModal(false)}
+                  >
+                    Keep it encrypted
+                  </Button>
+                  {/* Destructive, and it names the consequence (DESIGN.md, "Dialogs"). */}
+                  <Button type="submit" size="sm" color="danger" loading={isDecrypting}>
+                    {isDecrypting ? 'Opening...' : 'Decrypt and remove lock'}
+                  </Button>
+                </Group>
+              </Stack>
+            </form>
+          )}
+        </Stack>
+      </Modal>
     </div>
   )
 }
@@ -1075,6 +1268,9 @@ function describeLockFailure(cause: unknown): string {
  * `useObjectURL`), so a row that goes away, a block whose file is replaced, and a session screen
  * that closes all release the reference. Nothing here claims a file was written anywhere: the
  * anchor is the mechanism, and the browser's own download UI is the confirmation.
+ *
+ * It is an `<a>` rather than a `<Button>` because it is a link to a resource — the browser's
+ * download chrome is its confirmation, and DESIGN.md's Button table is for actions.
  */
 function AttachmentDownload({ blob, name }: { blob: Blob; name: string }) {
   const url = useObjectUrl(blob)
@@ -1082,12 +1278,25 @@ function AttachmentDownload({ blob, name }: { blob: Blob; name: string }) {
 
   return (
     <a
-      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-[#D1D9E4] rounded hover:bg-slate-100 tactile-btn"
+      className="tactile-btn inline-flex items-center gap-2 shrink-0 hover:border-[color:var(--qrbit-border-strong)]"
+      style={{
+        padding: '0 12px',
+        height: 32,
+        alignItems: 'center',
+        gap: 'var(--qrbit-space-xs)',
+        fontSize: 13,
+        fontWeight: 600,
+        color: 'var(--qrbit-ink)',
+        backgroundColor: 'var(--qrbit-raised)',
+        border: '1px solid var(--qrbit-border-strong)',
+        borderRadius: 'var(--qrbit-radius-sm)',
+        textDecoration: 'none',
+      }}
       href={url}
       download={name}
       data-attachment-download="true"
     >
-      <Download className="w-3.5 h-3.5" aria-hidden="true" />
+      <IconDownload size={16} aria-hidden="true" />
       <span>Save file</span>
     </a>
   )
@@ -1117,14 +1326,6 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
   const hasFile = block.blob !== undefined
 
   /*
-   * A locked attachment's ciphertext was made from the bytes that were on the block when the
-   * lock was set (see `handleSetLockPassword`). Choosing or removing a file after that would
-   * leave the row showing one payload and `fileBlocksToLibraryItems` sending the other one —
-   * the same species of defect as a fabricated blob, so it is refused here rather than detected
-   * later. `fileBlocksToLibraryItems` sends the stored tuple byte-for-byte (D9), which is only
-   * safe because nothing can silently rewrite these bytes underneath it.
-   */
-  /*
    * A locked block's ciphertext was made from the bytes that were on the block when the lock was
    * set (see `encryptBlockPayload`). Choosing or removing a file after that would leave the row
    * showing one payload and `fileBlocksToLibraryItems` sending the other one — the same species
@@ -1134,7 +1335,7 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
    */
   if (isProtectedBlock(block)) {
     return (
-      <p className="text-[11px] text-[#5B6B82]" data-attachment-locked="true">
+      <p className="qrbit-text-body-secondary" style={{ color: 'var(--qrbit-ink-muted)' }} data-attachment-locked="true">
         This block is locked. Remove the lock to choose a different {word}.
       </p>
     )
@@ -1163,8 +1364,8 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
   }
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-2">
+    <div className="space-y-2">
+      <Group gap="sm" wrap="nowrap">
         <AttachmentPicker
           blockType={blockType}
           label={hasFile ? `Replace ${word}` : `Choose ${word}`}
@@ -1175,19 +1376,26 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
           }}
         />
         {hasFile ? (
-          <button
+          <Button
             type="button"
+            variant="default"
+            size="sm"
+            c="danger"
+            leftSection={<IconX size={14} aria-hidden="true" />}
             onClick={remove}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-white border border-red-200 rounded hover:bg-red-50 tactile-btn cursor-pointer"
           >
-            <IconX size={14} aria-hidden="true" />
-            <span>Remove {word}</span>
-          </button>
+            Remove {word}
+          </Button>
         ) : null}
-      </div>
+      </Group>
 
       {error !== null ? (
-        <p className="text-[11px] text-red-600" role="alert" data-attachment-error="true">
+        <p
+          className="qrbit-text-body-secondary"
+          style={{ color: 'var(--qrbit-danger)' }}
+          role="alert"
+          data-attachment-error="true"
+        >
           {error}
         </p>
       ) : null}

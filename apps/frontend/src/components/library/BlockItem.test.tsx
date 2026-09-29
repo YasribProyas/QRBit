@@ -40,6 +40,7 @@ import type { Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { BlockItem } from './BlockItem'
+import { WithMantine } from '../common/WithMantine'
 import { decryptItem, encryptItem } from '../../lib/crypto'
 import { useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
@@ -157,8 +158,33 @@ function mount(props: HarnessProps): void {
   document.body.append(container)
   root = createRoot(container)
   act(() => {
-    root?.render(<Harness {...props} />)
+    // The row is built from Mantine controls, and the lock dialog is a Mantine `Modal`, so the
+    // harness supplies the provider the app supplies (`FileEditView.test.tsx` does the same).
+    root?.render(
+      <WithMantine>
+        <Harness {...props} />
+      </WithMantine>,
+    )
   })
+}
+
+/**
+ * The lock dialog floats in a portal on `document.body`, and Mantine mounts a portal on a frame
+ * rather than inside the `act()` that opened it, so a test that drives it waits one first. The
+ * unlock form is deliberately NOT in here: it is rendered inline in the row, and reading the
+ * dialog from the document keeps that distinction visible instead of papering over it.
+ */
+async function openDialog(): Promise<HTMLElement> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        resolve()
+      })
+    })
+  })
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')
+  if (dialog === null) throw new Error('test bug: the lock dialog never opened')
+  return dialog
 }
 
 function unmountNow(): void {
@@ -480,15 +506,24 @@ function screenText(): string {
 /** Opens the block's lock dialog, the way the shield in its header bar does. */
 function openLockModal(): void {
   const trigger = Array.from(element().querySelectorAll('button')).find(
-    (button) => (button.getAttribute('title') ?? '') === 'Lock this entity with password',
+    (button) => (button.getAttribute('title') ?? '') === 'Encrypt this block with a password',
   )
   if (trigger === undefined) throw new Error('test bug: no lock button on the row')
   click(trigger)
 }
 
+/** The password field of the portaled lock dialog, in the document the dialog floats in. */
+async function lockPasswordField(): Promise<HTMLInputElement> {
+  const dialog = await openDialog()
+  const field = dialog.querySelector<HTMLInputElement>('input[type="password"]')
+  if (field === null) throw new Error('test bug: the lock dialog has no password field')
+  return field
+}
+
+/** The password field of the row's inline unlock form, which stays inside the container. */
 function passwordField(): HTMLInputElement {
   const field = element().querySelector<HTMLInputElement>('input[type="password"]')
-  if (field === null) throw new Error('test bug: the lock dialog never opened')
+  if (field === null) throw new Error('test bug: the unlock form never opened')
   return field
 }
 
@@ -498,15 +533,18 @@ function passwordField(): HTMLInputElement {
  * a single flush would race it, and the wait is on the outcome the test then asserts (D15).
  */
 async function submitLock(onUpdate: ReturnType<typeof vi.fn>): Promise<void> {
-  const form = element().querySelector('form')
-  if (form === null) throw new Error('test bug: the lock dialog has no form')
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')
+  const form = dialog?.querySelector('form')
+  if (form === null || form === undefined) throw new Error('test bug: the lock dialog has no form')
 
   act(() => {
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   })
 
   const settled = (): boolean =>
-    onUpdate.mock.calls.length > 0 || element().querySelector('[data-lock-error]') !== null
+    onUpdate.mock.calls.length > 0 ||
+    (document.querySelector('[role="dialog"]')?.querySelector('[data-lock-error]') ?? null) !==
+      null
 
   await act(async () => {
     for (let attempt = 0; attempt < 400 && !settled(); attempt += 1) {
@@ -632,11 +670,15 @@ describe('BlockItem — an attachment block holds a file or it holds nothing', (
     })
 
     openLockModal()
-    typeInto(passwordField(), 'sentry-4')
+    typeInto(await lockPasswordField(), 'sentry-4')
     await submitLock(onUpdate)
 
     expect(onUpdate).not.toHaveBeenCalled()
-    expect(element().querySelector('[data-lock-error]')?.textContent).toContain('3.0 MiB')
+    expect(
+      document
+        .querySelector<HTMLElement>('[role="dialog"]')
+        ?.querySelector('[data-lock-error]')?.textContent,
+    ).toContain('3.0 MiB')
   })
 
   it('locks the bytes the block actually holds, and stores only the tuple', async () => {
@@ -652,7 +694,7 @@ describe('BlockItem — an attachment block holds a file or it holds nothing', (
     })
 
     openLockModal()
-    typeInto(passwordField(), 'sentry-4')
+    typeInto(await lockPasswordField(), 'sentry-4')
     await submitLock(onUpdate)
 
     const changes = vi.mocked(onUpdate).mock.calls[0]?.[1]
@@ -693,7 +735,7 @@ describe('BlockItem — an attachment block holds a file or it holds nothing', (
     expect(element().querySelector('[data-attachment-locked]')).toBeNull()
 
     openLockModal()
-    typeInto(passwordField(), 'sentry-4')
+    typeInto(await lockPasswordField(), 'sentry-4')
     await submitLock(onUpdate)
 
     // After it, the bytes underneath the ciphertext are frozen.

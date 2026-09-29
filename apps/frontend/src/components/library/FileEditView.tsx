@@ -26,8 +26,9 @@
  * overwriting the draft there would clobber edits typed while the write was in flight.
  */
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  IconAlertCircle,
   IconArrowLeft,
   IconCheck,
   IconFolder,
@@ -38,7 +39,7 @@ import {
   IconStack,
   IconDeviceFloppy,
 } from '@tabler/icons-react'
-import { Button } from '@mantine/core'
+import { ActionIcon, Badge, Button, Group, Modal, Stack, Text, TextInput } from '@mantine/core'
 import { BlockItem } from './BlockItem'
 import { AddBlockModal } from './AddBlockModal'
 import { FolderPickerModal } from './FolderPickerModal'
@@ -458,24 +459,38 @@ export function FileEditView({
 
   return (
     <div className="flex flex-col min-h-full pb-14">
-      {/* Top bar: back, editable title, dirty state, Save, Send */}
-      <header className="px-4 py-3 bg-white border-b border-[#D1D9E4] flex items-center justify-between sticky top-0 z-30 shadow-2xs gap-2">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <button
-            type="button"
+      {/*
+        Top bar: back, editable title, dirty state, Save, Send. It is sticky, so it is one of the
+        few surfaces that genuinely floats above the page — it takes the sheet shadow rather than
+        the old zero-offset halo, which DESIGN.md names as a defect ("The Offset-and-Blur Rule").
+      */}
+      <header
+        className="px-4 py-3 flex items-center justify-between sticky top-0 z-30 gap-2"
+        style={{
+          backgroundColor: 'var(--qrbit-raised)',
+          borderBottom: '1px solid var(--qrbit-border)',
+          boxShadow: 'var(--qrbit-shadow-lift)',
+        }}
+      >
+        <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: '1 1 auto' }}>
+          <ActionIcon
+            variant="subtle"
+            size="lg"
+            c="dimmed"
             onClick={handleBackRequest}
-            className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors tactile-btn cursor-pointer shrink-0"
             title="Return to library"
             aria-label="Return to library"
+            style={{ flex: 'none' }}
           >
             <IconArrowLeft size={16} aria-hidden="true" />
-          </button>
+          </ActionIcon>
 
           {/* Editable inline title — drafts only, never a write (D16.1) */}
           <div className="min-w-0 flex-1">
             {isEditingTitle ? (
-              <div className="flex items-center gap-1.5">
-                <input
+              <Group gap="xs" wrap="nowrap">
+                <TextInput
+                  size="sm"
                   type="text"
                   autoFocus
                   value={draftName}
@@ -488,43 +503,73 @@ export function FileEditView({
                     if (event.key === 'Enter') handleTitleSubmit()
                   }}
                   aria-label="Dossier name"
-                  className="w-full font-display font-bold text-base text-[#0F172A] bg-slate-50 border border-[#1D4ED8] rounded px-2 py-0.5 focus:outline-none"
+                  styles={{
+                    input: {
+                      font: 'var(--qrbit-text-title)',
+                      letterSpacing: 'var(--qrbit-text-title-tracking)',
+                    },
+                  }}
+                  style={{ flex: '1 1 auto', minWidth: 0 }}
                 />
-                <button
-                  type="button"
+                <ActionIcon
+                  variant="subtle"
+                  size="lg"
+                  color="success"
                   onClick={handleTitleSubmit}
-                  className="p-1 text-emerald-600 hover:bg-emerald-50 rounded cursor-pointer shrink-0"
                   title="Done renaming"
                   aria-label="Done renaming"
+                  style={{ flex: 'none' }}
                 >
                   <IconCheck size={16} aria-hidden="true" />
-                </button>
-              </div>
+                </ActionIcon>
+              </Group>
             ) : (
-              <div
-                onClick={() => setIsEditingTitle(true)}
-                className="group flex items-center gap-1.5 cursor-pointer py-0.5 rounded hover:bg-slate-50 transition-colors max-w-fit"
-                title="Click to rename"
-              >
-                <h2 className="font-display font-bold text-base text-[#0F172A] truncate">
+              /*
+                The heading is text and the pencil is the control. It used to be a `<div
+                onClick>` wrapping the heading, which could not be focused or reached by keyboard
+                at all — the rename path had no accessible door.
+              */
+              <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                <Text
+                  span
+                  className="qrbit-text-title"
+                  style={{ minWidth: 0 }}
+                  truncate
+                >
                   {draftName}
-                </h2>
-                <IconPencil
-                  size={14}
-                  className="text-slate-400 group-hover:text-[#1D4ED8] shrink-0 transition-colors"
-                  aria-hidden="true"
-                />
-              </div>
+                </Text>
+                <ActionIcon
+                  variant="subtle"
+                  size="md"
+                  c="dimmed"
+                  onClick={() => setIsEditingTitle(true)}
+                  title="Rename dossier"
+                  aria-label="Rename dossier"
+                  style={{ flex: 'none' }}
+                >
+                  <IconPencil size={14} aria-hidden="true" />
+                </ActionIcon>
+              </Group>
             )}
           </div>
-        </div>
+        </Group>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <Group gap="sm" wrap="nowrap" style={{ flex: 'none' }}>
           {isDirty ? (
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#B45309] whitespace-nowrap">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B]" aria-hidden="true" />
-              <span>Unsaved changes</span>
-            </span>
+            /*
+              Caution Amber means "a warning that is not a failure" — an unsaved draft — and the
+              badge carries an icon AND a word, because colour alone is never the message. It sits
+              beside Save, so the state and the control that clears it are adjacent.
+            */
+            <Badge
+              variant="light"
+              color="warning"
+              radius="full"
+              leftSection={<IconAlertCircle size={12} aria-hidden="true" />}
+              style={{ flex: 'none' }}
+            >
+              Unsaved changes
+            </Badge>
           ) : null}
 
           {/* The explicit save that replaced per-keystroke autosave */}
@@ -548,54 +593,79 @@ export function FileEditView({
           >
             Send
           </Button>
-        </div>
+        </Group>
       </header>
 
       <main className="flex-1 px-4 py-5 max-w-xl mx-auto w-full space-y-4">
         {/* Meta bar: block count, and the reorder hint — now true (D16.2/D16.3) */}
-        <div className="flex items-center justify-between px-2 text-xs text-[#5B6B82]">
-          <span className="flex items-center gap-1.5">
-            <IconStack size={14} className="text-slate-400" aria-hidden="true" />
-            <span>
+        <Group justify="space-between" wrap="nowrap" gap="sm" px="xs">
+          <Group gap="xs" wrap="nowrap">
+            <IconStack size={16} aria-hidden="true" style={{ color: 'var(--qrbit-ink-muted)' }} />
+            <Text span className="qrbit-text-body-secondary" c="dimmed">
               {draftBlocks.length} {draftBlocks.length === 1 ? 'block' : 'blocks'} in payload
-            </span>
-          </span>
+            </Text>
+          </Group>
           {draftBlocks.length > 1 ? (
-            <span className="text-[11px] font-mono text-slate-400">
+            <Text
+              span
+              className="qrbit-text-body-secondary"
+              c="dimmed"
+              style={{ textAlign: 'right' }}
+            >
               Drag the grip, or use the arrows, to reorder
-            </span>
+            </Text>
           ) : null}
-        </div>
+        </Group>
 
         {/* Folder membership, and the way to change it */}
-        <div className="flex items-center justify-between gap-2 px-3 py-2 bg-slate-50/80 border border-[#D1D9E4] rounded-lg">
-          <span className="flex items-center gap-1.5 min-w-0">
-            <IconFolder size={14} className="text-slate-400 shrink-0" aria-hidden="true" />
-            <span className="text-[11px] text-[#5B6B82] shrink-0">Folder</span>
-            <span className="text-xs font-semibold text-[#0F172A] truncate">
+        <Group
+          justify="space-between"
+          wrap="nowrap"
+          gap="sm"
+          px="md"
+          py="xs"
+          style={{
+            backgroundColor: 'var(--qrbit-sunken)',
+            border: '1px solid var(--qrbit-border)',
+            borderRadius: 'var(--qrbit-radius-sm)',
+          }}
+        >
+          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+            <IconFolder size={16} aria-hidden="true" style={{ flex: 'none', color: 'var(--qrbit-ink-muted)' }} />
+            <Text span className="qrbit-text-label" c="dimmed" style={{ flex: 'none' }}>
+              Folder
+            </Text>
+            <Text span className="qrbit-text-body" style={{ minWidth: 0 }} truncate>
               {currentFolderName}
-            </span>
-          </span>
+            </Text>
+          </Group>
           <Button
             variant="default"
-            size="xs"
+            size="sm"
             disabled={isMoving}
+            loading={isMoving}
             leftSection={<IconFolderPlus size={14} aria-hidden="true" />}
+            style={{ flex: 'none' }}
             onClick={() => {
               setMoveError(null)
               setIsFolderPickerOpen(true)
             }}
           >
-            {isMoving ? 'Moving...' : 'Move to...'}
+            Move to folder…
           </Button>
-        </div>
+        </Group>
         {moveError ? (
-          <p className="px-3 text-[11px] text-red-600" role="status">
+          <p className="qrbit-text-body-secondary px-3" style={{ color: 'var(--qrbit-danger)' }} role="status">
             {moveError}
           </p>
         ) : null}
         {sendError !== null ? (
-          <p className="px-3 text-[11px] text-red-600" role="alert" data-send-error="true">
+          <p
+            className="qrbit-text-body-secondary px-3"
+            style={{ color: 'var(--qrbit-danger)' }}
+            role="alert"
+            data-send-error="true"
+          >
             {sendError}
           </p>
         ) : null}
@@ -623,14 +693,21 @@ export function FileEditView({
         </div>
 
         <div className="pt-2">
-          <button
+          {/*
+            A labelled action is a `Button` (DESIGN.md, "Buttons"), and the border is 1px
+            `border-strong` like every other control — the old 2px dashed outline was a shape the
+            system does not have.
+          */}
+          <Button
             type="button"
+            variant="default"
+            size="md"
+            fullWidth
+            leftSection={<IconPlus size={16} aria-hidden="true" />}
             onClick={() => setIsAddModalOpen(true)}
-            className="w-full py-3 border-2 border-dashed border-[#D1D9E4] hover:border-[#1D4ED8] hover:bg-blue-50/30 rounded-xl flex items-center justify-center gap-2 text-xs font-semibold text-[#1D4ED8] transition-all tactile-btn cursor-pointer"
           >
-            <IconPlus size={16} aria-hidden="true" />
-            <span>Add Block to Dossier</span>
-          </button>
+            Add Block to Dossier
+          </Button>
         </div>
       </main>
 
@@ -735,81 +812,81 @@ function EncryptBeforeSaveDialog({
   onCancel,
   onSubmit,
 }: EncryptBeforeSaveDialogProps) {
-  const headingId = useId()
   const canSubmit = password !== '' && password === confirm
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={headingId}
+    <Modal
+      opened
+      onClose={busy ? () => undefined : onCancel}
+      title={`Encrypt "${blockLabel}" before saving`}
+      size="sm"
+      centered
+      padding="lg"
+      withCloseButton={false}
     >
       <form
-        className="w-full max-w-sm bg-white rounded-xl border border-[#D1D9E4] shadow-2xl p-5 modal-enter"
         onSubmit={(event) => {
           event.preventDefault()
           if (canSubmit && !busy) onSubmit()
         }}
       >
-        <h3 id={headingId} className="font-display font-bold text-base text-[#0F172A] mb-1">
-          Encrypt \"{blockLabel}\" before saving
-        </h3>
-        <p className="text-xs text-[#5B6B82] mb-3">
-          This block is marked as a secret but still holds plaintext, which means it is stored in
-          the library as readable text. Choose a password and it will be saved as PBKDF2 +
-          AES-256-GCM ciphertext instead. A lost password cannot be recovered, and nothing is
-          written while this dialog is open.
-        </p>
+        <Stack gap="md">
+          <Text className="qrbit-text-body-secondary" c="dimmed">
+            This block is marked as a secret but still holds plaintext, which means it is stored in
+            the library as readable text. Choose a password and it will be saved as PBKDF2 +
+            AES-256-GCM ciphertext instead. A lost password cannot be recovered, and nothing is
+            written while this dialog is open.
+          </Text>
 
-        <div className="space-y-2">
-          <input
+          <TextInput
+            size="sm"
             type="password"
             autoFocus
-            aria-label="Password for this block"
-            placeholder="Password"
+            label="Password for this block"
+            styles={{ label: { fontWeight: 600 } }}
+            autoComplete="new-password"
             value={password}
+            disabled={busy}
             onChange={(event) => {
               onPassword(event.target.value)
             }}
-            className="w-full text-xs px-2.5 py-1.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
           />
-          <input
+          <TextInput
+            size="sm"
             type="password"
-            aria-label="Confirm the password for this block"
-            placeholder="Repeat the password"
+            label="Repeat the password"
+            styles={{ label: { fontWeight: 600 } }}
+            autoComplete="new-password"
             value={confirm}
+            disabled={busy}
             onChange={(event) => {
               onConfirm(event.target.value)
             }}
-            className="w-full text-xs px-2.5 py-1.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
           />
-        </div>
 
-        {error !== null ? (
-          <p className="text-[11px] text-red-600 pt-2" role="alert" data-encrypt-error="true">
-            {error}
-          </p>
-        ) : null}
+          {error !== null ? (
+            <p
+              className="qrbit-text-body-secondary"
+              style={{ color: 'var(--qrbit-danger)' }}
+              role="alert"
+              data-encrypt-error="true"
+            >
+              {error}
+            </p>
+          ) : null}
 
-        <div className="flex justify-end gap-2 pt-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg tactile-btn cursor-pointer"
-          >
-            Cancel the save
-          </button>
-          <button
-            type="submit"
-            disabled={!canSubmit || busy}
-            className="px-3.5 py-1.5 bg-[#C2410C] hover:bg-[#9A3412] disabled:opacity-40 text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
-          >
-            {busy ? 'Encrypting...' : 'Encrypt and save'}
-          </button>
-        </div>
+          {/* Quiet then Primary, right-aligned (DESIGN.md, "Dialogs"). */}
+          <Group justify="flex-end" gap="sm" wrap="nowrap">
+            <Button type="button" variant="subtle" size="sm" disabled={busy} onClick={onCancel}>
+              Cancel the save
+            </Button>
+            <Button type="submit" size="sm" color="locked" loading={busy} disabled={!canSubmit}>
+              {busy ? 'Encrypting...' : 'Encrypt and save'}
+            </Button>
+          </Group>
+        </Stack>
       </form>
-    </div>
+    </Modal>
   )
 }
 
@@ -827,9 +904,8 @@ interface LeaveDraftDialogProps {
  * draft on a mis-click, which per-keystroke autosave could not.
  *
  * `window.confirm()` is not usable here (it is blocked in cross-origin iframes and embedded
- * web views — see `components/ConfirmDelete.tsx`) and a toast would not stop the departure.
- * Escape and "Keep editing" both leave everything exactly as it is; the destructive option
- * is last in DOM order, so tab order meets the safe controls first.
+ * web views — see `components/ConfirmDelete.tsx`) and a toast would not stop the departure, so
+ * this is a real dialog. Escape and "Keep editing" both leave everything exactly as it is.
  */
 function LeaveDraftDialog({
   dossierName,
@@ -838,64 +914,40 @@ function LeaveDraftDialog({
   onSaveAndLeave,
   onDiscard,
 }: LeaveDraftDialogProps) {
-  // A real dialog id: two editors mounted at once must not describe each other's dialog.
-  const headingId = useId()
-  const onCancelRef = useRef(onCancel)
-  useEffect(() => {
-    onCancelRef.current = onCancel
-  })
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onCancelRef.current()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [])
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={headingId}
+    /*
+     * A Mantine `Modal`: Escape cancels (D16.1's "keep editing"), the sheet carries
+     * `--qrbit-shadow-sheet`, the title is the Title role, and focus returns to the Back control
+     * that raised it. The destructive option is last in DOM order, so tab order meets the safe
+     * controls first.
+     */
+    <Modal
+      opened
+      onClose={onCancel}
+      title="Discard changes?"
+      size="sm"
+      centered
+      padding="lg"
+      withCloseButton={false}
     >
-      <div className="w-full max-w-sm bg-white rounded-xl border border-[#D1D9E4] shadow-2xl p-5 modal-enter">
-        <h3 id={headingId} className="font-display font-bold text-base text-[#0F172A] mb-1">
-          Discard changes?
-        </h3>
-        <p className="text-xs text-[#5B6B82] mb-4">
+      <Stack gap="md">
+        <Text className="qrbit-text-body-secondary" c="dimmed">
           &ldquo;{dossierName}&rdquo; has unsaved edits. Leaving now loses them.
-        </p>
+        </Text>
 
-        <div className="flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            autoFocus
-            onClick={onCancel}
-            className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg tactile-btn cursor-pointer"
-          >
+        <Group justify="flex-end" gap="sm" wrap="nowrap">
+          <Button variant="subtle" size="sm" autoFocus onClick={onCancel}>
             Keep editing
-          </button>
-          <button
-            type="button"
-            onClick={onSaveAndLeave}
-            disabled={!canSave}
-            className="px-3.5 py-1.5 bg-[#1D4ED8] hover:bg-[#1E40AF] disabled:opacity-40 text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
-          >
+          </Button>
+          <Button color="signal" size="sm" disabled={!canSave} onClick={onSaveAndLeave}>
             Save &amp; leave
-          </button>
-          <button
-            type="button"
-            onClick={onDiscard}
-            className="px-3.5 py-1.5 text-xs font-semibold text-red-600 border border-red-200 rounded-lg hover:bg-red-50 tactile-btn cursor-pointer"
-          >
-            Discard changes
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+          {/* Names the consequence instead of promising a vague "Discard". */}
+          <Button variant="default" color="danger" size="sm" onClick={onDiscard}>
+            Discard unsaved edits
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
   )
 }

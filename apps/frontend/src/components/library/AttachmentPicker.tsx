@@ -19,7 +19,9 @@
  */
 
 import { useRef } from 'react'
+import { Button } from '@mantine/core'
 import { IconPaperclip, IconPhoto } from '@tabler/icons-react'
+import { WithMantine } from '../common/WithMantine'
 import { formatByteSize } from '../../lib/byteSize'
 
 /**
@@ -122,17 +124,24 @@ export function AttachmentPicker({
   }
 
   return (
-    <>
-      <button
+    <WithMantine>
+      {/*
+        DESIGN.md's Button table: a labelled action is a `Button`, and the Default variant is the
+        raised fill with 1px `--qrbit-border-strong` — the outline of a control the user must
+        find. It is not the accent at rest: the signal blue means *this is the action*, and this
+        control only opens the OS picker on the user's behalf."
+      */}
+      <Button
         type="button"
+        variant="default"
+        size="sm"
+        leftSection={<Icon size={16} aria-hidden="true" />}
         onClick={() => {
           input.current?.click()
         }}
-        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-[#1D4ED8] bg-white border border-[#D1D9E4] rounded hover:bg-blue-50 tactile-btn cursor-pointer"
       >
-        <Icon size={14} aria-hidden="true" />
-        <span>{label}</span>
-      </button>
+        {label}
+      </Button>
       <input
         ref={input}
         type="file"
@@ -148,6 +157,6 @@ export function AttachmentPicker({
           event.currentTarget.value = ''
         }}
       />
-    </>
+    </WithMantine>
   )
 }
