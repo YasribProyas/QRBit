@@ -1,5 +1,8 @@
 import type { JSX } from 'react'
+import { Button } from '@mantine/core'
+import { IconCheck, IconX } from '@tabler/icons-react'
 import type { SessionRole } from '../../lib/signaling'
+import { WithMantine } from '../common/WithMantine'
 
 /**
  * SafetyPhraseOverlay (PLAN.md §8 Phase 2, decision D14).
@@ -11,6 +14,11 @@ import type { SessionRole } from '../../lib/signaling'
  * - The receiver (role 'host') sees the three words prominently in a non-blocking/waiting
  *   state without a gating confirm button.
  * - Both roles have the Abort session button.
+ *
+ * The state line is honest about what the code actually knows: this device confirming is a
+ * fact about this device, and `peerConfirmed` is a fact about the message that arrived. The
+ * app cannot verify that the words match on the other screen — that comparison is the human's
+ * job, which is why it is the only step that carries no colour until someone taps it.
  */
 export interface SafetyPhraseOverlayProps {
   /** The three words both devices must see identically, in display order. */
@@ -31,7 +39,15 @@ export interface SafetyPhraseOverlayProps {
   role?: SessionRole | null
 }
 
-export function SafetyPhraseOverlay({
+export function SafetyPhraseOverlay(props: SafetyPhraseOverlayProps): JSX.Element {
+  return (
+    <WithMantine>
+      <SafetyPhraseOverlayInner {...props} />
+    </WithMantine>
+  )
+}
+
+function SafetyPhraseOverlayInner({
   phrase,
   confirmed,
   peerConfirmed,
@@ -42,6 +58,9 @@ export function SafetyPhraseOverlay({
   role,
 }: SafetyPhraseOverlayProps): JSX.Element {
   const sender = isSender ?? (role !== undefined && role !== null ? role === 'guest' : true)
+  // On the sender's screen this device's own tap is the fact; on the receiver's, the
+  // arriving confirm message is. Both are shown as what they are, never as "verified".
+  const confirmedLine = sender ? confirmed : peerConfirmed
 
   return (
     <div
@@ -51,7 +70,10 @@ export function SafetyPhraseOverlay({
       aria-labelledby="safety-phrase-instruction"
     >
       <div className="safety-phrase__panel">
-        <p id="safety-phrase-instruction" className="safety-phrase__instruction">
+        <p
+          id="safety-phrase-instruction"
+          className="safety-phrase__instruction qrbit-text-title"
+        >
           Confirm these match on both devices:
         </p>
 
@@ -64,41 +86,54 @@ export function SafetyPhraseOverlay({
         </ul>
 
         <div className="safety-phrase__status" role="status" aria-live="polite">
-          {sender ? (
-            <p className="safety-phrase__check" data-state={confirmed ? 'confirmed' : 'pending'}>
-              <span className="safety-phrase__check-label">This device</span>
-              <span>{confirmed ? 'confirmed ✓' : 'not confirmed yet'}</span>
-            </p>
-          ) : (
-            <p className="safety-phrase__check" data-state={peerConfirmed ? 'confirmed' : 'pending'}>
-              <span className="safety-phrase__check-label">Sender</span>
-              <span>{peerConfirmed ? 'confirmed ✓' : 'waiting for confirmation…'}</span>
-            </p>
-          )}
+          <p
+            className="safety-phrase__check"
+            data-state={confirmedLine ? 'confirmed' : 'pending'}
+          >
+            <span className="safety-phrase__check-label">{sender ? 'This device' : 'Sender'}</span>
+            {/*
+              The word carries the meaning and the mark repeats it, so the state survives a
+              screen reader, a colour-blind viewer and `prefers-reduced-motion` alike.
+            */}
+            <span>
+              {confirmedLine
+                ? 'confirmed ✓'
+                : sender
+                  ? 'not confirmed yet'
+                  : 'waiting for confirmation…'}
+            </span>
+          </p>
         </div>
 
         <div className="safety-phrase__actions">
-          {sender ? (
-            <button
-              type="button"
-              className="button safety-phrase__confirm"
-              onClick={onConfirm}
-              disabled={busy || confirmed}
-            >
-              Confirmed ✓
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="button safety-phrase__abort"
+          {/* DESIGN.md's dialog order: the quiet action first, the primary last. */}
+          <Button
+            className="safety-phrase__abort"
+            variant="default"
+            size="sm"
+            fullWidth
+            leftSection={<IconX size={16} aria-hidden="true" />}
             onClick={onAbort}
             disabled={busy}
           >
             Abort session
-          </button>
+          </Button>
+          {sender ? (
+            <Button
+              className="safety-phrase__confirm"
+              color="signal"
+              size="sm"
+              fullWidth
+              leftSection={<IconCheck size={16} aria-hidden="true" />}
+              onClick={onConfirm}
+              disabled={busy || confirmed}
+            >
+              Confirmed
+            </Button>
+          ) : null}
         </div>
 
-        <p className="safety-phrase__footnote muted">
+        <p className="safety-phrase__footnote muted qrbit-text-body-secondary">
           {sender
             ? confirmed
               ? 'Confirmed — starting the session…'

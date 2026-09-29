@@ -19,7 +19,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { Badge, Group, Text } from '@mantine/core'
+import { IconCircleCheck } from '@tabler/icons-react'
 import { ProgressRing } from '../../ProgressRing'
+import { WithMantine } from '../../common/WithMantine'
+import { formatByteSize } from '../../../lib/byteSize'
 import type { ImageItem as ImageItemModel } from '../../../store/sessionStore'
 
 /**
@@ -37,7 +41,15 @@ export interface ImageItemViewProps {
   item: ImageItemModel
 }
 
-export function ImageItem({ item }: ImageItemViewProps) {
+export function ImageItem(props: ImageItemViewProps) {
+  return (
+    <WithMantine>
+      <ImageItemInner {...props} />
+    </WithMantine>
+  )
+}
+
+function ImageItemInner({ item }: ImageItemViewProps) {
   const [preview, setPreview] = useState<string | null>(null)
   /** The URL this component created and must therefore revoke. */
   const ownedUrl = useRef<string | null>(null)
@@ -80,6 +92,7 @@ export function ImageItem({ item }: ImageItemViewProps) {
   useEffect(() => revokeOwned, [])
 
   const transferring = item.status === 'pending' || item.status === 'transferring'
+  const size = item.totalSize > 0 ? formatByteSize(item.totalSize) : null
 
   return (
     <div className="image-item" data-status={item.status}>
@@ -87,7 +100,9 @@ export function ImageItem({ item }: ImageItemViewProps) {
         {preview !== null ? (
           <img className="image-item__preview" src={preview} alt={item.fileName} />
         ) : (
-          <p className="image-item__placeholder muted">Waiting for the first bytes…</p>
+          <p className="image-item__placeholder muted">
+            {item.status === 'error' ? 'The image transfer failed.' : 'Waiting for the first bytes…'}
+          </p>
         )}
         {transferring ? (
           <span className="image-item__ring">
@@ -99,17 +114,40 @@ export function ImageItem({ item }: ImageItemViewProps) {
         ) : null}
       </div>
 
-      <p className="image-item__meta">
-        <span className="image-item__name">{item.fileName}</span>
-        {transferring ? (
-          <span className="image-item__percent muted">{Math.round(item.progress)}%</span>
-        ) : null}
-      </p>
+      <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
+        <Text span className="image-item__name qrbit-text-body" style={{ overflowWrap: 'anywhere' }}>
+          {item.fileName}
+        </Text>
+        {/* Mono + tabular figures: the counter must not reflow the name beside it. */}
+        <Group gap="xs" wrap="nowrap">
+          {size !== null ? (
+            <Text span className="qrbit-text-data" c="dimmed">
+              {size}
+            </Text>
+          ) : null}
+          {transferring ? (
+            <Text span className="image-item__percent qrbit-text-data" c="warning">
+              {Math.round(item.progress)}%
+            </Text>
+          ) : null}
+          {item.status === 'complete' ? (
+            <Badge
+              variant="light"
+              color="success"
+              radius="full"
+              ff="sans"
+              leftSection={<IconCircleCheck size={13} aria-hidden="true" />}
+            >
+              Complete
+            </Badge>
+          ) : null}
+        </Group>
+      </Group>
 
       {item.status === 'error' ? (
-        <p className="item-error" role="alert">
+        <Text span role="alert" className="item-error" c="danger">
           The image transfer failed.
-        </p>
+        </Text>
       ) : null}
     </div>
   )

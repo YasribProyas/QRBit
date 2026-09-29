@@ -28,6 +28,9 @@
 
 import { useCallback, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { Button } from '@mantine/core'
+import { IconLock } from '@tabler/icons-react'
+import { WithMantine } from '../common/WithMantine'
 import type { LockedInnerType } from '../../lib/protocol'
 import type { RichTextItem as RichTextItemModel } from '../../store/sessionStore'
 import { RichTextItem } from './items/RichTextItem'
@@ -93,7 +96,15 @@ const COMPOSE_DRAFT: RichTextItemModel = {
   content: '',
 }
 
-export function LockedItemComposeModal({
+export function LockedItemComposeModal(props: LockedItemComposeModalProps) {
+  return (
+    <WithMantine>
+      <LockedItemComposeModalInner {...props} />
+    </WithMantine>
+  )
+}
+
+function LockedItemComposeModalInner({
   onAdd,
   onClose,
   title = 'Send a locked item',
@@ -236,7 +247,12 @@ export function LockedItemComposeModal({
           void submit()
         }}
       >
-        <h2 className="locked-compose__title" id="locked-compose-title">
+        <h2
+          className="locked-compose__title"
+          id="locked-compose-title"
+          // Title role (15/600), not the shell class's off-scale 17px.
+          style={{ font: 'var(--qrbit-text-title)', letterSpacing: 'var(--qrbit-text-title-tracking)' }}
+        >
           {title}
         </h2>
         <p className="locked-compose__intro muted">
@@ -378,17 +394,29 @@ export function LockedItemComposeModal({
         ) : null}
 
         <div className="locked-compose__actions">
-          <button type="submit" className="button locked-compose__submit" disabled={!canSubmit}>
-            {submitLabel}
-          </button>
-          <button
+          {/* DESIGN.md's dialog order: quiet first, then the affirmative action. */}
+          <Button
             type="button"
-            className="button locked-compose__cancel"
+            className="locked-compose__cancel"
+            variant="default"
+            size="sm"
+            fullWidth
             onClick={onClose}
             disabled={busy}
           >
             Cancel
-          </button>
+          </Button>
+          <Button
+            type="submit"
+            className="locked-compose__submit"
+            color="signal"
+            size="sm"
+            fullWidth
+            leftSection={<IconLock size={16} aria-hidden="true" />}
+            disabled={!canSubmit}
+          >
+            {submitLabel}
+          </Button>
         </div>
       </form>
     </div>
@@ -396,8 +424,8 @@ export function LockedItemComposeModal({
 }
 
 /**
- * D6's rejection, worded as an action: the regular T text / ¶ rich text / 📎 file item
- * named by `noun` is still encrypted end to end in transit, so the secret is not being
+ * D6's rejection, worded as an action: the regular text, rich text or file item named
+ * by `noun` is still encrypted end to end in transit, so the secret is not being
  * asked to travel in the clear.
  */
 function tooLargeMessage(limit: number, noun: 'file' | 'text' | 'rich text'): string {

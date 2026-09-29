@@ -24,6 +24,9 @@
 
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { Button } from '@mantine/core'
+import { IconLockOpen } from '@tabler/icons-react'
+import { WithMantine } from '../common/WithMantine'
 
 export interface UnlockModalProps {
   /** The item's plaintext label, shown so the user knows which password to type. */
@@ -43,7 +46,15 @@ interface UnlockError {
   message: string
 }
 
-export function UnlockModal({ label, onSubmit, onClose }: UnlockModalProps) {
+export function UnlockModal(props: UnlockModalProps) {
+  return (
+    <WithMantine>
+      <UnlockModalInner {...props} />
+    </WithMantine>
+  )
+}
+
+function UnlockModalInner({ label, onSubmit, onClose }: UnlockModalProps) {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<UnlockError | null>(null)
@@ -105,7 +116,13 @@ export function UnlockModal({ label, onSubmit, onClose }: UnlockModalProps) {
           void submit()
         }}
       >
-        <h2 className="unlock-modal__title" id="unlock-modal-title">
+        <h2
+          className="unlock-modal__title"
+          id="unlock-modal-title"
+          // The Title role (15/600) rather than the shell class's off-scale 17px; the style
+          // prop is the only way to set it without editing the token layer.
+          style={{ font: 'var(--qrbit-text-title)', letterSpacing: 'var(--qrbit-text-title-tracking)' }}
+        >
           Unlock “{label}”
         </h2>
 
@@ -137,22 +154,30 @@ export function UnlockModal({ label, onSubmit, onClose }: UnlockModalProps) {
           </p>
         ) : null}
 
+        {/* DESIGN.md's dialog order: the quiet action first, the affirmative one last. */}
         <div className="unlock-modal__actions">
-          <button
-            type="submit"
-            className="button unlock-modal__submit"
-            disabled={busy || password === ''}
-          >
-            Unlock
-          </button>
-          <button
+          <Button
             type="button"
-            className="button unlock-modal__cancel"
+            className="unlock-modal__cancel"
+            variant="default"
+            size="sm"
+            fullWidth
             onClick={onClose}
             disabled={busy}
           >
             Cancel
-          </button>
+          </Button>
+          <Button
+            type="submit"
+            className="unlock-modal__submit"
+            color="signal"
+            size="sm"
+            fullWidth
+            leftSection={<IconLockOpen size={16} aria-hidden="true" />}
+            disabled={busy || password === ''}
+          >
+            Unlock
+          </Button>
         </div>
 
         <p className="unlock-modal__hint muted">

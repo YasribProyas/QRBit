@@ -1,11 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Badge, Button, Group, Paper, Stack, Text } from '@mantine/core'
+import {
+  IconAlertTriangle,
+  IconArrowRight,
+  IconCheck,
+  IconFolder,
+  IconLibrary,
+  IconRefresh,
+} from '@tabler/icons-react'
 import { AddItemBar } from './AddItemBar'
 import { QRDisplay } from '../QRDisplay'
 import { SafetyPhraseOverlay } from './SafetyPhraseOverlay'
 import { SessionBoard, isSenderRole } from './SessionBoard'
 import { SaveToLibraryModal } from '../library/SaveToLibraryModal'
 import { FolderPickerModal } from '../library/FolderPickerModal'
+import { WithMantine } from '../common/WithMantine'
 import { sessionItemsToLibraryFile } from '../../lib/dossier'
 import { ROOT_FOLDER_ID } from '../../lib/library'
 import { ITEM_TYPE_ICONS } from '../../lib/itemType'
@@ -32,8 +42,28 @@ export interface SessionViewProps {
  * the status bar, role label, connecting code/QR panel, error recovery,
  * pairing safety-phrase overlay, active board, and ended-session save flow.
  */
-export function SessionView({ session, showConnectingCode = true }: SessionViewProps) {
+export function SessionView(props: SessionViewProps) {
+  return (
+    <WithMantine>
+      <SessionViewInner {...props} />
+    </WithMantine>
+  )
+}
+
+/** A resting panel: Raised, 1px Border, radius lg, no shadow (DESIGN.md, Panels and Rows). */
+const PANEL_STYLE = {
+  background: 'var(--qrbit-raised)',
+  border: '1px solid var(--qrbit-border)',
+  borderRadius: 'var(--qrbit-radius-lg)',
+} as const
+
+function SessionViewInner({ session, showConnectingCode = true }: SessionViewProps) {
   const { notifyUnload, phase } = session
+  // What the code can actually state about the phrase: this device confirmed, or the peer's
+  // confirmation arrived. Neither is "the words matched" — that comparison is the human's.
+  const phraseConfirmed = isSenderRole(session.role)
+    ? session.phraseConfirmed
+    : session.peerConfirmed
 
   useEffect(() => {
     if (phase !== 'active' && phase !== 'pairing') return
@@ -57,19 +87,49 @@ export function SessionView({ session, showConnectingCode = true }: SessionViewP
       <p className="muted">{session.roleLabel}</p>
 
       {session.safetyPhrase !== null ? (
-        <div className="flex items-center justify-between text-xs py-2 px-3.5 bg-slate-900 text-white rounded-xl border border-slate-700/80 shadow-2xs">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-[11px] text-slate-300 font-mono">Verification:</span>
-          </div>
-          <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-sky-400">
-            {session.safetyPhrase.map((w) => (
-              <span key={w} className="px-2 py-0.5 bg-slate-800 rounded border border-slate-700 uppercase">
-                {w}
-              </span>
-            ))}
-          </div>
-        </div>
+        <Paper p="md" radius="lg" style={PANEL_STYLE}>
+          <Group justify="space-between" gap="md" wrap="wrap">
+            <Group gap="sm" wrap="nowrap">
+              <span
+                aria-hidden="true"
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: 'var(--qrbit-radius-full)',
+                  flex: 'none',
+                  // Green only once a confirmation exists; neutral while it does not.
+                  background: phraseConfirmed
+                    ? 'var(--qrbit-success)'
+                    : 'var(--qrbit-border-strong)',
+                }}
+              />
+              <Text span className="qrbit-text-label" c="dimmed">
+                Safety phrase
+              </Text>
+              <Text span className="qrbit-text-body-secondary" c="dimmed">
+                {phraseConfirmed ? 'confirmed on this screen' : 'not confirmed yet'}
+              </Text>
+            </Group>
+            <Group gap="xs" wrap="nowrap">
+              {session.safetyPhrase.map((word) => (
+                <Text
+                  key={word}
+                  span
+                  className="qrbit-text-data"
+                  style={{
+                    background: 'var(--qrbit-sunken)',
+                    border: '1px solid var(--qrbit-border)',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                    padding: '2px 8px',
+                    color: 'var(--qrbit-ink)',
+                  }}
+                >
+                  {word}
+                </Text>
+              ))}
+            </Group>
+          </Group>
+        </Paper>
       ) : null}
 
       {showConnectingCode &&
@@ -86,7 +146,12 @@ export function SessionView({ session, showConnectingCode = true }: SessionViewP
           ) : null}
           <h2 className="panel__title">Scan to send files here</h2>
           <QRDisplay code={session.sessionCode} />
-          <p className="code">{session.sessionCode}</p>
+          <p
+            className="code qrbit-text-data"
+            // Data role exactly (13px mono, tabular figures): `.code` alone would leave the
+            // session code on the pre-token 24px/0.18em treatment.
+            style={{ font: 'var(--qrbit-text-data)', letterSpacing: 'var(--qrbit-text-data-tracking)' }}
+          >{session.sessionCode}</p>
           <p className="muted">
             On the other device, open <code>{`${APP_URL}/session?code=${session.sessionCode}`}</code>
           </p>
@@ -100,36 +165,51 @@ export function SessionView({ session, showConnectingCode = true }: SessionViewP
       session.phase === 'connecting' ? (
         <section className="panel">
           <h2 className="panel__title">Session code</h2>
-          <p className="code">{session.sessionCode}</p>
+          <p
+            className="code qrbit-text-data"
+            // Data role exactly (13px mono, tabular figures): `.code` alone would leave the
+            // session code on the pre-token 24px/0.18em treatment.
+            style={{ font: 'var(--qrbit-text-data)', letterSpacing: 'var(--qrbit-text-data-tracking)' }}
+          >{session.sessionCode}</p>
           <p className="muted">
             On the other device, open <code>/session?code={session.sessionCode}</code>
           </p>
-          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
-            <Link
-              className="link button"
+          <Group justify="center">
+            <Button
+              component={Link}
               to="/"
-              style={{ textAlign: 'center', textDecoration: 'none', width: 'auto', padding: '0.6rem 1.5rem' }}
+              variant="default"
+              size="sm"
+              leftSection={<IconArrowRight size={16} aria-hidden="true" />}
               onClick={() => session.abort()}
             >
               Cancel &amp; Return Home
-            </Link>
-          </div>
+            </Button>
+          </Group>
         </section>
       ) : null}
 
       {session.errorMessage !== null ? (
         <section className="panel panel--error home__qr-error" role="alert">
-          <h2 className="panel__title">Error</h2>
+          <Group gap="sm" wrap="nowrap">
+            <IconAlertTriangle size={18} aria-hidden="true" style={{ color: 'var(--qrbit-danger)' }} />
+            <h2 className="panel__title">Error</h2>
+          </Group>
           <p className="muted">Could not reach the signaling server.</p>
           <p className="item-error">{session.errorMessage}</p>
-          <div className="session-error__actions">
-            <button type="button" className="button" onClick={session.restart}>
+          <Group gap="sm">
+            <Button
+              size="sm"
+              color="signal"
+              leftSection={<IconRefresh size={16} aria-hidden="true" />}
+              onClick={session.restart}
+            >
               Try again
-            </button>
-            <Link className="link" to="/">
+            </Button>
+            <Button component={Link} to="/" variant="subtle" size="sm" c="dimmed">
               Go to home
-            </Link>
-          </div>
+            </Button>
+          </Group>
         </section>
       ) : null}
 
@@ -172,8 +252,7 @@ export function SessionView({ session, showConnectingCode = true }: SessionViewP
  * transfer they just made. A received item is in memory only and dies with the session
  * (PLAN.md §1), so this is its one chance to be kept.
  */
-export function SessionEnded({ api }: { api: UseSessionResult }) {
-  const folders = useLibraryStore((state) => state.folders)
+export function SessionEnded({ api }: { api: UseSessionResult }) {  const folders = useLibraryStore((state) => state.folders)
   const error = useLibraryStore((state) => state.error)
   const refresh = useLibraryStore((state) => state.refresh)
   const saveFromSession = useLibraryStore((state) => state.saveFromSession)
@@ -233,39 +312,60 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {
                 </span>
                 <span className="library-modal__item-name">{row.name}</span>
                 {savedIds.includes(row.id) ? (
-                  <span className="badge library-modal__saved">Saved</span>
+                  <Badge
+                    className="library-modal__saved"
+                    variant="light"
+                    color="success"
+                    radius="full"
+                    ff="sans"
+                    leftSection={<IconCheck size={13} aria-hidden="true" />}
+                  >
+                    Saved
+                  </Badge>
                 ) : null}
                 {!row.complete ? (
-                  <span className="library-modal__item-note muted">Transfer did not finish</span>
+                  /* Caution, not failure: the transfer stopped, nothing here says it broke. */
+                  <span className="library-modal__item-note qrbit-text-label" style={{ color: 'var(--qrbit-warning)' }}>
+                    Transfer did not finish
+                  </span>
                 ) : null}
               </li>
             ))}
           </ul>
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="button session-ended__save"
+          <Group gap="sm" wrap="wrap">
+            {/*
+              One primary per screen (DESIGN.md, "The One Blue Rule"): the item-by-item save
+              dialog is the affirmative action, the whole-dossier export is its quieter sibling.
+            */}
+            <Button
+              className="session-ended__save"
+              size="sm"
+              color="signal"
+              leftSection={<IconLibrary size={16} aria-hidden="true" />}
               onClick={() => {
                 setPickerOpen(true)
               }}
             >
               Save to Library →
-            </button>
-            <button
-              type="button"
-              className="button session-ended__save-dossier"
-              style={{
-                backgroundColor: '#1D4ED8',
-                color: '#ffffff',
-                border: 'none',
-              }}
+            </Button>
+            <Button
+              className="session-ended__save-dossier"
+              variant="default"
+              size="sm"
+              leftSection={<IconFolder size={16} aria-hidden="true" />}
+              disabled={dossierSaved}
               onClick={() => {
                 setDossierPickerOpen(true)
               }}
             >
-              {dossierSaved ? 'Dossier File Saved ✓' : 'Save as Dossier File 📁'}
-            </button>
-          </div>
+              {dossierSaved ? 'Dossier file saved' : 'Save as dossier file'}
+            </Button>
+            {dossierSaved ? (
+              <Text span className="qrbit-text-body-secondary" c="success">
+                Saved to the library on this device.
+              </Text>
+            ) : null}
+          </Group>
         </>
       )}
 
@@ -275,20 +375,25 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {
         </p>
       ) : null}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.75rem' }}>
+      <Stack gap="sm" mt="md">
         {api.errorMessage === null ? (
-          <button type="button" className="button" onClick={api.restart}>
+          <Button
+            variant="default"
+            size="sm"
+            leftSection={<IconRefresh size={16} aria-hidden="true" />}
+            onClick={api.restart}
+          >
             Start a new session
-          </button>
+          </Button>
         ) : null}
         <Link
           className="link"
           to="/"
-          style={{ textAlign: 'center', padding: '0.4rem', textDecoration: 'none', color: 'var(--text-muted)' }}
+          style={{ textDecoration: 'none' }}
         >
-          ← Return to Home
+          Return to Home
         </Link>
-      </div>
+      </Stack>
 
       {pickerOpen ? (
         <SaveToLibraryModal

@@ -6,10 +6,10 @@
  * before the item is announced, and that password never travels. PLAN.md §9 gives
  * the item two views, and they differ only in what the sender already knows:
  *
- *   - SENDER — label, 🔒 badge and the inner type the sender chose. The sender
+ *   - SENDER — label, the Locked badge and the inner type the sender chose. The sender
  *     knows the password, so the row keeps its Unlock affordance: it is the only
  *     way to check the item really decrypts back to what was meant.
- *   - RECEIVER — label and 🔒 badge only, plus the same Unlock affordance
+ *   - RECEIVER — label and the Locked badge only, plus the same Unlock affordance
  *     (PLAN.md §9: "Label only + Unlock → password modal → inline reveal").
  *
  * Encryption, the wrong-password outcome and the memory-only plaintext all belong
@@ -27,11 +27,14 @@
  */
 
 import { useEffect, useState } from 'react'
+import { Badge, Button, Group, Text } from '@mantine/core'
+import { IconLock, IconLockOpen, IconLockPlus } from '@tabler/icons-react'
 import type {
   LockedItem as LockedItemModel,
   RichTextItem as RichTextItemModel,
 } from '../../../store/sessionStore'
 import { UnlockModal } from '../UnlockModal'
+import { WithMantine } from '../../common/WithMantine'
 import { RichTextItem } from './RichTextItem'
 
 export interface LockedItemViewProps {
@@ -55,7 +58,15 @@ const INNER_TYPE_LABELS: Record<LockedItemModel['innerType'], string> = {
   file: 'File',
 }
 
-export function LockedItem({ item, sender, onUnlock, onLockAgain }: LockedItemViewProps) {
+export function LockedItem(props: LockedItemViewProps) {
+  return (
+    <WithMantine>
+      <LockedItemInner {...props} />
+    </WithMantine>
+  )
+}
+
+function LockedItemInner({ item, sender, onUnlock, onLockAgain }: LockedItemViewProps) {
   const [unlockOpen, setUnlockOpen] = useState(false)
 
   /*
@@ -68,45 +79,71 @@ export function LockedItem({ item, sender, onUnlock, onLockAgain }: LockedItemVi
 
   return (
     <div className="locked-item">
-      <div className="locked-item__row">
-        <span className="locked-item__badge" aria-hidden="true">
-          🔒
-        </span>
-        <span className="locked-item__label">{item.label}</span>
-        {/* Only the sender chose the type, and only the sender's row states it. */}
-        {sender ? (
-          <span className="locked-item__inner-type">{INNER_TYPE_LABELS[item.innerType]}</span>
-        ) : null}
-
-        {canUnlock ? (
-          <button
-            type="button"
-            className="button button--link locked-item__unlock"
-            title={
-              sender
-                ? 'Check this item with the password you set'
-                : 'Enter the password for this item'
-            }
-            onClick={() => {
-              setUnlockOpen(true)
-            }}
+      <Group justify="space-between" align="center" gap="sm" wrap="wrap">
+        {/*
+          A badge carries an icon AND a word (DESIGN.md), and `locked` is the hue reserved for
+          exactly this meaning. The word is "Locked", not "Encrypted": what the row knows is
+          the item's own type, which is the honest claim before the ciphertext has landed.
+        */}
+        <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+          <Badge
+            className="locked-item__badge"
+            variant="light"
+            color="locked"
+            radius="full"
+            ff="sans"
+            leftSection={<IconLock size={13} aria-hidden="true" />}
           >
-            Unlock
-          </button>
-        ) : null}
+            Locked
+          </Badge>
+          <Text component="span" className="locked-item__label qrbit-text-body">
+            {item.label}
+          </Text>
+          {/* Only the sender chose the type, and only the sender's row states it. */}
+          {sender ? (
+            <Text component="span" className="locked-item__inner-type" c="dimmed">
+              {INNER_TYPE_LABELS[item.innerType]}
+            </Text>
+          ) : null}
+        </Group>
 
-        {unlocked ? (
-          <button
-            type="button"
-            className="button button--link locked-item__lock-again"
-            onClick={() => {
-              onLockAgain(item.id)
-            }}
-          >
-            Lock again
-          </button>
-        ) : null}
-      </div>
+        <Group gap="xs" wrap="nowrap">
+          {canUnlock ? (
+            <Button
+              type="button"
+              className="locked-item__unlock"
+              variant="default"
+              size="xs"
+              leftSection={<IconLockOpen size={14} aria-hidden="true" />}
+              title={
+                sender
+                  ? 'Check this item with the password you set'
+                  : 'Enter the password for this item'
+              }
+              onClick={() => {
+                setUnlockOpen(true)
+              }}
+            >
+              Unlock
+            </Button>
+          ) : null}
+
+          {unlocked ? (
+            <Button
+              type="button"
+              className="locked-item__lock-again"
+              variant="subtle"
+              size="xs"
+              leftSection={<IconLockPlus size={14} aria-hidden="true" />}
+              onClick={() => {
+                onLockAgain(item.id)
+              }}
+            >
+              Lock again
+            </Button>
+          ) : null}
+        </Group>
+      </Group>
 
       {unlocked ? (
         <LockedReveal item={item} />

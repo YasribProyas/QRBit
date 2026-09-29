@@ -14,7 +14,11 @@
  */
 
 import { useEffect, useState } from 'react'
+import { Badge, Group, Text } from '@mantine/core'
+import { IconCircleCheck, IconFileDownload } from '@tabler/icons-react'
 import { ProgressRing } from '../../ProgressRing'
+import { WithMantine } from '../../common/WithMantine'
+import { formatByteSize } from '../../../lib/byteSize'
 import type { FileItem as FileItemModel } from '../../../store/sessionStore'
 
 export interface FileItemViewProps {
@@ -22,7 +26,15 @@ export interface FileItemViewProps {
   item: FileItemModel
 }
 
-export function FileItem({ item }: FileItemViewProps) {
+export function FileItem(props: FileItemViewProps) {
+  return (
+    <WithMantine>
+      <FileItemInner {...props} />
+    </WithMantine>
+  )
+}
+
+function FileItemInner({ item }: FileItemViewProps) {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
 
   /*
@@ -45,29 +57,65 @@ export function FileItem({ item }: FileItemViewProps) {
   }, [item.blob])
 
   const transferring = item.status === 'pending' || item.status === 'transferring'
+  const size = item.totalSize > 0 ? formatByteSize(item.totalSize) : null
 
   return (
     <div className="file-item" data-status={item.status}>
-      <div className="file-item__row">
-        <span className="file-item__name">{item.fileName}</span>
+      <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
+        <Text span className="file-item__name qrbit-text-body" style={{ overflowWrap: 'anywhere' }}>
+          {item.fileName}
+        </Text>
         {transferring ? (
-          <ProgressRing progress={item.progress} label={`${item.fileName} transfer progress`} />
+          <Group gap="xs" wrap="nowrap">
+            <ProgressRing progress={item.progress} label={`${item.fileName} transfer progress`} />
+            {/* Data role: mono with tabular figures, so the counter cannot reflow the row. */}
+            <Text span className="file-item__percent qrbit-text-data" c="warning">
+              {Math.round(item.progress)}%
+            </Text>
+          </Group>
         ) : null}
-        {transferring ? (
-          <span className="file-item__percent muted">{Math.round(item.progress)}%</span>
-        ) : null}
-      </div>
+      </Group>
+
+      {/* Every number here is the store's own: the announce's byte count and chunk count. */}
+      {size !== null || item.totalChunks > 0 ? (
+        <Group gap="sm" wrap="nowrap">
+          {size !== null ? (
+            <Text span className="qrbit-text-data" c="dimmed">
+              {size}
+            </Text>
+          ) : null}
+          {item.totalChunks > 0 ? (
+            <Text span className="qrbit-text-data" c="dimmed">
+              {item.totalChunks} chunks
+            </Text>
+          ) : null}
+        </Group>
+      ) : null}
 
       {downloadUrl !== null && item.status === 'complete' ? (
-        <a className="file-item__download" href={downloadUrl} download={item.fileName}>
-          Download
-        </a>
+        <Group gap="sm" wrap="nowrap">
+          <Badge
+            variant="light"
+            color="success"
+            radius="full"
+            ff="sans"
+            leftSection={<IconCircleCheck size={13} aria-hidden="true" />}
+          >
+            Complete
+          </Badge>
+          <a className="file-item__download" href={downloadUrl} download={item.fileName}>
+            <Group gap="xs" wrap="nowrap">
+              <IconFileDownload size={16} aria-hidden="true" />
+              <span>Download</span>
+            </Group>
+          </a>
+        </Group>
       ) : null}
 
       {item.status === 'error' ? (
-        <p className="item-error" role="alert">
+        <Text span className="item-error" c="danger" role="alert">
           The file transfer failed.
-        </p>
+        </Text>
       ) : null}
     </div>
   )

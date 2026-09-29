@@ -1,13 +1,13 @@
 /**
  * Add item bar (PLAN.md §9: "Add item bar (sender only)").
  *
- * Six actions are specified there — T text, ¶ rich text, 🖼 image, 📎 file,
- * 🔒 locked, 📚 from library — and all six exist now:
+ * Six actions are specified there — text, rich text, image, file, locked, and from
+ * library — and all six exist now, each as one icon-only `ActionIcon` with an `aria-label`:
  *
- *   - 🔒 opens the Phase 4 compose modal (label, inner type, password twice,
+ *   - Locked opens the Phase 4 compose modal (label, inner type, password twice,
  *     content). The bar only opens it: the modal owns the draft and calls
  *     `addLockedItem`, which encrypts and sends.
- *   - 📚 opens the Phase 5 library sheet: folders on top (PLAN.md §6.4's tree as a
+ *   - From library opens the Phase 5 library sheet: folders on top (PLAN.md §6.4's tree as a
  *     picker), the chosen folder's items below, and tapping an item sends it through
  *     `sendLibraryItem` immediately. The sheet stays open, so a user can send several
  *     items in a row, and it shows 'Sent' against what has already gone.
@@ -23,6 +23,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import type { ReactElement, ReactNode } from 'react'
+import { ActionIcon, Badge, Button, Group, Text } from '@mantine/core'
 import {
   IconBlockquote,
   IconBooks,
@@ -31,6 +33,7 @@ import {
   IconPaperclip,
   IconPhoto,
 } from '@tabler/icons-react'
+import { WithMantine } from '../common/WithMantine'
 import type { ItemsApi } from './SessionBoard'
 import { LockedItemComposeModal } from './LockedItemComposeModal'
 import type { LockedItemInput } from './LockedItemComposeModal'
@@ -63,7 +66,20 @@ export interface AddItemBarProps {
   maxLockedFileBytes?: number
 }
 
-export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
+export function AddItemBar(props: AddItemBarProps) {
+  return (
+    <WithMantine>
+      <AddItemBarInner {...props} />
+    </WithMantine>
+  )
+}
+
+/**
+ * One affordance in the bar: an icon-only `ActionIcon` with a 44px box (DESIGN.md's touch
+ * minimum — this is tapped on a phone while the other phone is being aimed) and a real
+ * `aria-label`, which is also what the tests and the screen reader both read.
+ */
+function AddItemBarInner({ api, maxLockedFileBytes }: AddItemBarProps) {
   const imageInput = useRef<HTMLInputElement | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const [lockedComposeOpen, setLockedComposeOpen] = useState(false)
@@ -77,50 +93,48 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
     }
   }
 
+  const addAction = (label: string, icon: ReactNode, onClick: () => void): ReactElement => (
+    <ActionIcon
+      key={label}
+      variant="default"
+      size="md"
+      radius="sm"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {icon}
+    </ActionIcon>
+  )
+
   return (
     <>
-      <div className="add-item-bar" role="toolbar" aria-label="Add item">
-        <button
-          type="button"
-          className="add-item-bar__button"
-          aria-label="Add text item"
-          title="Text"
-          onClick={() => {
+      <Group
+        className="add-item-bar"
+        role="toolbar"
+        aria-label="Add item"
+        gap="sm"
+        wrap="wrap"
+        align="center"
+      >
+        {addAction(
+          'Add text item',
+          <IconNotes size={20} aria-hidden="true" />, () => {
             api.addTextItem()
-          }}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <IconNotes size={18} />
-          <span style={{ display: 'none' }}>T</span>
-        </button>
-
-        <button
-          type="button"
-          className="add-item-bar__button"
-          aria-label="Add rich text item"
-          title="Rich text"
-          onClick={() => {
+          },
+        )}
+        {addAction(
+          'Add rich text item',
+          <IconBlockquote size={20} aria-hidden="true" />, () => {
             api.addRichTextItem()
-          }}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <IconBlockquote size={18} />
-          <span style={{ display: 'none' }}>¶</span>
-        </button>
-
-        <button
-          type="button"
-          className="add-item-bar__button"
-          aria-label="Add images"
-          title="Image"
-          onClick={() => {
+          },
+        )}
+        {addAction(
+          'Add images',
+          <IconPhoto size={20} aria-hidden="true" />, () => {
             imageInput.current?.click()
-          }}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <IconPhoto size={18} />
-          <span style={{ display: 'none' }}>🖼</span>
-        </button>
+          },
+        )}
         <input
           ref={imageInput}
           className="add-item-bar__image-input"
@@ -135,20 +149,12 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
             event.currentTarget.value = ''
           }}
         />
-
-        <button
-          type="button"
-          className="add-item-bar__button"
-          aria-label="Add files"
-          title="File"
-          onClick={() => {
+        {addAction(
+          'Add files',
+          <IconPaperclip size={20} aria-hidden="true" />, () => {
             fileInput.current?.click()
-          }}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <IconPaperclip size={18} />
-          <span style={{ display: 'none' }}>📎</span>
-        </button>
+          },
+        )}
         <input
           ref={fileInput}
           className="add-item-bar__file-input"
@@ -161,40 +167,25 @@ export function AddItemBar({ api, maxLockedFileBytes }: AddItemBarProps) {
             event.currentTarget.value = ''
           }}
         />
-
-        <button
-          type="button"
-          className="add-item-bar__button"
-          aria-label="Add locked item"
-          title="Locked item"
-          onClick={() => {
+        {addAction(
+          'Add locked item',
+          <IconLock size={20} aria-hidden="true" />, () => {
             setLockedComposeOpen(true)
-          }}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <IconLock size={18} />
-          <span style={{ display: 'none' }}>🔒</span>
-        </button>
-
-        <button
-          type="button"
-          className="add-item-bar__button"
-          aria-label="Send from library"
-          title="From library"
-          onClick={() => {
+          },
+        )}
+        {addAction(
+          'Send from library',
+          <IconBooks size={20} aria-hidden="true" />, () => {
             setLibraryOpen(true)
-          }}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <IconBooks size={18} />
-          <span style={{ display: 'none' }}>📚</span>
-        </button>
-        <p className="add-item-bar__hint muted">
-          <IconLock size={14} color="#f87171" style={{ verticalAlign: 'middle', marginRight: '4px' }} />
-          <span style={{ display: 'none' }}>🔒 </span>
-          locked items also need a password to open — the label stays visible
-        </p>
-      </div>
+          },
+        )}
+        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+          <IconLock size={15} aria-hidden="true" style={{ color: 'var(--qrbit-locked)', flex: 'none' }} />
+          <Text component="span" size="xs" c="dimmed">
+            Locked items need a password to open; the label stays visible.
+          </Text>
+        </Group>
+      </Group>
 
       {/*
         Outside the toolbar: it is a modal dialog covering the page, not another
@@ -231,7 +222,7 @@ export interface LibrarySendSheetProps {
 }
 
 /**
- * The 📚 sheet (PLAN.md §9/§16 Phase 5).
+ * The "from library" sheet (PLAN.md §9/§16 Phase 5).
  *
  * Lightweight on purpose: the folder tree picks a source folder and the list below
  * shows that folder's items, so one tap is one send. There is no rename, move or
@@ -245,7 +236,15 @@ export interface LibrarySendSheetProps {
  * marks a row, it never gates a second send of the same item, which is a legitimate
  * thing to ask for.
  */
-export function LibrarySendSheet({ onSend, onClose }: LibrarySendSheetProps) {
+export function LibrarySendSheet(props: LibrarySendSheetProps) {
+  return (
+    <WithMantine>
+      <LibrarySendSheetInner {...props} />
+    </WithMantine>
+  )
+}
+
+function LibrarySendSheetInner({ onSend, onClose }: LibrarySendSheetProps) {
   const folders = useLibraryStore((state) => state.folders)
   const items = useLibraryStore((state) => state.items)
   const loading = useLibraryStore((state) => state.loading)
@@ -288,7 +287,12 @@ export function LibrarySendSheet({ onSend, onClose }: LibrarySendSheetProps) {
       aria-labelledby="library-send-title"
     >
       <div className="library-modal__panel">
-        <h2 className="library-modal__title" id="library-send-title">
+        <h2
+          className="library-modal__title"
+          id="library-send-title"
+          // Title role (15/600), not the shell class's off-scale 17px.
+          style={{ font: 'var(--qrbit-text-title)', letterSpacing: 'var(--qrbit-text-title-tracking)' }}
+        >
           Send from library
         </h2>
         <p className="library-modal__hint muted">
@@ -311,17 +315,23 @@ export function LibrarySendSheet({ onSend, onClose }: LibrarySendSheetProps) {
                 <span className="library-item__icon" aria-hidden="true">
                   {ITEM_TYPE_ICONS[item.type]}
                 </span>
-                <button
+                <Button
                   type="button"
-                  className="button button--link library-modal__item-name library-send__item"
+                  className="library-modal__item-name library-send__item"
+                  variant="subtle"
+                  size="xs"
+                  justify="flex-start"
+                  style={{ flex: '1 1 auto', minWidth: 0 }}
                   onClick={() => {
                     send(item)
                   }}
                 >
                   {item.name}
-                </button>
+                </Button>
                 {sentIds.includes(item.id) ? (
-                  <span className="badge library-modal__saved">Sent</span>
+                  <Badge className="library-modal__saved" variant="light" color="success" radius="full" ff="sans">
+                    Sent
+                  </Badge>
                 ) : null}
               </li>
             ))}
@@ -341,9 +351,16 @@ export function LibrarySendSheet({ onSend, onClose }: LibrarySendSheetProps) {
         ) : null}
 
         <div className="library-modal__actions">
-          <button type="button" className="button library-modal__done" onClick={onClose}>
+          <Button
+            type="button"
+            className="library-modal__done"
+            variant="default"
+            size="sm"
+            fullWidth
+            onClick={onClose}
+          >
             Done
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -19,8 +19,11 @@
  */
 
 import { useState } from 'react'
+import { Button } from '@mantine/core'
+import { IconFolderPlus } from '@tabler/icons-react'
 import { FolderPicker } from './FolderPicker'
 import { ITEM_TYPE_ICONS } from '../../lib/itemType'
+import { WithMantine } from '../common/WithMantine'
 import type { LibraryFolder, LibraryItemType } from '../../lib/library'
 
 /** One session item as this dialog needs it: an id, a name and its type. */
@@ -46,7 +49,15 @@ export interface SaveToLibraryModalProps {
   onClose: () => void
 }
 
-export function SaveToLibraryModal({
+export function SaveToLibraryModal(props: SaveToLibraryModalProps) {
+  return (
+    <WithMantine>
+      <SaveToLibraryModalInner {...props} />
+    </WithMantine>
+  )
+}
+
+function SaveToLibraryModalInner({
   items,
   folders,
   savedIds = [],
@@ -90,7 +101,12 @@ export function SaveToLibraryModal({
       aria-labelledby="save-to-library-title"
     >
       <div className="library-modal__panel">
-        <h2 className="library-modal__title" id="save-to-library-title">
+        <h2
+          className="library-modal__title"
+          id="save-to-library-title"
+          // Title role (15/600), not the shell class's off-scale 17px.
+          style={{ font: 'var(--qrbit-text-title)', letterSpacing: 'var(--qrbit-text-title-tracking)' }}
+        >
           Save to library
         </h2>
         <p className="library-modal__hint muted">
@@ -105,16 +121,21 @@ export function SaveToLibraryModal({
           label="Save to folder"
         />
 
-        <button
+        <Button
           type="button"
-          className="button library-modal__save-all"
+          className="library-modal__save-all"
+          color="signal"
+          variant="filled"
+          size="sm"
+          fullWidth
+          leftSection={<IconFolderPlus size={16} aria-hidden="true" />}
           disabled={saveable.length === 0 || pending !== null}
           onClick={() => {
             void runSave('all', () => onSaveAll(folderId))
           }}
         >
           Save all ({saveable.length})
-        </button>
+        </Button>
 
         {items.length === 0 ? (
           <p className="library-modal__empty muted">No received items to save.</p>
@@ -137,17 +158,19 @@ export function SaveToLibraryModal({
                   {saved ? (
                     <span className="badge library-modal__saved">Saved</span>
                   ) : (
-                    <button
+                    <Button
                       type="button"
-                      className="button button--link library-modal__save"
-                      disabled={!item.complete || pending !== null}
+                      className="library-modal__save"
+                      variant="default"
+                      size="xs"
                       title={item.complete ? undefined : 'The transfer did not finish'}
+                      disabled={!item.complete || pending !== null}
                       onClick={() => {
                         void runSave(item.id, () => onSaveItem(item.id, folderId))
                       }}
                     >
                       Save
-                    </button>
+                    </Button>
                   )}
 
                   {!item.complete ? (
@@ -166,14 +189,17 @@ export function SaveToLibraryModal({
         ) : null}
 
         <div className="library-modal__actions">
-          <button
+          <Button
             type="button"
-            className="button library-modal__done"
+            className="library-modal__done"
+            variant="default"
+            size="sm"
+            fullWidth
             onClick={onClose}
             disabled={pending !== null}
           >
             Done
-          </button>
+          </Button>
         </div>
       </div>
     </div>

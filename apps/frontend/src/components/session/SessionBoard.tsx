@@ -12,7 +12,10 @@
  */
 
 import type { SessionRole } from '../../lib/signaling'
-import { IconX } from '@tabler/icons-react'
+import { ActionIcon, Badge, Group, Text } from '@mantine/core'
+import type { MantineColor } from '@mantine/core'
+import { IconTrash } from '@tabler/icons-react'
+import { WithMantine } from '../common/WithMantine'
 import { useSessionStore } from '../../store/sessionStore'
 import type { ItemStatus, ItemType, SessionItem } from '../../store/sessionStore'
 import type { LockedItemInput } from './LockedItemComposeModal'
@@ -68,6 +71,19 @@ const STATUS_LABELS: Record<ItemStatus, string> = {
   error: 'Error',
 }
 
+/**
+ * One state vocabulary for the whole board (DESIGN.md, "The Meaningful Colour Rule"): green
+ * only when the transport says the item arrived, amber only while it is in flight — which is
+ * a caution, not a failure — red only when it genuinely failed, and neutral for a state the
+ * transport has not reported on yet. No row colours itself.
+ */
+const STATUS_COLORS: Record<ItemStatus, MantineColor> = {
+  pending: 'gray',
+  transferring: 'warning',
+  complete: 'success',
+  error: 'danger',
+}
+
 const TYPE_LABELS: Record<ItemType, string> = {
   text: 'Text',
   richtext: 'Rich text',
@@ -82,7 +98,15 @@ export interface SessionBoardProps {
   role: SessionRole | null
 }
 
-export function SessionBoard({ api, role }: SessionBoardProps) {
+export function SessionBoard(props: SessionBoardProps) {
+  return (
+    <WithMantine>
+      <SessionBoardInner {...props} />
+    </WithMantine>
+  )
+}
+
+function SessionBoardInner({ api, role }: SessionBoardProps) {
   const items = useSessionStore((state) => state.items)
   const editable = isSenderRole(role)
 
@@ -101,28 +125,32 @@ export function SessionBoard({ api, role }: SessionBoardProps) {
               data-item-type={item.type}
               data-item-status={item.status}
             >
-              <div className="session-board__row-header">
-                <span className="session-board__type">{TYPE_LABELS[item.type]}</span>
-                {/*
-                  The status the transport keeps for this item. It is the one piece
-                  of per-item state that is meaningful on both sides equally.
-                */}
-                <span className={`item-status item-status--${item.status}`}>
-                  {STATUS_LABELS[item.status]}
-                </span>
-                <button
-                  type="button"
-                  className="session-board__remove"
+              <Group justify="space-between" align="center" wrap="nowrap" gap="sm">
+                <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+                  <Text span className="qrbit-text-label" c="dimmed">
+                    {TYPE_LABELS[item.type]}
+                  </Text>
+                  {/*
+                    The status the transport keeps for this item. It is the one piece
+                    of per-item state that is meaningful on both sides equally.
+                  */}
+                  <Badge variant="light" color={STATUS_COLORS[item.status]} radius="full" ff="sans">
+                    {STATUS_LABELS[item.status]}
+                  </Badge>
+                </Group>
+                <ActionIcon
+                  variant="subtle"
+                  color="danger"
+                  size="md"
                   aria-label={`Remove ${TYPE_LABELS[item.type].toLowerCase()} item`}
+                  title={`Remove ${TYPE_LABELS[item.type].toLowerCase()} item`}
                   onClick={() => {
                     api.deleteItem(item.id)
                   }}
-                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                 >
-                  <IconX size={14} />
-                  <span style={{ display: 'none' }}>✕</span>
-                </button>
-              </div>
+                  <IconTrash size={16} />
+                </ActionIcon>
+              </Group>
 
               {renderItem(item, editable, api)}
             </li>

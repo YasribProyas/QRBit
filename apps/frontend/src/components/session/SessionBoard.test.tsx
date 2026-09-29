@@ -330,7 +330,9 @@ describe('SessionBoard removal (PLAN.md §9 items API contract)', () => {
     setItems([textItem({ id: 't1' }), textItem({ id: 't2' })])
     const { element, api } = renderBoard()
 
-    const removeButtons = element.querySelectorAll('.session-board__remove')
+    const removeButtons = element.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label^="Remove"]',
+    )
     expect(removeButtons).toHaveLength(2)
 
     act(() => {

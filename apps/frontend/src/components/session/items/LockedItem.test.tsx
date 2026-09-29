@@ -193,7 +193,7 @@ describe('LockedItem — sender view (PLAN.md §9)', () => {
     })
 
     expect(element.querySelector('.locked-item__label')?.textContent).toBe('Server root key')
-    expect(element.querySelector('.locked-item__badge')?.textContent).toContain('🔒')
+    expect(element.querySelector('.locked-item__badge')?.textContent).toContain('Locked')
     expect(element.querySelector('.locked-item__inner-type')?.textContent).toBe('File')
     expect(button(element, '.locked-item__unlock')).not.toBe(null)
     expect(element.querySelector('input[type="password"]')).toBe(null)
@@ -217,7 +217,7 @@ describe('LockedItem — receiver view (PLAN.md §9)', () => {
     const { element } = renderRow({ item: makeItem({ innerType: 'file' }), sender: false })
 
     expect(element.querySelector('.locked-item__label')?.textContent).toBe('Uni portal password')
-    expect(element.querySelector('.locked-item__badge')?.textContent).toContain('🔒')
+    expect(element.querySelector('.locked-item__badge')?.textContent).toContain('Locked')
     // The type is the sender's choice; the receiver's row never claims it.
     expect(element.querySelector('.locked-item__inner-type')).toBe(null)
     expect(button(element, '.locked-item__unlock').textContent).toBe('Unlock')
