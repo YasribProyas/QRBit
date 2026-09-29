@@ -173,7 +173,14 @@ export async function encryptBlockPayload(
   block: FileBlock,
   password: string,
 ): Promise<EncryptedBlockData> {
-  if (password === '') {
+  // A password of only spaces is not a password: the confirm field looks filled, PBKDF2 runs
+  // happily over 0x20 bytes, and the user believes they protected the secret with something they
+  // will never type again. `BlockItem` already refused this (`newLockPassword.trim()`); the
+  // chokepoint did not, so the row dialog and the save prompt disagreed. Note the test is on
+  // whitespace-only, NOT a trim of the value: "correct horse battery staple" is a fine password,
+  // and stripping leading/trailing spaces here would silently change the derived key, making a
+  // password the user typed impossible to type back.
+  if (password.trim() === '') {
     throw sendFailure(
       'locked-password-missing',
       block,

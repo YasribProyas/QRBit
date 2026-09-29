@@ -199,7 +199,12 @@
   input, textarea, select {
     font-size: 16px;
   }
-  @media (min-width: 640px) {
+  /*
+   * Compact desktop field text. Gated on an actual pointing device, not on viewport width alone:
+   * an iPhone in landscape is wider than 640px, so a width-only rule handed it a 13.5px field and
+   * Safari zoomed the page the moment it was focused.
+   */
+  @media (min-width: 640px) and (hover: hover) and (pointer: fine) {
     input.desktop-sm, textarea.desktop-sm {
       font-size: 13.5px;
     }
@@ -1054,7 +1059,8 @@ button {
   padding: 0.6rem 0.75rem;
   color: var(--qrbit-ink);
   font: inherit;
-  font-size: 0.9375rem;
+  /* 1rem, not 0.9375rem: iOS Safari zooms the page when a focused text field computes below 16px. This rule is a class selector, so it beat the layered base rule on specificity, not on layers -- the floor has to be set here. */
+  font-size: 1rem;
 }
 
 .text-item__input:focus-visible {
@@ -1076,7 +1082,7 @@ button {
   border: 1px solid var(--qrbit-border);
   border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   outline: none;
   overflow-wrap: anywhere;
 }
@@ -1278,7 +1284,7 @@ button {
   border: 1px solid var(--qrbit-border);
   border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
-  font-size: 0.9375rem;
+  font-size: 1rem;
 }
 
 .locked-item__download {
@@ -1356,7 +1362,7 @@ button {
   padding: 0.6rem 0.75rem;
   color: var(--qrbit-ink);
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: 1rem;
 }
 
 .locked-compose__label-input:focus-visible,
@@ -1619,7 +1625,7 @@ button {
   padding: 0.5rem 0.625rem;
   color: var(--qrbit-ink);
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: 1rem; /* 16px floor: a focused field below this zooms the page on iOS */
 }
 
 .folder-node__rename-input:focus-visible,
@@ -1896,7 +1902,7 @@ button {
   padding: 0.6rem 0.75rem;
   color: var(--qrbit-ink);
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: 1rem; /* 16px floor: a focused field below this zooms the page on iOS */
 }
 
 .library-modal__input:focus-visible {

@@ -466,6 +466,28 @@ describe('locked blocks — D6, and ciphertext only', () => {
     const blank = await encryptBlockPayload(neverEncrypted, '').catch((cause: unknown) => cause)
     expect(blank).toBeInstanceOf(DossierSendError)
     expect((blank as DossierSendError).reason).toBe('locked-password-missing')
+
+    /*
+     * Whitespace-only is not a password. `BlockItem`'s lock dialog already refused it via
+     * `.trim()`; the chokepoint only refused `''`, so the SAVE PROMPT would still happily mint a
+     * tuple under "   " — a field that looks filled, 600k PBKDF2 rounds over spaces, and a secret
+     * the user will never unlock again. Both paths must agree or the guard is decorative.
+     */
+    for (const onlySpaces of ['   ', '\t', '\n ']) {
+      const refusal = await encryptBlockPayload(lockedBlock(), onlySpaces).catch(
+        (cause: unknown) => cause,
+      )
+      expect(refusal, `password ${JSON.stringify(onlySpaces)} must be refused`).toBeInstanceOf(
+        DossierSendError,
+      )
+      expect((refusal as DossierSendError).reason).toBe('locked-password-missing')
+    }
+
+    // A password that CONTAINS spaces is legitimate and must be used VERBATIM: trimming here
+    // would change the derived key and make a real passphrase impossible to retype.
+    const spaced = await encryptBlockPayload(lockedBlock(), '  correct horse battery staple  ')
+    expect(spaced.iv.byteLength).toBe(12)
+    expect(spaced.salt.byteLength).toBe(16)
   })
 
   it('decides the three locked refusals in one fixed order', () => {
