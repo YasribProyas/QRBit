@@ -105,3 +105,26 @@ left as stale checkboxes; the git log is the record.
       and copy that names the consequence ("Delete all N dossiers and M folders from this
       device?"). Schedule only after the locked-block lane releases `lib/library.ts` +
       `libraryStore.ts`. Do not ship a disabled placeholder in the meantime.
+
+## Open decisions from the design-system pass (D17)
+
+- [ ] **Liveness signal on the sender screen (contract decision, not styling).** F1 removed
+      an ungated pulsing dot because `SenderSessionApi`'s 4-key `Pick` carries no liveness
+      signal. `pages/Home.tsx:231` already passes the whole `useSession` result, so widening
+      the Pick to `status` / `peerConfirmed` restores an HONEST dot with no other file edit.
+      Decide the semantics first: what does "connected" mean on the sender side after D14?
+- [ ] **`clearLibrary` — see the entry above.** Now the only destructive action the Settings
+      page cannot offer, and it must be one transaction.
+- [ ] **`ITEM_TYPE_ICONS` vs `SessionBoard.TYPE_LABELS` vs `items/LockedItem`'s inner-type map**
+      are three spellings of the same five words. Consolidate into `lib/itemType.ts` when a
+      lane is next in those files.
+- [ ] **Dead CSS after the deletions** (styles.css owner): `.add-item-bar__button`,
+      `.session-board__remove`, `.session-board__type`, `.session-board__row-header`,
+      `.item-status--*`, `.locked-item__row`, `.file-item__row`, `.image-item__meta`.
+      Report-only from E1; grep each before removing (template-literal composition fooled us
+      once with `.status--ok`).
+- [ ] **Four custom overlay dialogs (`.unlock-modal`, `.locked-compose`, `.library-modal`,
+      `.safety-phrase`) are not Mantine `Modal`s.** They carry the token shell but stay
+      in-container, because `pages/Session.test.tsx` queries them inside the mount element.
+      Converting one means moving those lookups to document scope, as the picker and confirm
+      dialogs already did.

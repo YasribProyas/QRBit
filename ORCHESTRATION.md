@@ -395,3 +395,62 @@ clean, 968 tests green. It burned the budget re-running a suite that grows every
 scope a lane's verification to *its own* test files, run the full gate once in the parent, raise
 the ceiling. Lanes B and C got that instruction and landed inside budget with zero cross-lane
 drift at integration.
+
+## D17 — the design-system pass (owner: "make it as desktop native as it is mobile native")
+
+Eight lanes (S1-S5, D1-D3, E1-E3, F1). The measurable outcome: **134 hand-written
+`<button>` elements → 0**, 281 hardcoded hex values → 0, ten files importing
+`lucide-react` → 0 and the dependency deleted, and 985 tests → 1181.
+
+**D17.0 — the tokens already existed; the components ignored them.** `theme.ts`'s
+`signal` ramp contains `#1d4ed8` at index 6 and `#1e40af` at 7 — the two values 281
+call sites were hardcoding. So this was never a missing-design-system problem, and
+"we use Mantine" was a claim about 14 of 148 controls.
+
+**D17.1 — measure before diagnosing taste.** Every finding here came from a number:
+134 vs 14 buttons, 40 hexes, `text-[11px]`×35, grip contrast 2.28:1, and three webfonts
+requested from `fonts.googleapis.com` while the deployed CSP was `style-src 'self'` —
+which means **the intended type never rendered on any device** and every OS showed a
+different fallback. A "looks inconsistent" report is not a style brief; it is a
+measurement opportunity.
+
+**D17.2 — the CSP blocked our own fonts, and the fix is also a privacy fix.** A
+"No cloud. No trace." tool was sending each visitor's IP and user agent to Google in
+the HTML head before any JavaScript ran. Self-hosting two variable woff2 files (58 KB)
+keeps `style-src 'self'`/`font-src 'self'` untouched, because `@font-face` in our own
+bundled CSS is not an inline style.
+
+**D17.3 — honesty is a design requirement, and it was the most productive rule of the
+pass.** Lanes were told to replace UI that claims what the code cannot verify, and it
+found bugs no test would have: fabricated safety words `['COBALT','TIMBER','FALCON']`
+served to a receiver when no phrase existed (a user confirming invented words learns
+the check means nothing), "Delivered" on the sender's own rows when `complete` only
+means the last frame reached the data channel, "Link Quality: 99.8% (Air-Gap)",
+permanently-pulsing liveness dots, an attachment block that transmitted **100 fabricated
+null bytes** under a made-up filename, and a locked text field that sent its secret as
+plain text because the type branch matched before the lock branch.
+
+**D17.4 — when a lane's brief conflicts with DESIGN.md, DESIGN.md wins and the brief is
+the bug.** I wrote "make that hex the signal colour" to kill a hex literal; followed
+literally it kept the defect (two blues on one screen, which the One Blue Rule calls a
+defect not a variant). A lane asked rather than obeying, and that was the correct
+instinct. Corollary: when a converted twin exists, it is the precedent.
+
+**D17.5 — an ownership map can orphan a file, and nothing in the gate notices.**
+`SenderSessionView` was excluded from the session lane and never assigned to the
+editor lane, so it stayed hand-styled through six lanes while everything around it
+converted. Each lane was correctly minding its boundary; the map was wrong. After any
+multi-lane pass, grep for the thing you thought you finished (here: who still imports
+lucide) rather than trusting the assignment list.
+
+**D17.6 — a lane timing out is usually a verification-loop timeout, not unfinished
+work.** Six lanes hit their wall clock; every one had actually finished. Fix: scope a
+lane's verification to its own test files, run the full gate once in the parent, state
+a budget, and say "report imperfect rather than keep checking."
+
+**Two process errors of mine, both caught by verification rather than trust:** I staged
+`git add -A` while lanes were mid-flight and bundled three lanes plus a half-written
+security fix into one mislabelled commit (undone with `git reset --mixed`, working tree
+untouched); and I omitted `AddItemBar.test.tsx` when staging a lane, which later looked
+like that lane had breached its file boundary. Lesson recorded where it belongs: verify
+file lists before alleging anything, and stage explicit paths always.
