@@ -260,8 +260,12 @@ Two panels on desktop, one column on mobile, decided by a single breakpoint set:
 - **Desktop shell** (≥1024): fixed-height, `grid-template-columns: minmax(320px, 26rem) 1fr`.
   Library left, session/QR right. Each column scrolls independently; the shell never scrolls.
   Gap `xl` (24px), page padding `xl` (24px).
-- **Mobile shell** (<1024): one column, session first, library second, in flow. No drawer —
-  a drawer hides the object the user came for.
+- **Mobile shell** (<1024): one column, session first, in flow. The library does **not** stack
+  beneath the QR — it opens from a header hamburger into a `Drawer`, and exactly one copy of the
+  panel is mounted (never a hidden duplicate). A full library under the pairing screen makes the
+  primary task and the secondary one compete for a single scroll; the owner decided this after
+  seeing the stacked version, and it supersedes this document's earlier "no drawer" rule.
+  Desktop keeps the two panels and shows no hamburger at all.
 - **Spacing scale** 2 / 4 / 8 / 12 / 16 / 24 / 32 / 48. Compose with it; a value not on the
   scale is drift.
 - **Rhythm:** tight inside a control (xs–sm), generous between groups (xl–xxl), and always more
