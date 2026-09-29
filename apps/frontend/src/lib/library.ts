@@ -36,6 +36,24 @@ export interface LibraryFolder {
   parentId: string | null
   createdAt: number
   updatedAt: number
+  /**
+   * The folder's position among the folders that share its `parentId`, for drag-reordering
+   * (ORCHESTRATION D16, extended from dossiers to folders).
+   *
+   * The same gap-based scheme as `LibraryFile.sortOrder`: `reorderFolder` writes the midpoint
+   * of the two new neighbours (see `lib/reorder.ts`), so a reorder rewrites one record instead
+   * of the whole sibling run. Library data, not session data — this is allowed to be persisted
+   * (AGENTS.md).
+   *
+   * Absent means "never ordered": such a folder reads *after* every sibling that has one, and
+   * that is what puts a newly created folder at the end of its parent's run and keeps folders
+   * written before this field existed in their old createdAt order. The first reorder of a
+   * sibling run materialises values for the whole run.
+   *
+   * Siblings only. The number is never compared across parent groups (`compareFolders`,
+   * `siblingFolders`), so a root folder and a subfolder may both hold 1000.
+   */
+  sortOrder?: number
 }
 
 export type BlockType =
@@ -285,7 +303,15 @@ const TYPE_FIELDS: Record<LibraryItemType, readonly string[]> = {
   locked: ['label', 'innerType', 'ciphertext', 'iv', 'salt'],
 }
 
-const FOLDER_FIELDS: readonly string[] = ['id', 'name', 'color', 'parentId', 'createdAt', 'updatedAt']
+const FOLDER_FIELDS: readonly string[] = [
+  'id',
+  'name',
+  'color',
+  'parentId',
+  'createdAt',
+  'updatedAt',
+  'sortOrder',
+]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -326,6 +352,25 @@ function readTimestamp(record: Record<string, unknown>, key: string, what: strin
   const value = record[key]
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw new Error(`library: ${what} needs a non-negative number "${key}"`)
+  }
+  return value
+}
+
+/**
+ * An optional `sortOrder`, read the one way both orderable kinds are read.
+ *
+ * Absent or `null` means "never ordered" (the row reads last within its run). Anything else
+ * present must be a safe integer: the gap arithmetic halves the distance between two
+ * neighbours, so a float, a string or a value past the safe range cannot be trusted to hold a
+ * position and is rejected as garbage rather than silently reordered. Negative positions are
+ * legal — a row dragged above a run that starts at 0 pushes it down, and the run is
+ * renumbered before it can overflow.
+ */
+function readSortOrder(record: Record<string, unknown>, what: string): number | undefined {
+  const value = record['sortOrder']
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    throw new Error(`library: ${what} needs an integer "sortOrder" (got ${JSON.stringify(value)})`)
   }
   return value
 }
@@ -545,7 +590,7 @@ function parseFolder(value: unknown): LibraryFolder {
   const rawColor = value['color']
   const color = typeof rawColor === 'string' ? rawColor : undefined
 
-  return {
+  const folder: LibraryFolder = {
     id: requireId(readString(value, 'id', 'folder'), 'a folder'),
     name: requireName(readString(value, 'name', 'folder'), 'a folder'),
     color,
@@ -553,6 +598,14 @@ function parseFolder(value: unknown): LibraryFolder {
     createdAt: readTimestamp(value, 'createdAt', 'folder'),
     updatedAt: readTimestamp(value, 'updatedAt', 'folder'),
   }
+
+  // Read strictly through the shared `sortOrder` rule, and carried back out: `saveFolder`
+  // stores what `parseFolder` returns, so a dropped field here would silently teleport every
+  // imported folder to the end of its parent's run.
+  const position = readSortOrder(value, 'a folder')
+  if (position !== undefined) folder.sortOrder = position
+
+  return folder
 }
 
 /**
@@ -578,20 +631,85 @@ function normaliseParentId(parentId: string | null): string | null {
   return parentId
 }
 
+/**
+ * The sibling-group key of a parent id: `null` and the root's own id name the same group.
+ *
+ * The validating rule of `normaliseParentId` without the throw, for comparing parent ids that
+ * have already been parsed — a stored `parentId` was written through `normaliseParentId`, so
+ * only `null` and real folder ids occur, and a read path must not fail on data the writer
+ * would have rejected anyway.
+ */
+function parentKey(parentId: string | null): string | null {
+  return parentId === null || parentId === ROOT_FOLDER_ID ? null : parentId
+}
+
+/** How a parent is named in a message: the root has no row, so it is named for what it is. */
+function describeParent(parentId: string | null): string {
+  return parentId === null ? 'the root' : `folder "${parentId}"`
+}
+
 function compareNames(a: string, b: string): number {
   if (a === b) return 0
   return a < b ? -1 : 1
+}
+
+/**
+ * The one order folders are ever read in: drag order first, then age, then id.
+ *
+ * The dossier rule (`compareFiles`) applied to folders, for the same reasons: `updatedAt` plays
+ * no part, so renaming a folder or writing a file into it cannot teleport it, and the tiebreak
+ * is total (`id` is unique) so the same records always read back in the same sequence and
+ * nothing jitters between two renders.
+ *
+ * Positions are only ever compared inside one sibling group (`siblingFolders`,
+ * `reorderFolder`), which is what makes a root run and a subfolder run independent.
+ */
+function compareFolders(a: LibraryFolder, b: LibraryFolder): number {
+  const left = a.sortOrder
+  const right = b.sortOrder
+  if (left === undefined || right === undefined) {
+    if (left !== undefined) return -1
+    if (right !== undefined) return 1
+  } else if (left !== right) {
+    return left < right ? -1 : 1
+  }
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
+  return compareNames(a.id, b.id)
 }
 
 // ---------------------------------------------------------------------------
 // Folders (PLAN.md §6.3)
 // ---------------------------------------------------------------------------
 
-/** Every folder, oldest first (name breaks a same-millisecond tie). */
+/**
+ * Every folder, in the order the library shows them (see `compareFolders`).
+ *
+ * Drag order first; folders nobody has ordered read oldest first, which is how they looked
+ * before `sortOrder` existed. Grouped by parent for the UI with `siblingFolders`.
+ */
 export async function getFolders(): Promise<LibraryFolder[]> {
   const db = await getDatabase()
   const folders = (await db.getAll('folders')).map(parseFolder)
-  return folders.sort((a, b) => a.createdAt - b.createdAt || compareNames(a.name, b.name))
+  return folders.sort(compareFolders)
+}
+
+/**
+ * The folders directly under `parentId`, in the order the library shows them.
+ *
+ * A reorder index only means something inside one sibling group, and a panel only renders one
+ * group at a time, so the grouping is this module's rule rather than each component's: this
+ * is the read side of `reorderFolder` and the two cannot disagree. `null` and `ROOT_FOLDER_ID`
+ * name the same group — the root has no row (§6.1). A caller holding `getFolders()` and a
+ * caller holding a shuffled list get the same answer, because the order is total.
+ */
+export function siblingFolders(
+  folders: readonly LibraryFolder[],
+  parentId: string | null,
+): LibraryFolder[] {
+  const parent = parentKey(parentId)
+  return folders
+    .filter((folder) => parentKey(folder.parentId) === parent)
+    .sort(compareFolders)
 }
 
 export async function createFolder(
@@ -602,6 +720,9 @@ export async function createFolder(
   const folderName = requireName(name, 'a folder')
   const parent = normaliseParentId(parentId)
   const now = Date.now()
+  // No `sortOrder`, which is what places it last: an unordered row reads after every ordered
+  // sibling (see `compareFolders`), exactly as `createFile` leaves a new dossier at the end of
+  // its folder. The first reorder of the run gives every folder in it a position.
   const folder: LibraryFolder = {
     id: globalThis.crypto.randomUUID(),
     name: folderName,
@@ -632,6 +753,8 @@ export async function renameFolder(id: string, name: string): Promise<void> {
   const existing = await store.get(folderId)
   if (existing === undefined) throw new Error(`library: no folder with id "${folderId}"`)
 
+  // Spread of the stored record, so a rename changes `name` and `updatedAt` and nothing else:
+  // the folder keeps its `sortOrder` and therefore its place in its parent's run (D16).
   await store.put({ ...existing, name: folderName, updatedAt: Date.now() })
   await tx.done
 }
@@ -739,6 +862,98 @@ function collectSubtree(folders: readonly LibraryFolder[], rootId: string): Set<
   }
 
   return subtree
+}
+
+/**
+ * Moves a folder to a new position among the folders that share its parent (ORCHESTRATION
+ * D16 — the dossier ordering scheme applied to folders).
+ *
+ * **Sibling-scoped, and that is where the scoping lives.** `targetIndex` counts only the
+ * folders whose parent key equals the moved folder's own (the same `parentKey` the read side
+ * uses, so the two cannot disagree): `ordered` below is filtered to that group before the
+ * index is interpreted, and only rows of that group are ever written. Reordering the top level
+ * therefore cannot shuffle a subfolder out of its parent, and the root run and a subfolder run
+ * are independent even when they use the same numbers. Moving a folder between parents is not
+ * this function's job — the library layer has no `moveFolder` (PLAN.md §6.3).
+ *
+ * `targetIndex` is the index the folder should end up at in that sibling list *as it reads
+ * now*, including itself: the convention `lib/reorder.ts` `moveIndex` implements and the one
+ * `onMove(from, to)` hands the UI. Pass `parentId` when the caller knows which group it was
+ * showing — `null` is the root, and `ROOT_FOLDER_ID` is accepted as its alias — because an
+ * index counted against another group's list would move the wrong row, so a mismatch throws
+ * instead of writing.
+ *
+ * In the common case one record is written — the midpoint of its two new neighbours — and the
+ * rest of the run is untouched. The whole sibling run is rewritten only when the gap has
+ * collapsed (`nextSortOrder` answers `REENUMBER_REQUIRED`), when a sibling carries no
+ * `sortOrder` yet, or when the run would leave the safe integer range. `updatedAt` is left
+ * alone: a reorder is not an edit.
+ */
+export async function reorderFolder(
+  id: string,
+  targetIndex: number,
+  parentId?: string | null,
+): Promise<void> {
+  const folderId = requireId(id, 'reorderFolder')
+  if (folderId === ROOT_FOLDER_ID) throw new Error('library: the root folder cannot be reordered')
+  if (typeof targetIndex !== 'number' || !Number.isInteger(targetIndex) || targetIndex < 0) {
+    throw new Error(
+      `library: reorderFolder needs a non-negative integer index (got ${JSON.stringify(targetIndex)})`,
+    )
+  }
+  const expectedParent = parentId === undefined ? undefined : normaliseParentId(parentId)
+
+  const db = await getDatabase()
+  // `folders` only: a reorder rewrites rows of this one store, and — unlike `reorderFile`,
+  // which has to check that the folder a dossier sits in still exists — there is no container
+  // to verify here. A stored parent either has a row (`createFolder` requires one, `saveFolder`
+  // rewrites an unknown one as the root) or is the root itself, and `deleteFolder` cascades, so
+  // a folder with a missing parent cannot be stored in the first place.
+  const tx = db.transaction('folders', 'readwrite')
+  const store = tx.objectStore('folders')
+  const existing = await store.get(folderId)
+  if (existing === undefined) throw new Error(`library: no folder with id "${folderId}"`)
+
+  const moved = parseFolder(existing)
+  const parent = parentKey(moved.parentId)
+  if (expectedParent !== undefined && expectedParent !== parent) {
+    throw new Error(
+      `library: reorderFolder was given parent ${describeParent(expectedParent)} but folder "${folderId}" lives in ${describeParent(parent)}`,
+    )
+  }
+
+  const ordered = siblingFolders((await store.getAll()).map(parseFolder), parent)
+  const from = ordered.findIndex((folder) => folder.id === folderId)
+  if (targetIndex >= ordered.length) {
+    throw new Error(
+      `library: reorderFolder index ${targetIndex} is out of range for ${ordered.length} folders in ${describeParent(parent)}`,
+    )
+  }
+  if (from === targetIndex) {
+    // Dropped where it was: not an error, and not a write.
+    await tx.done
+    return
+  }
+
+  const siblings = ordered.filter((folder) => folder.id !== folderId)
+  const positions = sortOrdersOf(siblings)
+  if (positions !== null) {
+    const value = nextSortOrder(positions, targetIndex, moved.sortOrder)
+    if (!needsRenumber(value)) {
+      if (value !== moved.sortOrder) {
+        await store.put({ ...moved, sortOrder: value })
+      }
+      await tx.done
+      return
+    }
+  }
+
+  // The gap cannot hold another position, or part of the run was never ordered: give the whole
+  // sibling group a fresh spacing, in the order the user just asked for.
+  for (const folder of withRenumberedOrder(moveIndex(ordered, from, targetIndex))) {
+    await store.put(folder)
+  }
+  await tx.done
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,18 +1272,10 @@ export function parseFile(value: unknown): LibraryFile {
     blocks,
   }
 
-  // `sortOrder` is the one optional field a file may carry, and it is read strictly:
-  // anything that is neither absent/null nor a whole number the ordering arithmetic can
-  // survive is garbage, so it is rejected here rather than silently dropping the file to
-  // the end of the list. Negative positions are valid — a row dragged above a run that
-  // starts at 0 pushes it down, and the run is renumbered before it can overflow.
-  const rawSortOrder = value['sortOrder']
-  if (rawSortOrder !== undefined && rawSortOrder !== null) {
-    if (typeof rawSortOrder !== 'number' || !Number.isSafeInteger(rawSortOrder)) {
-      throw new Error(`library: a file needs an integer "sortOrder" (got ${JSON.stringify(rawSortOrder)})`)
-    }
-    file.sortOrder = rawSortOrder
-  }
+  // `sortOrder` is the one optional field a file may carry, read through the same strict rule
+  // a folder's is (see `readSortOrder`).
+  const position = readSortOrder(value, 'a file')
+  if (position !== undefined) file.sortOrder = position
 
   return file
 }
@@ -1294,13 +1501,21 @@ export async function reorderFile(id: string, targetIndex: number, folderId?: st
 }
 
 /**
+ * A record that can hold a position within its own run: a dossier in its folder, or a folder
+ * among the siblings under its parent. Both are ordered by the same arithmetic.
+ */
+interface Orderable {
+  sortOrder?: number
+}
+
+/**
  * The position that lands a record after `siblings`, which must already be in display
  * order, or `null` when the run has to be renumbered instead: a sibling carries no
  * `sortOrder`, the values do not ascend (a hand-edited or half-migrated folder, which the
  * read order cannot be trusted to reflect), or the appended gap would leave the safe
  * integer range.
  */
-function endSortOrder(siblings: readonly LibraryFile[]): number | null {
+function endSortOrder(siblings: readonly Orderable[]): number | null {
   let previous: number | null = null
   for (const sibling of siblings) {
     const position = sibling.sortOrder
@@ -1314,11 +1529,11 @@ function endSortOrder(siblings: readonly LibraryFile[]): number | null {
 }
 
 /**
- * The run's `sortOrder` values in display order, or `null` when a file carries none.
+ * The run's `sortOrder` values in display order, or `null` when a row carries none.
  *
  * `null` means the gap rule has nothing to work between, so the caller renumbers.
  */
-function sortOrdersOf(ordered: readonly LibraryFile[]): number[] | null {
+function sortOrdersOf(ordered: readonly Orderable[]): number[] | null {
   const positions: number[] = []
   for (const file of ordered) {
     if (typeof file.sortOrder !== 'number') return null
@@ -1330,12 +1545,12 @@ function sortOrdersOf(ordered: readonly LibraryFile[]): number[] | null {
 /**
  * The same records, renumbered to `SORT_ORDER_GAP` spacing in the order given.
  *
- * The fallback both `reorderFile` and `moveFile` take when a single gap-based write is not
- * possible. It is a fresh full-gap run rather than a compaction, so the next hundred
- * drags in that folder each cost one write again.
+ * The fallback both `reorderFile`/`reorderFolder` and `moveFile` take when a single gap-based
+ * write is not possible. It is a fresh full-gap run rather than a compaction, so the next
+ * hundred drags in that run each cost one write again.
  */
-function withRenumberedOrder(ordered: readonly LibraryFile[]): LibraryFile[] {
-  return ordered.map((file, index) => ({ ...file, sortOrder: (index + 1) * SORT_ORDER_GAP }))
+function withRenumberedOrder<T extends Orderable>(ordered: readonly T[]): T[] {
+  return ordered.map((row, index) => ({ ...row, sortOrder: (index + 1) * SORT_ORDER_GAP }))
 }
 
 // ---------------------------------------------------------------------------

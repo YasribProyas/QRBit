@@ -15,11 +15,15 @@
  * keeps only the two things the panel cannot know — which dossier opens in the editor,
  * and what a brand-new dossier is made of (`onCreateFile`).
  *
- * **Ordering.** `sortOrder` is per folder (`lib/library.ts`), so a grip appears only on
- * the rows of one folder's own list, where an index means something. The `Root` section
- * is a bucket rather than a folder — it holds whatever no listed folder does — so its
- * rows are openable, renamable, movable and deletable, but not draggable, and the hook
- * is never given an index counted against a list the store does not have.
+ * **Ordering.** Two kinds of drag share this screen, and each index means something only inside
+ * the one list it was counted against. Folders reorder among the folders that share their
+ * parent (`lib/library.ts` `reorderFolder` and `siblingFolders`); this panel lists one level, so
+ * its folder grips reorder the top level and a subfolder's run is never touched. Dossiers
+ * reorder inside the folder whose list they are in, because their `sortOrder` is per folder. The
+ * `Root` section is a bucket rather than a folder — it holds whatever no listed folder does — so
+ * neither its rows nor its header get a grip: it is openable, renamable, movable and deletable,
+ * but it has no order the store could honour, and the hook is never given an index counted
+ * against a list the store does not have.
  *
  * **Expansion** is "collapsed ids", not "expanded ids": a folder is open unless the user
  * collapsed it, so folders that arrive after the first render are open without the
@@ -32,7 +36,7 @@
  * §6.3) — the library never leaves the device, so there is no other copy to restore.
  */
 
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { Alert, Badge, Button, Group, Loader, Stack, Text, Title } from '@mantine/core'
 import {
@@ -48,15 +52,15 @@ import {
 
 import { ConfirmDelete } from '../ConfirmDelete'
 import { WithMantine } from '../common/WithMantine'
-import { childFolders } from './FolderNode'
 import { FolderPickerModal } from './FolderPickerModal'
 import type { FolderPickerChoice } from './FolderPickerModal'
 import { NewFolderModal } from './NewFolderModal'
-import { useReorderDrag } from '../../hooks/useReorderDrag'
+import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
 import { getFirstBlockPreview, hasLockedBlocks } from '../../lib/dossier'
-import { ROOT_FOLDER_ID } from '../../lib/library'
+import { ROOT_FOLDER_ID, siblingFolders } from '../../lib/library'
 import type { LibraryFile, LibraryFolder, LibraryItem } from '../../lib/library'
+import { DEFAULT_ITEM_HEIGHT } from '../../lib/reorder'
 import { useLibraryStore } from '../../store/libraryStore'
 
 export interface LibraryPanelProps {
@@ -79,6 +83,11 @@ interface PanelActions {
   askDeleteFile(file: LibraryFile): void
   /** Persists a reorder inside `file`'s own folder; `targetIndex` is the row's index in the list as displayed. */
   reorderFile(file: LibraryFile, targetIndex: number, folderId: string): void
+  /**
+   * Persists a reorder within the folder's own sibling group; `targetIndex` is the section's
+   * index among the folders listed with the same parent.
+   */
+  reorderFolder(folder: LibraryFolder, targetIndex: number): void
   renameFolder(folder: LibraryFolder, name: string): void
   askDeleteFolder(folder: LibraryFolder): void
 }
@@ -101,6 +110,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
   const error = useLibraryStore((state) => state.error)
   const createFolder = useLibraryStore((state) => state.createFolder)
   const renameFolder = useLibraryStore((state) => state.renameFolder)
+  const reorderFolder = useLibraryStore((state) => state.reorderFolder)
   const deleteFolder = useLibraryStore((state) => state.deleteFolder)
   const updateFile = useLibraryStore((state) => state.updateFile)
   const deleteFile = useLibraryStore((state) => state.deleteFile)
@@ -116,7 +126,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
 
   // One level, in the one order the library UI uses; a dossier in a folder this panel
   // does not list (the root, a subfolder, or a folder that went away) belongs to `Root`.
-  const listedFolders = childFolders(folders, null)
+  const listedFolders = siblingFolders(folders, null)
   const rootFiles = files.filter(
     (file) => !listedFolders.some((folder) => folder.id === file.folderId),
   )
@@ -140,6 +150,11 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
     reorderFile: (file, targetIndex, folderId) => {
       reportToStore(reorderFile(file.id, targetIndex, folderId))
     },
+    reorderFolder: (folder, targetIndex) => {
+      // The parent is sent along so the store checks this panel's index against the group the
+      // folder really belongs to, rather than trusting what is on screen.
+      reportToStore(reorderFolder(folder.id, targetIndex, folder.parentId))
+    },
     renameFolder: (folder, name) => {
       reportToStore(renameFolder(folder.id, name))
     },
@@ -147,6 +162,56 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
       setPendingDelete({ kind: 'folder', id: folder.id })
     },
   }
+
+  /** The list the folder sections are stacked in, for `measureFolderPitch` to read. */
+  const sectionListRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * The pitch of folder row `index`, measured from the DOM.
+   *
+   * Folder sections are wildly different heights — an expanded one carries its whole file list
+   * — so the folder list gives `useReorderDrag` one pitch per row instead of letting it assume
+   * the grabbed row's, which is what `FileEditView` does for blocks.
+   *
+   * The rows are the *marked direct children* of the section list. A folder row and a dossier
+   * row carry the same `data-reorder-item` marker and the dossier rows are nested inside the
+   * folder's own section, so this walks children rather than querying the whole subtree:
+   * a subtree query would hand the folder hook the dossier rows' geometry, and the two drag
+   * instances on this screen would then be counting positions against each other's lists.
+   * Unmarked children (the `Root` bucket, the empty-library note) are skipped, so index `i` is
+   * `listedFolders[i]` — the same order both were rendered in.
+   */
+  const measureFolderPitch = useCallback((index: number): number => {
+    const rows = markedRows(sectionListRef.current)
+    const row = rows[index]
+    if (row === undefined) return DEFAULT_ITEM_HEIGHT
+    const following = rows[index + 1]
+    // `offsetTop`, not a bounding box: a transform does not move it, so measuring the row that
+    // is currently being dragged still reports the layout the user grabbed.
+    const pitch = following === undefined ? row.offsetHeight : following.offsetTop - row.offsetTop
+    // jsdom lays nothing out and a hidden row reports 0 — both mean the shared default, which
+    // is also what the hook itself falls back to.
+    return pitch > 0 ? pitch : DEFAULT_ITEM_HEIGHT
+  }, [])
+
+  /**
+   * The folder rows' drag and its keyboard twin (D16.2/D16.3) — the screen's second
+   * `useReorderDrag` instance.
+   *
+   * Each `ReorderableFileList` below makes its own for that folder's dossiers, and the
+   * instances cannot step on each other: every one of them is handed a `length` and an `onMove`
+   * for exactly one list, a grip only ever carries the props of the instance that made it, and
+   * the hook measures the row that owns the handle it was given — the folder hook through
+   * `measureFolderPitch`, the dossier hook through its own nearest `data-reorder-item`.
+   */
+  const { drag: folderDrag, getHandleProps: getFolderHandleProps } = useReorderDrag({
+    length: listedFolders.length,
+    onMove: (from, to) => {
+      const moved = listedFolders[from]
+      if (moved !== undefined) actions.reorderFolder(moved, to)
+    },
+    getItemHeight: measureFolderPitch,
+  })
 
   const toggleFolder = (folderId: string): void => {
     setCollapsedFolders((current) =>
@@ -246,7 +311,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
             </Text>
           </Group>
         ) : (
-          <div className="library-panel__sections flex flex-col gap-3">
+          <div className="library-panel__sections flex flex-col gap-3" ref={sectionListRef}>
             {/*
               `Root` first, always: it is where a dossier goes when it has no folder, and
               where a dossier in a folder this panel does not list still turns up.
@@ -260,9 +325,11 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
               onToggleCollapsed={() => {
                 toggleFolder(ROOT_FOLDER_ID)
               }}
+              handleProps={null}
+              dragOffset={null}
             />
 
-            {listedFolders.map((folder) => (
+            {listedFolders.map((folder, index) => (
               <FolderSection
                 key={folder.id}
                 folder={folder}
@@ -272,6 +339,8 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
                 onToggleCollapsed={() => {
                   toggleFolder(folder.id)
                 }}
+                handleProps={getFolderHandleProps(index)}
+                dragOffset={folderDrag !== null && folderDrag.from === index ? folderDrag.offset : null}
               />
             ))}
 
@@ -328,6 +397,25 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
 }
 
 // ---------------------------------------------------------------------------
+// One level of the tree: the folder sections and their drag rows
+// ---------------------------------------------------------------------------
+
+/**
+ * The `data-reorder-item` direct children of `container`, in document order.
+ *
+ * Scoped to children on purpose — see `measureFolderPitch` for why the folder list must not
+ * reach the dossier rows nested inside each section.
+ */
+function markedRows(container: HTMLElement | null): HTMLElement[] {
+  if (container === null) return []
+  const rows: HTMLElement[] = []
+  for (const child of Array.from(container.children)) {
+    if (child instanceof HTMLElement && child.hasAttribute(REORDER_ITEM_ATTRIBUTE)) rows.push(child)
+  }
+  return rows
+}
+
+// ---------------------------------------------------------------------------
 // One section: a folder's header row and its file list
 // ---------------------------------------------------------------------------
 
@@ -338,9 +426,24 @@ interface FolderSectionProps {
   actions: PanelActions
   collapsed: boolean
   onToggleCollapsed(): void
+  /**
+   * The folder grip's props from the panel's own `useReorderDrag`, or `null` for the Root
+   * bucket — which is a bucket across several folders, so no single index describes it.
+   */
+  handleProps: ReorderHandleProps | null
+  /** Pixels to translate by while this folder is the section being dragged, else `null`. */
+  dragOffset: number | null
 }
 
-function FolderSection({ folder, files, actions, collapsed, onToggleCollapsed }: FolderSectionProps) {
+function FolderSection({
+  folder,
+  files,
+  actions,
+  collapsed,
+  onToggleCollapsed,
+  handleProps,
+  dragOffset,
+}: FolderSectionProps) {
   const name = folder?.name ?? 'Root'
   // The id every action in this section is about: the folder's own, or the root
   // sentinel, which the library layer accepts as a real target for a file.
@@ -367,8 +470,31 @@ function FolderSection({ folder, files, actions, collapsed, onToggleCollapsed }:
   }
 
   return (
-    <section className="library-panel__folder rounded-lg border border-[#D1D9E4] bg-white">
+    <section
+      className="library-panel__folder rounded-lg border border-[#D1D9E4] bg-white"
+      // The marker the panel's folder-level `useReorderDrag` measures. The whole section is the
+      // row — an expanded folder's file list travels with it — while the dossier rows nested
+      // inside carry the same marker for their own, separate list.
+      data-reorder-item={handleProps === null ? undefined : ''}
+      style={
+        dragOffset === null
+          ? undefined
+          : { transform: `translateY(${dragOffset}px)`, position: 'relative', zIndex: 1 }
+      }
+    >
       <div className="library-panel__folder-row flex items-center gap-1.5 px-2 py-1.5">
+        {handleProps === null ? null : (
+          <button
+            {...handleProps}
+            // The hook's own label gives a position in the list; with two drag lists on one
+            // screen, the folder the grip belongs to is the part worth hearing.
+            aria-label={`Reorder folder ${name}`}
+            className="library-panel__folder-grip shrink-0 rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#0F172A]"
+          >
+            <IconGripVertical size={16} aria-hidden="true" />
+          </button>
+        )}
+
         <button
           type="button"
           className="library-panel__folder-toggle shrink-0 rounded p-1 text-[#5B6B82] hover:bg-slate-100"
@@ -582,6 +708,9 @@ function FileList({ files, folderId, actions, reorderable, emptyHint }: FileList
 
 /**
  * The rows of one folder, with the grip drag and its keyboard twin (D16.2/D16.3).
+ *
+ * One `useReorderDrag` instance per folder, beside the panel's own instance for the folder rows:
+ * the indices of neither mean anything to the other.
  *
  * `useReorderDrag` is used exactly as its own example shows: the hook owns the pointer
  * and key handling, `onMove(from, to)` is the only way anything leaves it, and both fire

@@ -53,6 +53,16 @@ export interface LibraryState {
   createFolder(name: string, parentId: string | null, color?: string): Promise<LibraryFolder>
   renameFolder(id: string, name: string): Promise<void>
   /**
+   * Persists a reorder within one sibling group (the folder rows of the library panel): the
+   * `onMove(from, to)` of a drag or an arrow-key press both end here.
+   *
+   * `targetIndex` is the row's index among the folders that share its parent, in the list as it
+   * currently reads — the same convention `moveIndex`, `useReorderDrag` and `reorderFile` use —
+   * and `parentId` is the group the caller was showing (`null` for the top level), checked
+   * against what is stored. See `lib/library.ts` `reorderFolder`.
+   */
+  reorderFolder(id: string, targetIndex: number, parentId?: string | null): Promise<void>
+  /**
    * Deletes the folder, its subfolders, and every item/file inside them.
    */
   deleteFolder(id: string): Promise<void>
@@ -163,6 +173,11 @@ export const useLibraryStore = create<LibraryState>()((set, get) => {
     renameFolder: (id, name) =>
       writeThenSync(async () => {
         await library.renameFolder(id, name)
+      }),
+
+    reorderFolder: (id, targetIndex, parentId) =>
+      writeThenSync(async () => {
+        await library.reorderFolder(id, targetIndex, parentId)
       }),
 
     deleteFolder: (id) =>

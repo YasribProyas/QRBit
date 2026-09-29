@@ -24,6 +24,14 @@
  * `hooks/useReorderDrag.test.ts` own the index math; this file proves the panel drives it
  * with the right ids and the folder that was on screen.
  *
+ * **Two drag lists, one screen.** The panel runs one `useReorderDrag` for the folder rows and
+ * one per folder for its dossiers, so the harness reaches each list by its own grip class
+ * (`.library-panel__folder-grip` for a folder header, `.library-panel__grip` for a dossier
+ * row) and the folder tests assert both halves of the isolation: dragging a folder writes no
+ * `reorderFile` call and moves no dossier, and dragging a dossier writes no `reorderFolder`
+ * call and moves no folder — including the case where the two lists would read the *same*
+ * index at the same moment.
+ *
  * Rows are seeded with explicit `sortOrder` values, so the display order is the order the
  * test asked for rather than a `createdAt` tie-break that depends on how fast the machine
  * is.
@@ -46,9 +54,11 @@ import {
   getFilesInFolder,
   getFolders,
   getItemsInFolder,
+  reorderFolder,
   ROOT_FOLDER_ID,
   saveFile,
   saveItem,
+  siblingFolders,
 } from '../../lib/library'
 import type { FileBlock, LibraryFile, LibraryFolder, LibraryItem } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
@@ -101,6 +111,7 @@ Element.prototype.releasePointerCapture = function (pointerId: number): void {
 
 interface Recorded {
   reorderFile: Array<[string, number, string | undefined]>
+  reorderFolder: Array<[string, number, string | null | undefined]>
   deleteFile: string[]
   moveFile: Array<[string, string]>
   updateFile: Array<[string, Partial<LibraryFile>]>
@@ -111,6 +122,7 @@ interface Recorded {
 
 let calls: Recorded = {
   reorderFile: [],
+  reorderFolder: [],
   deleteFile: [],
   moveFile: [],
   updateFile: [],
@@ -129,6 +141,7 @@ let calls: Recorded = {
 function recordStore(): void {
   calls = {
     reorderFile: [],
+    reorderFolder: [],
     deleteFile: [],
     moveFile: [],
     updateFile: [],
@@ -141,6 +154,10 @@ function recordStore(): void {
     reorderFile: async (id, targetIndex, folderId) => {
       calls.reorderFile.push([id, targetIndex, folderId])
       await PRISTINE.reorderFile(id, targetIndex, folderId)
+    },
+    reorderFolder: async (id, targetIndex, parentId) => {
+      calls.reorderFolder.push([id, targetIndex, parentId])
+      await PRISTINE.reorderFolder(id, targetIndex, parentId)
     },
     deleteFile: async (id) => {
       calls.deleteFile.push(id)
@@ -225,6 +242,8 @@ interface SectionView {
   files: string[]
   /** Grips this section offers — the panel's statement about where an order exists. */
   grips: number
+  /** Grips on this section's own header row: the folder-level drag, one per listed folder. */
+  folderGrips: number
   newFile: HTMLButtonElement | null
   empty: string | null
 }
@@ -244,6 +263,7 @@ function viewOf(node: HTMLElement): SectionView {
       (name) => name.textContent?.trim() ?? '',
     ),
     grips: node.querySelectorAll('.library-panel__grip').length,
+    folderGrips: node.querySelectorAll('.library-panel__folder-grip').length,
     newFile: newFile ?? null,
     empty: node.querySelector('.library-panel__empty-folder')?.textContent?.trim() ?? null,
   }
@@ -274,6 +294,11 @@ function hasSection(name: string): boolean {
 
 function folderNodes(): HTMLElement[] {
   return [...panel().querySelectorAll<HTMLElement>('.library-panel__folder')]
+}
+
+/** The sections as they are stacked on screen, Root first: the folder rows' own order. */
+function folderOrderOnScreen(): string[] {
+  return folderNodes().map(headingOf)
 }
 
 function headingOf(node: HTMLElement): string {
@@ -362,9 +387,38 @@ function gripAt(index: number): HTMLButtonElement {
   return grip
 }
 
+/**
+ * The folder grips, in the order they are stacked.
+ *
+ * A separate class from the dossier grip on purpose, and the tests keep them separate: the
+ * panel hosts one drag list per folder plus one for the folder rows themselves, and every
+ * assertion about "index 1" has to say which of them it means.
+ */
+function folderGripAt(index: number): HTMLButtonElement {
+  const grips = [...panel().querySelectorAll<HTMLButtonElement>('.library-panel__folder-grip')]
+  const grip = grips[index]
+  if (grip === undefined) throw new Error(`test bug: no folder grip at index ${index}`)
+  return grip
+}
+
 /** Grabs row `fromIndex`'s grip, travels `deltaY` pixels, releases. The real drag path. */
 async function dragGrip(fromIndex: number, deltaY: number): Promise<void> {
   const grip = gripAt(fromIndex)
+
+  await act(async () => {
+    grip.dispatchEvent(new HarnessPointerEvent('pointerdown', { clientY: 100 }))
+  })
+  await act(async () => {
+    document.body.dispatchEvent(new HarnessPointerEvent('pointermove', { clientY: 100 + deltaY }))
+  })
+  await act(async () => {
+    document.body.dispatchEvent(new HarnessPointerEvent('pointerup', {}))
+  })
+}
+
+/** The same drag path, on a folder header's grip. */
+async function dragFolderGrip(fromIndex: number, deltaY: number): Promise<void> {
+  const grip = folderGripAt(fromIndex)
 
   await act(async () => {
     grip.dispatchEvent(new HarnessPointerEvent('pointerdown', { clientY: 100 }))
@@ -385,12 +439,57 @@ function pressOnGrip(index: number, key: string): void {
   })
 }
 
+/** The same key press, on a folder header's grip. */
+function pressOnFolderGrip(index: number, key: string): void {
+  const grip = folderGripAt(index)
+  act(() => {
+    grip.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Seeding
 // ---------------------------------------------------------------------------
 
 async function seedFolder(name: string, parentId: string | null = null): Promise<LibraryFolder> {
   return createFolder(name, parentId)
+}
+
+/**
+ * Puts the folders named by `ids` at the front of their parent's run, in that order.
+ *
+ * `createFolder` deliberately leaves a folder unordered, and unordered siblings fall back to a
+ * createdAt/id tiebreak a test cannot predict (two folders made in the same millisecond), so a
+ * seed that cares about the order states it through the real `reorderFolder` — the same call a
+ * drag makes. `saveFolder` is not an option: it is skip-by-id, an import's rule.
+ *
+ * The first step moves the row that currently reads first to the end, which *always* changes
+ * the index and so always materialises `SORT_ORDER_GAP` positions for the run: without it,
+ * placing rows one by one could land every row on its own index, write nothing, and leave the
+ * order resting on that same unpredictable tiebreak.
+ */
+async function orderFolders(parentId: string | null, ...ids: string[]): Promise<void> {
+  const run = siblingFolders(await getFolders(), parentId).map((folder) => folder.id)
+  const movedToEnd = run[0]
+  if (movedToEnd !== undefined && run.length > 1) {
+    await reorderFolder(movedToEnd, run.length - 1, parentId)
+  }
+
+  let placed = 0
+  for (const id of ids) {
+    await reorderFolder(id, placed, parentId)
+    placed += 1
+  }
+
+  const after = siblingFolders(await getFolders(), parentId).map((folder) => folder.id)
+  if (after.slice(0, ids.length).join(',') !== ids.join(',')) {
+    throw new Error(`test bug: could not seed ${ids.join(',')} — the run reads ${after.join(',')}`)
+  }
+}
+
+/** The top-level folders as IndexedDB reads them, in the order the library reads them. */
+async function folderNamesInLibrary(): Promise<string[]> {
+  return siblingFolders(await getFolders(), null).map((folder) => folder.name)
 }
 
 /**
@@ -454,6 +553,7 @@ afterEach(() => {
   ;(globalThis as unknown as Record<string, unknown>)['IS_REACT_ACT_ENVIRONMENT'] = undefined
   useLibraryStore.setState({
     reorderFile: PRISTINE.reorderFile,
+    reorderFolder: PRISTINE.reorderFolder,
     deleteFile: PRISTINE.deleteFile,
     moveFile: PRISTINE.moveFile,
     updateFile: PRISTINE.updateFile,
@@ -777,6 +877,197 @@ describe('LibraryPanel — reordering a folder', () => {
 
     expect(calls.reorderFile).toEqual([])
     expect(sectionNamed('Vault').files).toEqual(['Alpha', 'Bravo'])
+  })
+})
+
+describe('LibraryPanel — reordering folders', () => {
+  /**
+   * Three top-level folders in a stated order, the first two holding two dossiers each in a
+   * stated order.
+   *
+   * Both kinds of row get explicit positions, so an assertion about "row 1" cannot pass by
+   * accident in either of the two lists on the screen.
+   */
+  async function seedThreeFolders(): Promise<{
+    alpha: LibraryFolder
+    beta: LibraryFolder
+    gamma: LibraryFolder
+    a1: LibraryFile
+    a2: LibraryFile
+    b1: LibraryFile
+    b2: LibraryFile
+  }> {
+    const alpha = await seedFolder('Alpha')
+    const beta = await seedFolder('Beta')
+    const gamma = await seedFolder('Gamma')
+    await orderFolders(null, alpha.id, beta.id, gamma.id)
+    const a1 = await seedFile('A1', alpha.id, 1000)
+    const a2 = await seedFile('A2', alpha.id, 2000)
+    const b1 = await seedFile('B1', beta.id, 1000)
+    const b2 = await seedFile('B2', beta.id, 2000)
+    return { alpha, beta, gamma, a1, a2, b1, b2 }
+  }
+
+  it('reorders the folder rows by dragging the folder grip, through the store', async () => {
+    const { alpha } = await seedThreeFolders()
+    await loadLibrary()
+
+    renderPanel()
+    expect(folderOrderOnScreen()).toEqual(['Root', 'Alpha', 'Beta', 'Gamma'])
+    // A folder header has a grip; the Root bucket spans several folders, so no single index
+    // describes it and the panel offers no grip for it.
+    expect(sectionNamed('Alpha').folderGrips).toBe(1)
+    expect(sectionNamed('Root').folderGrips).toBe(0)
+
+    // 120px down at the 48px pitch jsdom forces: two rows.
+    await dragFolderGrip(0, 120)
+
+    expect(calls.reorderFolder).toEqual([[alpha.id, 2, null]])
+    await waitFor(() => folderOrderOnScreen().join(',') === 'Root,Beta,Gamma,Alpha', 'Alpha last')
+    expect(await folderNamesInLibrary()).toEqual(['Beta', 'Gamma', 'Alpha'])
+  })
+
+  it('reorders folders with the grip keyboard twin, through the same store call', async () => {
+    const { alpha } = await seedThreeFolders()
+    await loadLibrary()
+
+    renderPanel()
+    pressOnFolderGrip(0, 'ArrowDown')
+
+    // One call, with the arguments the equivalent drag makes: one code path, two inputs.
+    expect(calls.reorderFolder).toEqual([[alpha.id, 1, null]])
+    await waitFor(() => folderOrderOnScreen().join(',') === 'Root,Beta,Alpha,Gamma', 'Alpha second')
+    expect(await folderNamesInLibrary()).toEqual(['Beta', 'Alpha', 'Gamma'])
+  })
+
+  it('lands a folder in the same place whether the move was a drag or a key press', async () => {
+    const { alpha, beta, gamma } = await seedThreeFolders()
+    await loadLibrary()
+
+    renderPanel()
+    pressOnFolderGrip(0, 'ArrowDown')
+    await waitFor(() => folderOrderOnScreen().join(',') === 'Root,Beta,Alpha,Gamma', 'the key move')
+    const afterKey = folderOrderOnScreen().join(',')
+
+    // Back to the start, then the identical step by pointer.
+    await orderFolders(null, alpha.id, beta.id, gamma.id)
+    await loadLibrary()
+    expect(folderOrderOnScreen()).toEqual(['Root', 'Alpha', 'Beta', 'Gamma'])
+
+    await dragFolderGrip(0, 60)
+    await waitFor(() => folderOrderOnScreen().join(',') === afterKey, 'the drag to match the key')
+
+    expect(folderOrderOnScreen().join(',')).toBe(afterKey)
+    expect(await folderNamesInLibrary()).toEqual(['Beta', 'Alpha', 'Gamma'])
+    // Both inputs asked the store for exactly the same thing, once each.
+    expect(calls.reorderFolder).toEqual([
+      [alpha.id, 1, null],
+      [alpha.id, 1, null],
+    ])
+  })
+
+  it('leaves every dossier where it was when a folder is dragged', async () => {
+    const { alpha, beta } = await seedThreeFolders()
+    await loadLibrary()
+
+    renderPanel()
+    await dragFolderGrip(0, 60)
+    await waitFor(() => folderOrderOnScreen().join(',') === 'Root,Beta,Alpha,Gamma', 'Alpha second')
+
+    // The other list on the screen was neither asked about nor moved.
+    expect(calls.reorderFile).toEqual([])
+    expect((await getFilesInFolder(alpha.id)).map((file) => file.name)).toEqual(['A1', 'A2'])
+    expect((await getFilesInFolder(beta.id)).map((file) => file.name)).toEqual(['B1', 'B2'])
+    expect(sectionFiles('Alpha')).toEqual(['A1', 'A2'])
+    expect(sectionFiles('Beta')).toEqual(['B1', 'B2'])
+  })
+
+  it('leaves the folder rows where they were when a dossier is dragged', async () => {
+    const { alpha, a2 } = await seedThreeFolders()
+    await loadLibrary()
+
+    renderPanel()
+    // Panel-wide dossier grip 1 is Alpha's second row; folder grip 1 is Beta's header. The two
+    // lists are on screen at the same time and neither owns index 1.
+    await dragGrip(1, -60)
+
+    expect(calls.reorderFile).toEqual([[a2.id, 0, alpha.id]])
+    expect(calls.reorderFolder).toEqual([])
+    await waitFor(() => sectionFiles('Alpha').join(',') === 'A2,A1', 'A2 first')
+    expect(folderOrderOnScreen()).toEqual(['Root', 'Alpha', 'Beta', 'Gamma'])
+    expect(await folderNamesInLibrary()).toEqual(['Alpha', 'Beta', 'Gamma'])
+  })
+
+  it('counts each drag list against its own rows, in both lists, in one session', async () => {
+    const { alpha, beta, a2, b1, b2 } = await seedThreeFolders()
+    await loadLibrary()
+
+    renderPanel()
+    await dragGrip(1, -60) // inside Alpha: its second dossier to the top
+    await waitFor(() => sectionFiles('Alpha').join(',') === 'A2,A1', 'the dossier move')
+    expect(sectionFiles('Beta')).toEqual(['B1', 'B2'])
+
+    await dragFolderGrip(1, -60) // the folder list: Beta above Alpha
+    await waitFor(() => folderOrderOnScreen().join(',') === 'Root,Beta,Alpha,Gamma', 'the folder move')
+
+    expect(calls.reorderFile).toEqual([[a2.id, 0, alpha.id]])
+    expect(calls.reorderFolder).toEqual([[beta.id, 0, null]])
+    // Neither list's move disturbed the other: Beta came along with its own rows intact.
+    expect(sectionFiles('Beta')).toEqual(['B1', 'B2'])
+    expect(sectionFiles('Alpha')).toEqual(['A2', 'A1'])
+    expect((await getFilesInFolder(beta.id)).map((file) => file.id)).toEqual([b1.id, b2.id])
+  })
+
+  it('keeps a folder reorder after the panel goes away and the database is reopened', async () => {
+    const { alpha } = await seedThreeFolders()
+    await loadLibrary()
+
+    renderPanel()
+    await dragFolderGrip(0, 60)
+    await waitFor(() => folderOrderOnScreen().join(',') === 'Root,Beta,Alpha,Gamma', 'Alpha second')
+    expect(calls.reorderFolder).toEqual([[alpha.id, 1, null]])
+
+    // Close the panel and the connection, the way leaving the page does, then come back.
+    act(() => {
+      root?.unmount()
+    })
+    container?.remove()
+    root = null
+    container = null
+    await closeLibraryDatabase()
+
+    await loadLibrary()
+    renderPanel()
+
+    expect(folderOrderOnScreen()).toEqual(['Root', 'Beta', 'Alpha', 'Gamma'])
+    expect(await folderNamesInLibrary()).toEqual(['Beta', 'Alpha', 'Gamma'])
+  })
+
+  it('reorders the folders inside one parent without touching the top level', async () => {
+    const vault = await seedFolder('Vault')
+    const other = await seedFolder('Other')
+    await orderFolders(null, vault.id, other.id)
+    const first = await seedFolder('First', vault.id)
+    const second = await seedFolder('Second', vault.id)
+    await orderFolders(vault.id, second.id, first.id)
+
+    // The subfolder run, exactly as it stood before the top level was touched.
+    const subRunBefore = siblingFolders(await getFolders(), vault.id)
+    await loadLibrary()
+
+    renderPanel()
+    // This panel lists one level, so the subfolders are not rows here; their run still belongs
+    // to their own parent and a top-level drag must not renumber or re-home it.
+    await dragFolderGrip(0, 60)
+
+    expect(calls.reorderFolder).toEqual([[vault.id, 1, null]])
+    await waitFor(() => folderOrderOnScreen().join(',') === 'Root,Other,Vault', 'Vault last')
+    expect(siblingFolders(await getFolders(), vault.id)).toEqual(subRunBefore)
+    expect(siblingFolders(await getFolders(), vault.id).map((folder) => folder.id)).toEqual([
+      second.id,
+      first.id,
+    ])
+    expect(subRunBefore.map((folder) => folder.parentId)).toEqual([vault.id, vault.id])
   })
 })
 

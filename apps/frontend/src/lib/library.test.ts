@@ -37,12 +37,14 @@ import {
   parseFile,
   renameFolder,
   reorderFile,
+  reorderFolder,
   ROOT_FOLDER_ID,
   saveFile,
   saveFolder,
   saveFromSession,
   saveItem,
   seedInitialLibrary,
+  siblingFolders,
   updateFile,
   updateItem,
   type FileBlock,
@@ -1700,6 +1702,378 @@ describe('a new file has no sortOrder, which reads as the end of its folder', ()
     await reorderFile(created.id, 0, folder.id)
     expect((await getFile(created.id))?.sortOrder).toBeDefined()
     expect(await idsIn(folder.id)).toEqual([created.id, 'n-first', 'n-second'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Folder ordering — `sortOrder`, `siblingFolders` and `reorderFolder` on folders
+// (ORCHESTRATION D16: the dossier scheme, copied rather than reinvented, and scoped to the
+// siblings that share a parent)
+// ---------------------------------------------------------------------------
+
+/** A folder with only the fields the ordering tests care about filled in. */
+function folderRow(overrides: Partial<LibraryFolder> = {}): LibraryFolder {
+  return {
+    id: globalThis.crypto.randomUUID(),
+    name: 'folder',
+    parentId: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  }
+}
+
+async function saveFolderRow(overrides: Partial<LibraryFolder>): Promise<LibraryFolder> {
+  const folder = folderRow(overrides)
+  await saveFolder(folder)
+  return folder
+}
+
+/** The folder ids one parent reads back, in read order — what every assertion below is about. */
+async function folderIdsIn(parentId: string | null): Promise<string[]> {
+  return siblingFolders(await getFolders(), parentId).map((folder) => folder.id)
+}
+
+/** The whole records of one parent's run, so a test can see what a reorder did *not* touch. */
+async function foldersIn(parentId: string | null): Promise<LibraryFolder[]> {
+  return siblingFolders(await getFolders(), parentId)
+}
+
+/** A folder record with a field the compiler would not allow, to prove the read boundary holds. */
+function garbageFolder(fields: Record<string, unknown>): LibraryFolder {
+  // The same trick `garbage` uses for items: the compiler would reject these shapes, which is
+  // the point — the layer's own validation, not the type system, is what keeps IDB clean.
+  return fields as unknown as LibraryFolder
+}
+
+describe('folder ordering (sortOrder and reorderFolder, ORCHESTRATION D16)', () => {
+  it('reads a sibling run by sortOrder ascending', async () => {
+    await saveFolderRow({ id: 'c-3', sortOrder: 3000 })
+    await saveFolderRow({ id: 'c-1', sortOrder: 1000, createdAt: NOW + 5 })
+    await saveFolderRow({ id: 'c-2', sortOrder: 2000, createdAt: NOW + 9 })
+
+    expect(await folderIdsIn(null)).toEqual(['c-1', 'c-2', 'c-3'])
+    // Written out of sequence on purpose: insertion order is not the read order.
+    expect(await folderIdsIn('no-such-parent')).toEqual([])
+  })
+
+  it('splits an equal sortOrder by createdAt, then by id, and reads the same way every time', async () => {
+    await saveFolderRow({ id: 'x-2', sortOrder: 1000, createdAt: NOW + 5 })
+    await saveFolderRow({ id: 'x-1', sortOrder: 1000, createdAt: NOW + 5 })
+    await saveFolderRow({ id: 'x-3', sortOrder: 1000, createdAt: NOW + 1 })
+
+    const first = await folderIdsIn(null)
+    expect(first).toEqual(['x-3', 'x-1', 'x-2'])
+    // A total tiebreak: nothing jitters between two renders of the panel.
+    expect(await folderIdsIn(null)).toEqual(first)
+    expect(await folderIdsIn(null)).toEqual(first)
+  })
+
+  it('reads an unordered sibling run oldest first, and the same way every time', async () => {
+    await saveFolderRow({ id: 'u-2', createdAt: NOW + 10 })
+    await saveFolderRow({ id: 'u-1', createdAt: NOW })
+    await saveFolderRow({ id: 'u-3', createdAt: NOW + 20 })
+
+    const first = await folderIdsIn(null)
+    expect(first).toEqual(['u-1', 'u-2', 'u-3'])
+    expect(await folderIdsIn(null)).toEqual(first)
+  })
+
+  it('reads a folder with no sortOrder after every sibling that has one', async () => {
+    // Older than the ordered rows, and still last: an unscored row is "not ordered yet".
+    await saveFolderRow({ id: 'v-old', createdAt: NOW - 10_000 })
+    await saveFolderRow({ id: 'v-scored', createdAt: NOW, sortOrder: 1000 })
+
+    expect(await folderIdsIn(null)).toEqual(['v-scored', 'v-old'])
+  })
+
+  it('keeps the root run and a subfolder run independent, even with the same numbers', async () => {
+    const parent = await saveFolderRow({ id: 'p-1', sortOrder: 3000, createdAt: NOW })
+    await saveFolderRow({ id: 'b-1', sortOrder: 1000, createdAt: NOW + 1 })
+    await saveFolderRow({ id: 'b-2', sortOrder: 2000, createdAt: NOW + 2 })
+    await saveFolderRow({ id: 'r-1', parentId: parent.id, sortOrder: 1000, createdAt: NOW + 3 })
+    await saveFolderRow({ id: 'r-2', parentId: parent.id, sortOrder: 2000, createdAt: NOW + 4 })
+
+    // The two runs use identical positions, which only ever compare inside their own group.
+    expect(await folderIdsIn(null)).toEqual(['b-1', 'b-2', parent.id])
+    expect(await folderIdsIn(parent.id)).toEqual(['r-1', 'r-2'])
+
+    await reorderFolder('b-2', 0, null)
+    expect(await folderIdsIn(null)).toEqual(['b-2', 'b-1', parent.id])
+    // Reordering the top level did not shuffle the subfolders out of their parent.
+    expect(await foldersIn(parent.id)).toEqual([
+      expect.objectContaining({ id: 'r-1', sortOrder: 1000, parentId: parent.id }),
+      expect.objectContaining({ id: 'r-2', sortOrder: 2000, parentId: parent.id }),
+    ])
+
+    await reorderFolder('r-2', 0, parent.id)
+    expect(await folderIdsIn(parent.id)).toEqual(['r-2', 'r-1'])
+    expect(await folderIdsIn(null)).toEqual(['b-2', 'b-1', parent.id])
+  })
+
+  it('lands exactly where moveIndex says it should, in both directions', async () => {
+    const current = ['m-1', 'm-2', 'm-3', 'm-4']
+    for (const [position, id] of current.entries()) {
+      await saveFolderRow({ id, sortOrder: (position + 1) * SORT_ORDER_GAP })
+    }
+
+    const moves: ReadonlyArray<readonly [string, number]> = [
+      ['m-1', 3],
+      ['m-4', 0],
+      ['m-2', 2],
+      ['m-3', 3],
+      ['m-1', 1],
+      ['m-2', 0],
+    ]
+    let order = [...current]
+    for (const [id, to] of moves) {
+      const from = order.indexOf(id)
+      await reorderFolder(id, to, null)
+      order = moveIndex(order, from, to)
+      expect(await folderIdsIn(null)).toEqual(order)
+    }
+  })
+
+  it('rewrites only the moved folder once the run is ordered', async () => {
+    await saveFolderRow({ id: 'a', sortOrder: 1000, updatedAt: 111 })
+    await saveFolderRow({ id: 'b', sortOrder: 2000, updatedAt: 222 })
+    await saveFolderRow({ id: 'c', sortOrder: 3000, updatedAt: 333 })
+
+    await reorderFolder('c', 0, null)
+
+    const after = await foldersIn(null)
+    expect(after.map((folder) => folder.id)).toEqual(['c', 'a', 'b'])
+    expect(after.map((folder) => folder.sortOrder)).toEqual([0, 1000, 2000])
+    // The neighbours were neither rewritten nor restamped.
+    expect(after.find((folder) => folder.id === 'a')).toEqual(
+      expect.objectContaining({ sortOrder: 1000, updatedAt: 111 }),
+    )
+    expect(after.find((folder) => folder.id === 'b')).toEqual(
+      expect.objectContaining({ sortOrder: 2000, updatedAt: 222 }),
+    )
+  })
+
+  it('does not restamp updatedAt, so a reorder is not an edit', async () => {
+    await saveFolderRow({ id: 's-1', sortOrder: 1000, updatedAt: 42 })
+    await saveFolderRow({ id: 's-2', sortOrder: 2000, updatedAt: 43 })
+
+    await reorderFolder('s-2', 0, null)
+
+    const moved = (await foldersIn(null)).find((folder) => folder.id === 's-2')
+    expect(moved?.updatedAt).toBe(43)
+    expect(moved?.sortOrder).toBe(0)
+  })
+
+  it('never orders by updatedAt, so a rename cannot teleport a folder', async () => {
+    await saveFolderRow({ id: 'q-1', sortOrder: 1000 })
+    await saveFolderRow({ id: 'q-2', sortOrder: 2000 })
+
+    await renameFolder('q-2', 'Renamed last, still last')
+    expect(await folderIdsIn(null)).toEqual(['q-1', 'q-2'])
+
+    await renameFolder('q-1', 'Renamed first, still first')
+    expect(await folderIdsIn(null)).toEqual(['q-1', 'q-2'])
+  })
+
+  it('gives the whole run a position on the first reorder of an unordered run', async () => {
+    await saveFolderRow({ id: 'l-1', createdAt: NOW })
+    await saveFolderRow({ id: 'l-2', createdAt: NOW + 1 })
+    await saveFolderRow({ id: 'l-3', createdAt: NOW + 2 })
+
+    await reorderFolder('l-3', 0, null)
+
+    const after = await foldersIn(null)
+    expect(after.map((folder) => folder.id)).toEqual(['l-3', 'l-1', 'l-2'])
+    expect(after.map((folder) => folder.sortOrder)).toEqual([
+      SORT_ORDER_GAP,
+      2 * SORT_ORDER_GAP,
+      3 * SORT_ORDER_GAP,
+    ])
+  })
+
+  it('renumbers the run when the gap around the target index has collapsed', async () => {
+    await saveFolderRow({ id: 't-1', sortOrder: 1000, createdAt: NOW })
+    await saveFolderRow({ id: 't-2', sortOrder: 1001, createdAt: NOW + 1 })
+    await saveFolderRow({ id: 't-3', sortOrder: 1002, createdAt: NOW + 2 })
+
+    await reorderFolder('t-1', 1, null)
+
+    const after = await foldersIn(null)
+    expect(after.map((folder) => folder.id)).toEqual(['t-2', 't-1', 't-3'])
+    expect(after.map((folder) => folder.sortOrder)).toEqual([1000, 2000, 3000])
+  })
+
+  it('repairs duplicated positions by renumbering rather than writing another duplicate', async () => {
+    await saveFolderRow({ id: 'd-1', sortOrder: 1000, createdAt: NOW })
+    await saveFolderRow({ id: 'd-2', sortOrder: 1000, createdAt: NOW + 1 })
+    await saveFolderRow({ id: 'd-3', sortOrder: 2000, createdAt: NOW + 2 })
+
+    await reorderFolder('d-3', 1, null)
+
+    const after = await foldersIn(null)
+    expect(after.map((folder) => folder.id)).toEqual(['d-1', 'd-3', 'd-2'])
+    expect(after.map((folder) => folder.sortOrder)).toEqual([1000, 2000, 3000])
+  })
+
+  it('writes nothing when the folder is dropped back where it was', async () => {
+    await saveFolderRow({ id: 'n-1', createdAt: NOW })
+    await saveFolderRow({ id: 'n-2', createdAt: NOW + 1 })
+
+    await reorderFolder('n-1', 0, null)
+
+    const after = await foldersIn(null)
+    expect(after.map((folder) => folder.id)).toEqual(['n-1', 'n-2'])
+    // No materialised positions either: the run is exactly as it was.
+    expect(after.map((folder) => folder.sortOrder)).toEqual([undefined, undefined])
+  })
+
+  it('persists a reorder across a close and reopen of the database', async () => {
+    await saveFolderRow({ id: 'z-1', sortOrder: 1000, createdAt: NOW })
+    await saveFolderRow({ id: 'z-2', sortOrder: 2000, createdAt: NOW + 1 })
+    await saveFolderRow({ id: 'z-3', sortOrder: 3000, createdAt: NOW + 2 })
+
+    await reorderFolder('z-3', 0, null)
+    const before = await folderIdsIn(null)
+    expect(before).toEqual(['z-3', 'z-1', 'z-2'])
+
+    // The next connection reads what the last one wrote — the panel's order is storage's order.
+    await closeLibraryDatabase()
+    expect(await folderIdsIn(null)).toEqual(before)
+  })
+
+  it('keeps a sortOrder through a rename, and writes one on a folder that is not stored yet', async () => {
+    await saveFolderRow({ id: 'k-1', sortOrder: 1500 })
+    await saveFolderRow({ id: 'k-2', sortOrder: 2500 })
+
+    await renameFolder('k-1', 'Renamed keeps its place')
+    expect((await foldersIn(null)).map((folder) => folder.sortOrder)).toEqual([1500, 2500])
+
+    // A whole-folder write carries the position it is given — `saveFolder` stores exactly what
+    // `parseFolder` returns, so dropping the field on the way through would teleport every
+    // imported folder to the end of its parent's run.
+    await saveFolder(folderRow({ id: 'k-3', sortOrder: 300 }))
+    expect((await foldersIn(null)).find((folder) => folder.id === 'k-3')?.sortOrder).toBe(300)
+    // And one that omits it has no position, which reads as "end of the run".
+    await saveFolder(folderRow({ id: 'k-4' }))
+    expect((await foldersIn(null)).find((folder) => folder.id === 'k-4')?.sortOrder).toBeUndefined()
+
+    // Re-importing the same export is still the skip-by-id no-op it was: a second import
+    // cannot reset a folder the user has dragged somewhere.
+    await saveFolder(folderRow({ id: 'k-2', name: 'Ignored', sortOrder: 9999 }))
+    expect((await foldersIn(null)).find((folder) => folder.id === 'k-2')?.sortOrder).toBe(2500)
+  })
+
+  it('treats the root id as an alias for a null parent, like every other folder call', async () => {
+    await saveFolderRow({ id: 'w-1', sortOrder: 1000, createdAt: NOW })
+    await saveFolderRow({ id: 'w-2', sortOrder: 2000, createdAt: NOW + 1 })
+
+    await reorderFolder('w-2', 0, ROOT_FOLDER_ID)
+
+    expect(await folderIdsIn(null)).toEqual(['w-2', 'w-1'])
+    expect(await folderIdsIn(ROOT_FOLDER_ID)).toEqual(['w-2', 'w-1'])
+  })
+
+  it('refuses an id, an index, or a parent it was not given', async () => {
+    const parent = await saveFolderRow({ id: 'g-p', sortOrder: 1000, createdAt: NOW })
+    await saveFolderRow({ id: 'g-1', sortOrder: 2000, createdAt: NOW + 1 })
+    await saveFolderRow({ id: 'g-child', parentId: parent.id, sortOrder: 1000, createdAt: NOW + 2 })
+
+    await expect(reorderFolder('g-1', 2, null)).rejects.toThrow(/out of range for 2 folders in the root/)
+    await expect(reorderFolder('g-1', 5)).rejects.toThrow(/out of range for 2 folders/)
+    await expect(reorderFolder('g-child', 1, parent.id)).rejects.toThrow(/out of range for 1 folders/)
+    await expect(reorderFolder('g-1', -1)).rejects.toThrow(/non-negative integer index/)
+    await expect(reorderFolder('g-1', 1.5)).rejects.toThrow(/non-negative integer index/)
+    await expect(reorderFolder('g-1', Number.NaN)).rejects.toThrow(/non-negative integer index/)
+    await expect(reorderFolder('missing', 0)).rejects.toThrow(/library: no folder with id "missing"/)
+    await expect(reorderFolder('', 0)).rejects.toThrow(/library: reorderFolder needs a non-empty id/)
+    await expect(reorderFolder(ROOT_FOLDER_ID, 0)).rejects.toThrow(/root folder cannot be reordered/)
+    await expect(reorderFolder('g-1', 0, '  ')).rejects.toThrow(/folder parent must be a folder id or null/)
+    // A root folder is not in that parent's run, and a subfolder is not in the root's — the two
+    // directions of the same rule, which is what protects a subfolder from a top-level drag.
+    await expect(reorderFolder('g-1', 0, parent.id)).rejects.toThrow(/was given parent folder/)
+    await expect(reorderFolder('g-child', 0, null)).rejects.toThrow(/lives in folder/)
+
+    // A rejected reorder leaves both runs alone.
+    expect(await folderIdsIn(null)).toEqual(['g-p', 'g-1'])
+    expect(await folderIdsIn(parent.id)).toEqual(['g-child'])
+  })
+
+  it('accepts an integer sortOrder on a folder and rejects anything else', async () => {
+    await saveFolderRow({ id: 'v-1', sortOrder: 7 })
+    expect((await foldersIn(null)).find((folder) => folder.id === 'v-1')?.sortOrder).toBe(7)
+    await saveFolderRow({ id: 'v-2' })
+    expect((await foldersIn(null)).find((folder) => folder.id === 'v-2')?.sortOrder).toBeUndefined()
+    // A stored `null` (a hand-written record meaning "absent") is not garbage.
+    await saveFolder(garbageFolder({ ...folderRow({ id: 'v-3' }), sortOrder: null }))
+    expect((await foldersIn(null)).find((folder) => folder.id === 'v-3')?.sortOrder).toBeUndefined()
+
+    for (const bad of ['1000', Number.NaN, 1.5, Number.POSITIVE_INFINITY, {}, true, []]) {
+      await expect(saveFolder(garbageFolder({ ...folderRow(), sortOrder: bad }))).rejects.toThrow(
+        /library: a folder needs an integer "sortOrder"/,
+      )
+    }
+
+    // Negative positions are storable: a row dragged above a run that starts at 0 pushes it
+    // down, and the run is renumbered before it can overflow.
+    await saveFolderRow({ id: 'v-neg', sortOrder: -1000 })
+    expect((await foldersIn(null)).find((folder) => folder.id === 'v-neg')?.sortOrder).toBe(-1000)
+  })
+
+  it('still rejects an unknown field on a folder, now that sortOrder is allowed', async () => {
+    // Adding `sortOrder` to the whitelist must not have loosened the whitelist.
+    await saveFolder(garbageFolder({ ...folderRow({ id: 'f-known' }), sortOrder: 1000, color: '#1D4ED8' }))
+    await expect(
+      saveFolder(garbageFolder({ ...folderRow({ id: 'f-sneaky' }), sneaky: true })),
+    ).rejects.toThrow(/library: unexpected field "sneaky" on a folder/)
+
+    await withRawDatabase(async (db) => {
+      await idbRequest(
+        db.transaction('folders', 'readwrite').objectStore('folders').put({
+          ...folderRow({ id: 'f-raw' }),
+          sortOrder: '1000',
+        }),
+      )
+    })
+    await expect(getFolders()).rejects.toThrow(/library: a folder needs an integer "sortOrder"/)
+    await expect(saveFolder(garbageFolder({ ...folderRow({ id: 'f-bad-parent' }), parentId: 7 }))).rejects.toThrow(
+      /"parentId" that is a folder id or null/,
+    )
+  })
+})
+
+describe('a new folder has no sortOrder, which reads as the end of its parent', () => {
+  it('leaves the field absent and lands last, at the root and inside a parent', async () => {
+    await saveFolderRow({ id: 'e-first', sortOrder: 1000 })
+    await saveFolderRow({ id: 'e-second', sortOrder: 2000 })
+
+    const fresh = await createFolder('Fresh folder', null)
+
+    expect(fresh.sortOrder).toBeUndefined()
+    expect(await folderIdsIn(null)).toEqual(['e-first', 'e-second', fresh.id])
+
+    // Once it is dragged, it gets a position like any other row.
+    await reorderFolder(fresh.id, 0, null)
+    expect((await foldersIn(null)).find((folder) => folder.id === fresh.id)?.sortOrder).toBeDefined()
+    expect(await folderIdsIn(null)).toEqual([fresh.id, 'e-first', 'e-second'])
+
+    // Same inside a folder: the new child joins its parent's ordered run at the end.
+    const parent = await createFolder('Parent', null)
+    await createFolder('One', parent.id)
+    await createFolder('Two', parent.id)
+    // Seed the order by moving the row that reads first to the end. That always changes the
+    // index, so the run gets real positions rather than resting on a same-millisecond
+    // createdAt tie, which no test can predict (`createFolder` deliberately scores nothing).
+    const run = await foldersIn(parent.id)
+    const earliest = run[0]
+    const next = run[1]
+    if (earliest === undefined || next === undefined) {
+      throw new Error('test bug: the parent was seeded with two children')
+    }
+    await reorderFolder(earliest.id, 1, parent.id)
+
+    const thirdChild = await createFolder('Three', parent.id)
+
+    expect(await folderIdsIn(parent.id)).toEqual([next.id, earliest.id, thirdChild.id])
   })
 })
 
