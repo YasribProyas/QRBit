@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import type { FileBlock } from '../../lib/library'
 import { decryptItem, encryptItem } from '../../lib/crypto'
+import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
 
 export interface BlockItemProps {
   block: FileBlock
@@ -30,9 +31,24 @@ export interface BlockItemProps {
   onUpdate?: (id: string, changes: Partial<FileBlock>) => void
   onDelete?: (id: string) => void
   onDuplicate?: (id: string) => void
+  /**
+   * The keyboard/accessible twin of the grip drag (ORCHESTRATION D16.3). Both this and
+   * `reorderHandleProps` are wired by the editor to ONE reorder reducer, so a click on an
+   * arrow and a released drag cannot drift apart.
+   */
   onMoveUp?: (index: number) => void
   onMoveDown?: (index: number) => void
   onUnlockCredential?: (id: string, plaintextContent: string) => void
+  /**
+   * Props from `useReorderDrag().getHandleProps(index)`, spread onto the grip. The grip is a
+   * real `<button>` because that is what the hook needs: pointer down starts the drag, and
+   * ArrowUp/ArrowDown/Home/End on it are the keyboard path. Omitted = no grip rendered.
+   */
+  reorderHandleProps?: ReorderHandleProps
+  /** True while THIS row is the one under the pointer; it is the row that gets translated. */
+  isReorderDragging?: boolean
+  /** Pixels the grabbed row sits below its normal position. Only read while dragging. */
+  reorderOffset?: number
 }
 
 export function BlockItem({
@@ -48,6 +64,9 @@ export function BlockItem({
   onMoveUp,
   onMoveDown,
   onUnlockCredential,
+  reorderHandleProps,
+  isReorderDragging = false,
+  reorderOffset = 0,
 }: BlockItemProps) {
   const [passwordInput, setPasswordInput] = useState('')
   const [unlockError, setUnlockError] = useState(false)
@@ -58,6 +77,26 @@ export function BlockItem({
   const [showLockConfigModal, setShowLockConfigModal] = useState(false)
   const [newLockPassword, setNewLockPassword] = useState('')
   const [isEncrypting, setIsEncrypting] = useState(false)
+
+  // Every edit-mode row is a measured reorder item, grip or no grip: the hook counts those
+  // markers to index a drag, so the set of them has to be the whole list.
+  const isReorderRow = mode === 'edit'
+
+  /** The grabbed row is painted at the pointer, above its neighbours, and nothing else moves. */
+  const dragStyle = isReorderDragging
+    ? { transform: `translateY(${reorderOffset}px)`, zIndex: 1 }
+    : undefined
+
+  /** The grip, rendered only when the editor handed this row a drag handle (D16.2). */
+  const grip =
+    isReorderRow && reorderHandleProps !== undefined ? (
+      <button
+        {...reorderHandleProps}
+        className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded p-0.5 tactile-btn"
+      >
+        <GripVertical className="w-3.5 h-3.5" aria-hidden="true" />
+      </button>
+    ) : null
 
   const handleUnlockSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -187,7 +226,12 @@ export function BlockItem({
   // DIVIDER BLOCK
   if (block.type === 'divider') {
     return (
-      <div className="group relative my-3 flex items-center">
+      <div
+        className="group relative my-3 flex items-center gap-2"
+        data-reorder-item={isReorderRow ? '' : undefined}
+        style={dragStyle}
+      >
+        {grip !== null ? <span className="shrink-0">{grip}</span> : null}
         {mode === 'edit' && (
           <div className="absolute -left-8 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
             <button
@@ -218,16 +262,14 @@ export function BlockItem({
         block.isLocked
           ? 'border-[#C2410C]/40 bg-orange-50/15'
           : 'border-[#D1D9E4]'
-      } hover:border-[#94A3B8] shadow-2xs`}
+      } hover:border-[#94A3B8] shadow-2xs ${isReorderDragging ? 'shadow-md' : ''}`}
+      data-reorder-item={isReorderRow ? '' : undefined}
+      style={dragStyle}
     >
       {/* Header bar of block */}
       <div className="px-3.5 pt-2.5 pb-1.5 flex items-center justify-between border-b border-slate-100">
         <div className="flex items-center gap-2">
-          {mode === 'edit' && (
-            <div className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-700 p-0.5">
-              <GripVertical className="w-3.5 h-3.5" />
-            </div>
-          )}
+          {grip !== null ? <span className="shrink-0">{grip}</span> : null}
           <span className="text-[11px] font-mono font-medium text-[#5B6B82] uppercase">
             {block.type === 'shortText' ? 'Short Text' : block.type}
           </span>
@@ -274,6 +316,7 @@ export function BlockItem({
                 disabled={index === 0}
                 className="p-1 text-slate-500 hover:text-slate-800 disabled:opacity-30 rounded tactile-btn cursor-pointer"
                 title="Move up"
+                aria-label={`Move ${block.type} block up`}
               >
                 <ChevronUp className="w-3.5 h-3.5" />
               </button>
@@ -283,6 +326,7 @@ export function BlockItem({
                 disabled={index === totalBlocks - 1}
                 className="p-1 text-slate-500 hover:text-slate-800 disabled:opacity-30 rounded tactile-btn cursor-pointer"
                 title="Move down"
+                aria-label={`Move ${block.type} block down`}
               >
                 <ChevronDown className="w-3.5 h-3.5" />
               </button>
