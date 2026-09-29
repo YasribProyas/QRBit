@@ -1,50 +1,191 @@
 @import "tailwindcss";
 
 /*
- * QRBit — P2P structured file transfer.
- * Design tokens and UI/UX from qrd-design with Tailwind CSS v4.
+ * QRBit — design-system foundation: the token layer, the fonts that carry it, the
+ * browser surfaces that must not ship in default colours, and the hand-written rules
+ * that predate the Mantine migration.
+ *
+ * `DESIGN.md` at the repository root is normative. Every value below is either copied
+ * verbatim from its YAML frontmatter or is a documented consequence of a value that is.
+ * A hex literal in a `.tsx` is a bug (DESIGN.md, "The No Raw Hex Rule"); the hexes live
+ * here, and `theme.ts` mirrors the ones Mantine needs as real colours. `theme.test.ts`
+ * fails if the three files ever disagree.
+ *
+ * The scheme is decided once, by the `data-theme` attribute on `<html>`: light values are
+ * the default and `[data-theme='dark']` replaces the surface/ink set. `main.tsx` keeps
+ * that attribute equal to Mantine's resolved colour scheme, so a component never asks
+ * which scheme it is in — it only ever names a token.
  */
 
+/* ------------------------------------------------------------------- fonts -- */
+
+/*
+ * Self-hosted, same-origin, variable axes. `index.html` preloads both files, and the
+ * deployed CSP is `font-src 'self'` / `style-src 'self'` (vite.config.ts), which is why
+ * there is no `@import url(...)` and no CDN URL anywhere in this file: a remote font
+ * stylesheet is both blocked and contrary to the product's "No cloud. No trace."
+ */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  src: url('/fonts/plus-jakarta-sans-latin.woff2') format('woff2');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * Tailwind v4 reads its own theme out of this stylesheet, so the three families the app
+ * already uses as class names (`font-sans`, `font-mono`, and the `font-display` that the
+ * library headings carry) resolve to the self-hosted faces instead of Tailwind's system
+ * stacks. Only the families are registered; colour, spacing and radius stay in the
+ * `--qrbit-*` names below, so there is exactly one list of them.
+ */
+@theme {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ------------------------------------------------------------------ tokens -- */
+
+/*
+ * The 18 names DESIGN.md lists, light scheme. Status hues and the signal ramp are
+ * scheme-independent by design: #1D4ED8 means *this is the action* in both worlds, so
+ * only the surfaces and the ink step under `[data-theme='dark']`.
+ */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  --qrd-canvas: #EEF2F6;
-  --qrd-surface: #FFFFFF;
-  --qrd-ink: #0F172A;
-  --qrd-ink-muted: #5B6B82;
-  --qrd-border: #D1D9E4;
-  --qrd-signal: #1D4ED8;
-  --qrd-signal-hover: #1E40AF;
-  --qrd-shield: #C2410C;
-  --qrd-telemetry-ok: #0F766E;
+  /* Surfaces */
+  --qrbit-canvas: #F4F6F9;
+  --qrbit-raised: #FFFFFF;
+  --qrbit-sunken: #EAEEF4;
+  --qrbit-selected: #E8EEFC;
 
+  /* Ink */
+  --qrbit-ink: #0B1220;
+  --qrbit-ink-secondary: #44546A;
+  --qrbit-ink-muted: #5C6B82;
+
+  /* Lines: `border` divides, `border-strong` outlines a control the user must find */
+  --qrbit-border: #DDE3EB;
+  --qrbit-border-strong: #78889C;
+
+  /* One accent, and the tint that fills a selected row or a focus ring's background */
+  --qrbit-signal: #1D4ED8;
+  --qrbit-signal-deep: #1E40AF;
+  --qrbit-signal-subtle: #E8EEFC;
+
+  /* Status. Each one means the word it is named after and nothing else. */
+  --qrbit-success: #0E7A5F;
+  --qrbit-warning: #B45309;
+  --qrbit-danger: #B4232A;
+  --qrbit-locked: #9A3412;
+
+  /* Elevation: two shadows for the whole product (DESIGN.md, "The Offset-and-Blur Rule") */
+  --qrbit-shadow-sheet: 0 1px 2px rgba(11, 18, 32, 0.06), 0 8px 24px -8px rgba(11, 18, 32, 0.14);
+  --qrbit-shadow-lift: 0 1px 3px rgba(11, 18, 32, 0.1);
+
+  /* Families */
+  --qrbit-font-ui: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --qrbit-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /*
+   * Type roles. One token per role, written as a complete `font` shorthand value
+   * (weight + size/line-height + family), so `font: var(--qrbit-text-title)` cannot
+   * half-apply a role and leave the size or the line-height on an ad-hoc value.
+   * Tracking is not part of the `font` shorthand, so it rides on the paired
+   * `-tracking` token; `.qrbit-text-*` below apply both together, which is why a role
+   * should be taken from the class whenever the markup can carry one.
+   */
+  --qrbit-text-display: 700 24px/1.2 var(--qrbit-font-ui);
+  --qrbit-text-display-tracking: -0.02em;
+  --qrbit-text-headline: 650 18px/1.3 var(--qrbit-font-ui);
+  --qrbit-text-headline-tracking: -0.011em;
+  --qrbit-text-title: 600 15px/1.35 var(--qrbit-font-ui);
+  --qrbit-text-title-tracking: -0.005em;
+  --qrbit-text-body: 400 14px/1.5 var(--qrbit-font-ui);
+  --qrbit-text-body-tracking: normal;
+  --qrbit-text-body-secondary: 400 13px/1.45 var(--qrbit-font-ui);
+  --qrbit-text-body-secondary-tracking: normal;
+  --qrbit-text-label: 600 12px/1.3 var(--qrbit-font-ui);
+  --qrbit-text-label-tracking: 0.01em;
+  --qrbit-text-data: 500 13px/1.4 var(--qrbit-font-mono);
+  --qrbit-text-data-tracking: 0.01em;
+
+  /* Radius (DESIGN.md, "The One Radius Family Rule": controls 5, containers 10) */
+  --qrbit-radius-xs: 3px;
+  --qrbit-radius-sm: 5px;
+  --qrbit-radius-md: 7px;
+  --qrbit-radius-lg: 10px;
+  --qrbit-radius-full: 999px;
+
+  /* Spacing. A value not on this scale is drift. */
+  --qrbit-space-xxs: 2px;
+  --qrbit-space-xs: 4px;
+  --qrbit-space-sm: 8px;
+  --qrbit-space-md: 12px;
+  --qrbit-space-lg: 16px;
+  --qrbit-space-xl: 24px;
+  --qrbit-space-xxl: 32px;
+  --qrbit-space-huge: 48px;
+
+  /* Motion */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
-  --bg: #EEF2F6;
-  --surface: #FFFFFF;
-  --surface-raised: #F8FAFC;
-  --border: #D1D9E4;
-  --border-strong: #94A3B8;
-
-  --text: #0F172A;
-  --text-muted: #5B6B82;
-
-  --accent: #1D4ED8;
-  --warn: #C2410C;
-  --error: #DC2626;
-
-  --radius: 12px;
-  --radius-sm: 8px;
-  --gap: 16px;
-
-  --font: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-display: 'Space Grotesk', -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-
-  font-family: var(--font);
+  font-family: var(--qrbit-font-ui);
   line-height: 1.5;
+}
+
+/*
+ * Dark scheme. Only the surfaces and the ink move: DESIGN.md conveys depth here through
+ * those surface steps and hairlines rather than through shadows, because a black shadow
+ * on a near-black page is invisible — so the two shadow tokens carry the hairline that
+ * does the same job, under the same names, and no consumer has to know.
+ */
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --qrbit-canvas: #0E1420;
+  --qrbit-raised: #171F2C;
+  --qrbit-sunken: #0A1017;
+  --qrbit-selected: #1D2A3D;
+
+  --qrbit-ink: #E9EEF6;
+  --qrbit-ink-secondary: #B4C0D0;
+  --qrbit-ink-muted: #8FA0B4;
+
+  --qrbit-border: #26313F;
+  --qrbit-border-strong: #5F7391;
+
+  --qrbit-shadow-sheet: 0 0 0 1px var(--qrbit-border);
+  --qrbit-shadow-lift: 0 0 0 1px var(--qrbit-border-strong);
+}
+
+:root {
+  /*
+   * Temporary aliases. Nine live call sites still name the pre-token custom properties —
+   * `pages/Settings.tsx:117,119`, `pages/Session.tsx:59,61`, `ManualCodeEntry.tsx:106`,
+   * `HomeView.tsx:201`, `session/SessionView.tsx:287`, `ConfirmDelete.tsx:55,56` — and
+   * deleting these definitions would silently un-colour them before those lanes land.
+   * Each alias points at the token it used to duplicate; none of them defines a value.
+   * Remove once no `.tsx` references the left-hand name.
+   */
+  --gap: var(--qrbit-space-lg);
+  --accent: var(--qrbit-signal);
+  --error: var(--qrbit-danger);
+  --text-muted: var(--qrbit-ink-muted);
+  --border-strong: var(--qrbit-border-strong);
+  --qrd-border: var(--qrbit-border);
 }
 
 @layer base {
@@ -65,19 +206,26 @@
   }
 
   /* Control text selection protection */
-  button, a, [role="button"], .tappable {
+  button, a, [role="button"] {
     touch-action: manipulation;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
   }
 
-  h1, h2, h3, h4, .font-display {
-    font-family: 'Space Grotesk', -apple-system, sans-serif;
-  }
+  /*
+   * Space Grotesk is gone (DESIGN.md: "Third family: removed"). Hierarchy comes from the
+   * role's size and weight, and h1/h2/h3 take the three heading roles so bare headings
+   * and Mantine's `<Title>` (theme.ts `headings`) land on the same numbers.
+   */
+  h1 { font: var(--qrbit-text-display); letter-spacing: var(--qrbit-text-display-tracking); }
+  h2 { font: var(--qrbit-text-headline); letter-spacing: var(--qrbit-text-headline-tracking); }
+  h3 { font: var(--qrbit-text-title); letter-spacing: var(--qrbit-text-title-tracking); }
 
-  code, pre, .font-mono {
-    font-family: 'JetBrains Mono', monospace;
+  /* Mono means data (DESIGN.md, "The Mono Means Data Rule"). */
+  code, pre, kbd {
+    font-family: var(--qrbit-font-mono);
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -88,12 +236,36 @@
 }
 
 body {
-  background-color: var(--qrd-canvas);
-  color: var(--qrd-ink);
-  font-family: var(--font);
+  margin: 0;
+  background: var(--qrbit-canvas);
+  color: var(--qrbit-ink);
+  font: var(--qrbit-text-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   overscroll-behavior: none;
+}
+
+/* ---------------------------------------------------------------- role classes -- */
+
+/*
+ * The seven type roles as classes, so a component can take a whole role in one token
+ * name instead of three properties. In `@layer components` so a utility that legitimately
+ * overrides one axis (`.text-center`, a `truncate`) still wins over them.
+ */
+@layer components {
+  .qrbit-text-display { font: var(--qrbit-text-display); letter-spacing: var(--qrbit-text-display-tracking); }
+  .qrbit-text-headline { font: var(--qrbit-text-headline); letter-spacing: var(--qrbit-text-headline-tracking); }
+  .qrbit-text-title { font: var(--qrbit-text-title); letter-spacing: var(--qrbit-text-title-tracking); }
+  .qrbit-text-body { font: var(--qrbit-text-body); letter-spacing: var(--qrbit-text-body-tracking); }
+  .qrbit-text-body-secondary { font: var(--qrbit-text-body-secondary); letter-spacing: var(--qrbit-text-body-secondary-tracking); }
+  .qrbit-text-label { font: var(--qrbit-text-label); letter-spacing: var(--qrbit-text-label-tracking); }
+  /* The Data role is always tabular: a byte count must not reflow the column beside it. */
+  .qrbit-text-data {
+    font: var(--qrbit-text-data);
+    letter-spacing: var(--qrbit-text-data-tracking);
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 /* Emil Kowalski Press Feedback (120ms with --ease-out, never transition: all) */
@@ -104,7 +276,7 @@ body {
   transform: scale(0.97);
 }
 
-/* Modal and Sheet Animations with physical entrance */
+/* Modal entrance: a sheet rising into place, physical but brief */
 .modal-enter {
   animation: modalEnter 180ms var(--ease-out) forwards;
   transform-origin: center;
@@ -120,37 +292,7 @@ body {
   }
 }
 
-.sheet-enter {
-  animation: sheetEnter 240ms var(--ease-drawer) forwards;
-}
-@keyframes sheetEnter {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Stagger item entrance */
-.stagger-item {
-  opacity: 0;
-  animation: staggerFade 200ms var(--ease-out) forwards;
-}
-@keyframes staggerFade {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Optical Scanner Sweep */
+/* Optical scanner sweep (QRScanner) */
 @keyframes scanSweep {
   0% {
     transform: translateY(0);
@@ -170,33 +312,29 @@ body {
   will-change: transform, opacity;
 }
 
-/* Radar Ping Telemetry */
+/* Live-connection ping on a status dot. The ring is the success hue, not a decoration. */
 @keyframes radarPing {
   0% {
     transform: scale(0.96);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--qrbit-success) 45%, transparent);
   }
   70% {
     transform: scale(1);
-    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 6px transparent;
   }
   100% {
     transform: scale(0.96);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 0 transparent;
   }
 }
 .animate-radar-ping {
-  animation: radarPing 2.2s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+  animation: radarPing 2.2s var(--ease-out) infinite;
 }
 
-/* Fine-pointer hover */
-@media (hover: hover) and (pointer: fine) {
-  .hover-elevate:hover {
-    transform: translateY(-1px);
-    border-color: #94A3B8;
-  }
-  .hover-tint:hover {
-    background-color: #F8FAFC;
+@media (prefers-reduced-motion: reduce) {
+  .animate-radar-ping,
+  .animate-scan-sweep {
+    animation: none;
   }
 }
 
@@ -207,31 +345,60 @@ body {
 
 /* -------------------------------------------------------- browser surfaces -- */
 
+/*
+ * The parts nobody drew: selection, the caret, the scrollbars, the focus ring,
+ * placeholder text, underline offset, tabular numerals. All of them ship with browser
+ * defaults that belong to no design system, so all of them are set from the palette here
+ * and inherit everywhere. `color-scheme` above handles the native control chrome.
+ */
+
 ::selection {
-  background: rgba(74, 222, 128, 0.25);
-  color: #f2f2f2;
+  background: var(--qrbit-signal-subtle);
+  color: var(--qrbit-ink);
+}
+
+input,
+textarea,
+[contenteditable],
+[role="textbox"] {
+  caret-color: var(--qrbit-signal);
+}
+
+::placeholder {
+  color: var(--qrbit-ink-muted);
+  opacity: 1;
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
+/* `border-strong` clears 3:1 on both canvases, so the thumb is findable in either scheme. */
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
+  background: var(--qrbit-border-strong);
+  border: 3px solid transparent;
+  border-radius: var(--qrbit-radius-full);
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--qrbit-ink-muted);
+  background-clip: padding-box;
+}
+
+/* Firefox: the standard pair, so the webkit block is not the only themed scrollbar. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--qrbit-border-strong) transparent;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--qrbit-signal);
   outline-offset: 2px;
 }
 
@@ -241,18 +408,9 @@ body,
   min-height: 100%;
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
 h1,
 h2,
 h3 {
-  line-height: 1.25;
   margin: 0;
 }
 
@@ -260,8 +418,15 @@ p {
   margin: 0;
 }
 
+/*
+ * Link colour is Mantine's `anchor` semantic slot rather than a 19th `--qrbit-*` name:
+ * theme.ts points that slot at `--qrbit-signal` in light and at DESIGN.md's `dark-link`
+ * (#93B4FF) in dark, because #1D4ED8 on the dark canvas is 3.4:1 and unreadable. The
+ * fallback keeps a link recognisable if the provider has not injected its variables yet.
+ */
 a {
-  color: var(--accent);
+  color: var(--mantine-color-anchor, var(--qrbit-signal));
+  text-underline-offset: 0.15em;
 }
 
 button {
@@ -274,11 +439,11 @@ button {
 .page {
   max-width: 84rem;
   margin: 0 auto;
-  padding: var(--gap);
-  padding-bottom: calc(var(--gap) * 3);
+  padding: var(--qrbit-space-lg);
+  padding-bottom: calc(var(--qrbit-space-lg) * 3);
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
+  gap: var(--qrbit-space-lg);
 }
 
 /* Dual-Pane Responsive Grid */
@@ -289,21 +454,21 @@ button {
 .dual-pane-layout {
   display: flex;
   flex-direction: column-reverse;
-  gap: var(--gap);
+  gap: var(--qrbit-space-lg);
   width: 100%;
 }
 
 .session-pane {
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
+  gap: var(--qrbit-space-lg);
   min-width: 0;
 }
 
 .vault-pane {
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
+  gap: var(--qrbit-space-lg);
   min-width: 0;
 }
 
@@ -311,13 +476,13 @@ button {
   .dual-pane-layout {
     display: grid;
     grid-template-columns: 390px 1fr;
-    gap: calc(var(--gap) * 1.5);
+    gap: calc(var(--qrbit-space-lg) * 1.5);
     align-items: start;
   }
 
   .vault-pane {
     position: sticky;
-    top: calc(var(--gap) * 1);
+    top: calc(var(--qrbit-space-lg) * 1);
     max-height: calc(100vh - 5rem);
     overflow-y: auto;
     padding-right: 0.25rem;
@@ -327,7 +492,7 @@ button {
 @media (min-width: 1200px) {
   .dual-pane-layout {
     grid-template-columns: 440px 1fr;
-    gap: calc(var(--gap) * 2);
+    gap: calc(var(--qrbit-space-lg) * 2);
   }
 }
 
@@ -335,7 +500,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--gap);
+  gap: var(--qrbit-space-lg);
   min-height: 2.5rem;
 }
 
@@ -350,7 +515,7 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -360,23 +525,23 @@ button {
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--border);
+  background: var(--qrbit-border);
 }
 
 /* ----------------------------------------------------------------- panels -- */
 
 .panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--gap);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-lg);
+  padding: var(--qrbit-space-lg);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
 .panel--error {
-  border-color: color-mix(in srgb, var(--error) 55%, var(--border));
+  border-color: color-mix(in srgb, var(--qrbit-danger) 55%, var(--qrbit-border));
 }
 
 .panel__title {
@@ -384,11 +549,11 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .muted {
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
   font-size: 0.875rem;
 }
 
@@ -412,15 +577,15 @@ button {
   width: 100%;
   max-width: 18rem;
   margin: 0 auto;
-  background: var(--surface-raised);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius);
+  background: var(--qrbit-sunken);
+  border: 1px dashed var(--qrbit-border-strong);
+  border-radius: var(--qrbit-radius-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: var(--gap);
+  padding: var(--qrbit-space-lg);
   overflow-wrap: anywhere;
 }
 
@@ -428,17 +593,17 @@ button {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .qr__url {
-  font-family: var(--font-mono);
+  font-family: var(--qrbit-font-mono);
   font-size: 0.8125rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
 }
 
 .qr__caption {
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
   font-size: 0.875rem;
 }
 
@@ -449,9 +614,9 @@ button {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
+  background: var(--qrbit-raised);
   font-size: 0.875rem;
 }
 
@@ -460,25 +625,25 @@ button {
   height: 0.5rem;
   border-radius: 50%;
   flex: none;
-  background: var(--text-muted);
+  background: var(--qrbit-ink-muted);
 }
 
 .status--ok .status__dot {
-  background: var(--accent);
+  background: var(--qrbit-signal);
 }
 
 .status--warn .status__dot {
-  background: var(--warn);
+  background: var(--qrbit-warning);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
 .status--error .status__dot {
-  background: var(--error);
+  background: var(--qrbit-danger);
 }
 
 .status--error {
-  color: var(--error);
-  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  color: var(--qrbit-danger);
+  border-color: color-mix(in srgb, var(--qrbit-danger) 45%, var(--qrbit-border));
 }
 
 @keyframes pulse {
@@ -503,41 +668,24 @@ button {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  color: var(--qrbit-ink-muted);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-full);
   padding: 0.125rem 0.625rem;
 }
 
 .code {
-  font-family: var(--font-mono);
+  font-family: var(--qrbit-font-mono);
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: 0.18em;
 }
 
-.kv {
-  display: grid;
-  grid-template-columns: 5.5rem 1fr;
-  gap: 0.25rem 0.75rem;
-  margin: 0;
-  font-size: 0.875rem;
-}
-
-.kv dt {
-  color: var(--text-muted);
-}
-
-.kv dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
 .button {
   appearance: none;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-raised);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--qrbit-border-strong);
+  background: var(--qrbit-sunken);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.7rem 1rem;
   font-size: 0.9375rem;
   font-weight: 550;
@@ -546,35 +694,14 @@ button {
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 
+/* Hover lifts the fill one step (DESIGN.md's button table), never inverts to a dark. */
 .button:hover:not(:disabled) {
-  background: #262626;
-  border-color: #4a4a4a;
+  background: var(--qrbit-selected);
 }
 
 .button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-/*
- * The single call to action. "Show my QR code" is the app's headline flow, so it is the
- * one button allowed the accent colour; every other action stays neutral so this one reads
- * as the obvious next tap on a phone.
- */
-.button--primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg);
-}
-
-.button--primary:hover:not(:disabled) {
-  background: var(--accent);
-  border-color: var(--accent);
-  filter: brightness(1.08);
-}
-
-.home__receive-cta {
-  margin-top: 0.5rem;
 }
 
 .session-qr {
@@ -594,13 +721,13 @@ button {
   border: none;
   padding: 0;
   width: auto;
-  color: var(--accent);
+  color: var(--qrbit-signal);
   text-decoration: underline;
   font-size: 0.875rem;
 }
 
 .link {
-  color: var(--accent);
+  color: var(--qrbit-signal);
   text-decoration: none;
   font-size: 0.875rem;
 }
@@ -610,11 +737,11 @@ button {
 }
 
 .empty {
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: var(--gap);
+  border: 1px dashed var(--qrbit-border-strong);
+  border-radius: var(--qrbit-radius-sm);
+  padding: var(--qrbit-space-lg);
   text-align: center;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
   font-size: 0.875rem;
 }
 
@@ -645,22 +772,22 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--gap);
+  padding: var(--qrbit-space-lg);
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--qrbit-canvas);
 }
 
 .safety-phrase__panel {
   width: 100%;
   max-width: 32rem;
   margin: auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: calc(var(--gap) * 1.5) var(--gap);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-lg);
+  padding: calc(var(--qrbit-space-lg) * 1.5) var(--qrbit-space-lg);
   display: flex;
   flex-direction: column;
-  gap: calc(var(--gap) * 1.25);
+  gap: calc(var(--qrbit-space-lg) * 1.25);
   text-align: center;
 }
 
@@ -684,15 +811,15 @@ button {
  * transformed, so the safety comparison is unaffected.
  */
 .safety-phrase__word {
-  font-family: var(--font-mono);
+  font-family: var(--qrbit-font-mono);
   font-size: clamp(1.625rem, 11vw, 3rem);
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.35rem 0.85rem;
 }
 
@@ -708,11 +835,11 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .safety-phrase__check[data-state="confirmed"] {
-  color: var(--accent);
+  color: var(--qrbit-signal);
 }
 
 .safety-phrase__check-label {
@@ -726,18 +853,18 @@ button {
 }
 
 .safety-phrase__confirm {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--qrbit-signal) 50%, var(--qrbit-border-strong));
+  background: color-mix(in srgb, var(--qrbit-signal) 16%, var(--qrbit-sunken));
 }
 
 .safety-phrase__confirm:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 26%, var(--surface-raised));
+  border-color: var(--qrbit-signal);
+  background: color-mix(in srgb, var(--qrbit-signal) 26%, var(--qrbit-sunken));
 }
 
 .safety-phrase__abort:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--error) 55%, var(--border-strong));
-  color: var(--error);
+  border-color: color-mix(in srgb, var(--qrbit-danger) 55%, var(--qrbit-border-strong));
+  color: var(--qrbit-danger);
 }
 
 .safety-phrase__footnote {
@@ -763,9 +890,9 @@ button {
 }
 
 .session-board__row {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.75rem;
   display: flex;
   flex-direction: column;
@@ -773,7 +900,7 @@ button {
 }
 
 .session-board__row[data-item-status="error"] {
-  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--qrbit-danger) 45%, var(--qrbit-border));
 }
 
 .session-board__row-header {
@@ -787,7 +914,7 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .session-board__remove {
@@ -795,17 +922,17 @@ button {
   margin-left: auto;
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.25rem 0.5rem;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;
 }
 
 .session-board__remove:hover {
-  color: var(--error);
-  background: var(--surface-raised);
+  color: var(--qrbit-danger);
+  background: var(--qrbit-sunken);
 }
 
 /* ------------------------------------------------------- item status -- */
@@ -814,29 +941,29 @@ button {
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  color: var(--qrbit-ink-muted);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-full);
   padding: 0.0625rem 0.5rem;
 }
 
 .item-status--transferring {
-  color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  color: var(--qrbit-warning);
+  border-color: color-mix(in srgb, var(--qrbit-warning) 45%, var(--qrbit-border));
 }
 
 .item-status--complete {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--qrbit-signal);
+  border-color: color-mix(in srgb, var(--qrbit-signal) 45%, var(--qrbit-border));
 }
 
 .item-status--error {
-  color: var(--error);
-  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  color: var(--qrbit-danger);
+  border-color: color-mix(in srgb, var(--qrbit-danger) 45%, var(--qrbit-border));
 }
 
 .item-error {
-  color: var(--error);
+  color: var(--qrbit-danger);
   font-size: 0.875rem;
 }
 
@@ -857,17 +984,16 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border-strong);
+  border-radius: var(--qrbit-radius-sm);
   font-size: 1.125rem;
   line-height: 1;
   cursor: pointer;
 }
 
 .add-item-bar__button:hover:not(:disabled) {
-  background: #262626;
-  border-color: #4a4a4a;
+  background: var(--qrbit-selected);
 }
 
 .add-item-bar__button:disabled {
@@ -903,11 +1029,11 @@ button {
 }
 
 .progress-ring__track {
-  stroke: var(--border-strong);
+  stroke: var(--qrbit-border-strong);
 }
 
 .progress-ring__value {
-  stroke: var(--accent);
+  stroke: var(--qrbit-signal);
   stroke-linecap: round;
   transition: stroke-dasharray 120ms linear;
 }
@@ -922,17 +1048,17 @@ button {
 
 .text-item__input {
   width: 100%;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
   font: inherit;
   font-size: 0.9375rem;
 }
 
 .text-item__input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--qrbit-signal);
   outline-offset: 1px;
 }
 
@@ -946,9 +1072,9 @@ button {
 
 .richtext-item .ProseMirror {
   min-height: 2.5rem;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
   font-size: 0.9375rem;
   outline: none;
@@ -956,7 +1082,7 @@ button {
 }
 
 .richtext-item:not(.richtext-item--received) .ProseMirror:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--qrbit-signal);
   outline-offset: 1px;
 }
 
@@ -979,14 +1105,14 @@ button {
 .richtext-item .ProseMirror blockquote {
   margin: 0;
   padding-left: 0.75rem;
-  border-left: 2px solid var(--border-strong);
-  color: var(--text-muted);
+  border-left: 2px solid var(--qrbit-border-strong);
+  color: var(--qrbit-ink-muted);
 }
 
 .richtext-item .ProseMirror code {
-  font-family: var(--font-mono);
+  font-family: var(--qrbit-font-mono);
   font-size: 0.875em;
-  background: var(--bg);
+  background: var(--qrbit-canvas);
   border-radius: 4px;
   padding: 0.0625rem 0.25rem;
 }
@@ -1005,9 +1131,9 @@ button {
   align-items: center;
   justify-content: center;
   min-height: 6rem;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   overflow: hidden;
 }
 
@@ -1061,17 +1187,17 @@ button {
   align-self: flex-start;
   display: inline-block;
   padding: 0.5rem 0.875rem;
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-strong));
-  border-radius: var(--radius-sm);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--qrbit-signal) 14%, var(--qrbit-sunken));
+  border: 1px solid color-mix(in srgb, var(--qrbit-signal) 45%, var(--qrbit-border-strong));
+  border-radius: var(--qrbit-radius-sm);
+  color: var(--qrbit-signal);
   font-size: 0.875rem;
   text-decoration: none;
 }
 
 .file-item__download:hover {
-  background: color-mix(in srgb, var(--accent) 24%, var(--surface-raised));
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--qrbit-signal) 24%, var(--qrbit-sunken));
+  border-color: var(--qrbit-signal);
 }
 
 /* -------------------------------------------------- locked item (P4) -- */
@@ -1081,14 +1207,14 @@ button {
 }
 
 .locked-item__label {
-  color: var(--text);
+  color: var(--qrbit-ink);
 }
 
 /* --------------------------------------------------- wider viewports -- */
 
 @media (min-width: 30rem) {
   .session-board__row {
-    padding: var(--gap);
+    padding: var(--qrbit-space-lg);
   }
 
   .add-item-bar__hint {
@@ -1124,9 +1250,9 @@ button {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  color: var(--qrbit-ink-muted);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-full);
   padding: 0.0625rem 0.5rem;
 }
 
@@ -1148,9 +1274,9 @@ button {
 .locked-item__text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
   font-size: 0.9375rem;
 }
@@ -1174,9 +1300,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--gap);
+  padding: var(--qrbit-space-lg);
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--qrbit-canvas);
 }
 
 .locked-compose__panel,
@@ -1184,10 +1310,10 @@ button {
   width: 100%;
   max-width: 26rem;
   margin: auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: calc(var(--gap) * 1.25) var(--gap);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-lg);
+  padding: calc(var(--qrbit-space-lg) * 1.25) var(--qrbit-space-lg);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1215,7 +1341,7 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .locked-compose__label-input,
@@ -1224,11 +1350,11 @@ button {
 .locked-compose__text,
 .unlock-modal__password {
   width: 100%;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
   font: inherit;
   font-size: 0.9375rem;
 }
@@ -1238,7 +1364,7 @@ button {
 .locked-compose__confirm-password:focus-visible,
 .locked-compose__text:focus-visible,
 .unlock-modal__password:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--qrbit-signal);
   outline-offset: 1px;
 }
 
@@ -1259,7 +1385,7 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .locked-compose__type {
@@ -1271,12 +1397,12 @@ button {
 }
 
 .locked-compose__type-radio {
-  accent-color: var(--accent);
+  accent-color: var(--qrbit-signal);
 }
 
 .locked-compose__file {
   font-size: 0.875rem;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .locked-compose__editor {
@@ -1296,7 +1422,7 @@ button {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.875rem;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .locked-compose__actions,
@@ -1319,8 +1445,8 @@ button {
   display: inline-block;
   width: 0.875rem;
   height: 0.875rem;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  border: 2px solid var(--qrbit-border-strong);
+  border-top-color: var(--qrbit-signal);
   border-radius: 50%;
   animation: spin 700ms linear infinite;
 }
@@ -1340,76 +1466,12 @@ button {
 /* ------------------------------------------------- local library (P5) -- */
 
 /*
- * PLAN.md §6.4's browser. Mobile-first like the session board, and for the same
- * reason: the primary gesture here is a long press, so every row is at least 2.75rem
- * (≈44px) tall and every control sits inside it rather than beside a hit area the
- * user has to aim at.
- *
- * The tree is navigation and the item list below it is the current folder's contents,
- * so a hairline separates the two.
+ * `LibraryBrowser`, `NewItemBar`, `TextComposeModal` and `RichTextComposeModal` are gone
+ * (ORCHESTRATION D16 replaced them with `LibraryPanel`, `FolderNode`, `LibraryItemRow`,
+ * `AttachmentPicker` and the block editor), and their `.library-browser*` / `.new-item-bar*`
+ * / `.text-compose*` / `.rich-text-compose*` rules went with them — each name was grepped
+ * across `src/` first. What remains below is the tree and the rows, which are live.
  */
-
-.library-browser {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.library-browser__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.library-browser__folder-name {
-  font-size: 0.9375rem;
-  overflow-wrap: anywhere;
-}
-
-.library-browser__actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-left: auto;
-}
-
-.library-browser__send-selected {
-  width: auto;
-  padding: 0.5rem 0.875rem;
-  font-size: 0.875rem;
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface-raised));
-}
-
-.library-browser__send-selected:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 26%, var(--surface-raised));
-  border-color: var(--accent);
-}
-
-.library-browser__loading {
-  padding: 0.5rem 0;
-}
-
-.library-browser__tree {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0.75rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.library-browser__items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
 
 /* ------------------------------------------------------- folder nodes -- */
 
@@ -1431,19 +1493,14 @@ button {
   height: 2.75rem;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
   font-size: 0.875rem;
   line-height: 1;
   cursor: pointer;
 }
 
 .folder-node__chevron:hover {
-  color: var(--text);
-}
-
-/* The root is always open, so its chevron is a placeholder that keeps the indent. */
-.folder-node__chevron--root {
-  visibility: hidden;
+  color: var(--qrbit-ink);
 }
 
 .folder-node__name {
@@ -1453,9 +1510,9 @@ button {
   text-align: left;
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.5rem 0.375rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
   font: inherit;
   font-size: 0.9375rem;
   cursor: pointer;
@@ -1463,11 +1520,11 @@ button {
 }
 
 .folder-node__name:hover {
-  background: var(--surface);
+  background: var(--qrbit-raised);
 }
 
 .folder-node__name[aria-current="true"] {
-  color: var(--accent);
+  color: var(--qrbit-signal);
   font-weight: 600;
 }
 
@@ -1481,10 +1538,10 @@ button {
   flex: none;
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--qrbit-radius-sm);
   min-width: 2rem;
   height: 2.25rem;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;
@@ -1492,8 +1549,8 @@ button {
 
 .folder-node__menu-toggle:hover,
 .library-item__menu-toggle:hover {
-  color: var(--text);
-  background: var(--surface-raised);
+  color: var(--qrbit-ink);
+  background: var(--qrbit-sunken);
 }
 
 .folder-node__children {
@@ -1510,9 +1567,9 @@ button {
   display: flex;
   flex-direction: column;
   margin: 0.25rem 0 0.5rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   overflow: hidden;
 }
 
@@ -1521,7 +1578,7 @@ button {
   appearance: none;
   background: none;
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--qrbit-border);
   padding: 0.7rem 0.75rem;
   text-align: left;
   font-size: 0.875rem;
@@ -1535,12 +1592,12 @@ button {
 
 .folder-node__menu-item:hover,
 .library-item__menu-item:hover {
-  background: var(--surface-raised);
+  background: var(--qrbit-sunken);
 }
 
 .folder-node__menu-item--danger,
 .library-item__menu-item--danger {
-  color: var(--error);
+  color: var(--qrbit-danger);
 }
 
 .folder-node__rename,
@@ -1556,18 +1613,18 @@ button {
 .library-item__rename-input {
   flex: 1 1 auto;
   min-width: 0;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.5rem 0.625rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
   font: inherit;
   font-size: 0.9375rem;
 }
 
 .folder-node__rename-input:focus-visible,
 .library-item__rename-input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--qrbit-signal);
   outline-offset: 1px;
 }
 
@@ -1582,15 +1639,15 @@ button {
 
 .library-item {
   list-style: none;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.25rem 0.5rem;
 }
 
 .library-item[data-selected="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-color: var(--qrbit-signal);
+  background: color-mix(in srgb, var(--qrbit-signal) 8%, var(--qrbit-raised));
 }
 
 .library-item__row {
@@ -1604,7 +1661,7 @@ button {
   flex: none;
   width: 1.25rem;
   height: 1.25rem;
-  accent-color: var(--accent);
+  accent-color: var(--qrbit-signal);
 }
 
 .library-item__icon {
@@ -1620,9 +1677,9 @@ button {
   text-align: left;
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.5rem 0.375rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
   font: inherit;
   font-size: 0.9375rem;
   cursor: pointer;
@@ -1630,7 +1687,7 @@ button {
 }
 
 .library-item__name:hover {
-  color: var(--accent);
+  color: var(--qrbit-signal);
 }
 
 .library-item__lock-badge,
@@ -1653,9 +1710,9 @@ button {
 
 /* Read-only rich text keeps a box here: the library preview is content, not a field. */
 .library-item__preview .richtext-item .ProseMirror {
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
   font-size: 0.9375rem;
 }
@@ -1663,9 +1720,9 @@ button {
 .library-item__text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
   font-size: 0.9375rem;
 }
@@ -1678,9 +1735,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   overflow: hidden;
 }
 
@@ -1694,17 +1751,17 @@ button {
   align-self: flex-start;
   display: inline-block;
   padding: 0.5rem 0.875rem;
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-strong));
-  border-radius: var(--radius-sm);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--qrbit-signal) 14%, var(--qrbit-sunken));
+  border: 1px solid color-mix(in srgb, var(--qrbit-signal) 45%, var(--qrbit-border-strong));
+  border-radius: var(--qrbit-radius-sm);
+  color: var(--qrbit-signal);
   font-size: 0.875rem;
   text-decoration: none;
 }
 
 .library-item__download:hover {
-  background: color-mix(in srgb, var(--accent) 24%, var(--surface-raised));
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--qrbit-signal) 24%, var(--qrbit-sunken));
+  border-color: var(--qrbit-signal);
 }
 
 .library-item__move {
@@ -1735,9 +1792,9 @@ button {
   max-height: 14rem;
   overflow-y: auto;
   padding: 0.375rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
 }
 
 .folder-picker__list {
@@ -1755,9 +1812,9 @@ button {
   text-align: left;
   background: none;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.5rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
   font: inherit;
   font-size: 0.875rem;
   cursor: pointer;
@@ -1765,12 +1822,12 @@ button {
 }
 
 .folder-picker__option:hover {
-  background: var(--surface-raised);
+  background: var(--qrbit-sunken);
 }
 
 .folder-picker__option--selected {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
-  color: var(--accent);
+  border-color: color-mix(in srgb, var(--qrbit-signal) 45%, var(--qrbit-border-strong));
+  color: var(--qrbit-signal);
 }
 
 /* ----------------------------------------------------- library modals -- */
@@ -1787,19 +1844,19 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--gap);
+  padding: var(--qrbit-space-lg);
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--qrbit-canvas);
 }
 
 .library-modal__panel {
   width: 100%;
   max-width: 26rem;
   margin: auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: calc(var(--gap) * 1.25) var(--gap);
+  background: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-lg);
+  padding: calc(var(--qrbit-space-lg) * 1.25) var(--qrbit-space-lg);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1828,22 +1885,22 @@ button {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--qrbit-ink-muted);
 }
 
 .library-modal__input {
   width: 100%;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
   padding: 0.6rem 0.75rem;
-  color: var(--text);
+  color: var(--qrbit-ink);
   font: inherit;
   font-size: 0.9375rem;
 }
 
 .library-modal__input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--qrbit-signal);
   outline-offset: 1px;
 }
 
@@ -1865,9 +1922,9 @@ button {
   gap: 0.5rem;
   min-height: 2.75rem;
   padding: 0.25rem 0.5rem;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
 }
 
 .library-modal__item-name {
@@ -1888,13 +1945,13 @@ button {
 }
 
 .library-modal__save-all {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--qrbit-signal) 50%, var(--qrbit-border-strong));
+  background: color-mix(in srgb, var(--qrbit-signal) 16%, var(--qrbit-sunken));
 }
 
 .library-modal__save-all:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 26%, var(--surface-raised));
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--qrbit-signal) 26%, var(--qrbit-sunken));
+  border-color: var(--qrbit-signal);
 }
 
 .library-modal__empty {

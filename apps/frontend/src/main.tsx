@@ -6,12 +6,50 @@ import '@mantine/core/styles.css'
 import { Home } from './pages/Home'
 import { Session } from './pages/Session'
 import { Settings } from './pages/Settings'
-import { theme } from './theme'
+import {
+  applyThemeScheme,
+  initialThemeScheme,
+  qrbitCssVariablesResolver,
+  theme,
+  themeColorSchemeManager,
+  useThemeSchemeAttribute,
+} from './theme'
 import './styles.css'
 
 const container = document.getElementById('root')
 if (container === null) {
   throw new Error('QRBit cannot start: the #root element is missing from index.html')
+}
+
+/*
+ * The colour scheme, in one sentence: Mantine owns the state, `data-theme` is a mirror of
+ * it. `themeColorSchemeManager` makes Mantine persist the preference under `qrbit:theme`
+ * (a UI preference is the only thing this app puts in localStorage — AGENTS.md forbids
+ * session data there), `defaultColorScheme="auto"` means an explicit choice is remembered
+ * and an absent one follows the system, and `useThemeSchemeAttribute()` below copies the
+ * resolved scheme onto `<html>` so every `--qrbit-*` token in styles.css switches with it.
+ *
+ * `applyThemeScheme` runs once before the first render rather than only in that effect:
+ * effects run after paint, and a visitor whose system is dark would otherwise see the
+ * light scheme for a frame. Both calls resolve the same stored value with the same rule,
+ * which lives in theme.ts.
+ */
+applyThemeScheme(initialThemeScheme())
+
+/** Mounts the single `data-theme` mirror inside the provider that owns the scheme. */
+function ThemedApp() {
+  useThemeSchemeAttribute()
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/session" element={<Session />} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  )
 }
 
 /*
@@ -27,15 +65,13 @@ if (container === null) {
  */
 createRoot(container).render(
   <StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="light">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/session" element={<Session />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
+    <MantineProvider
+      theme={theme}
+      colorSchemeManager={themeColorSchemeManager}
+      defaultColorScheme="auto"
+      cssVariablesResolver={qrbitCssVariablesResolver}
+    >
+      <ThemedApp />
     </MantineProvider>
   </StrictMode>,
 )
