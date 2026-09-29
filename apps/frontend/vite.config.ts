@@ -99,7 +99,7 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'manifest.webmanifest', 'icons/*.png'],
       manifest: false, // manifest.webmanifest is hand-authored in public/ per §15
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,woff2}'],
         navigateFallbackDenylist: [/^\/session/],
         runtimeCaching: [
           {

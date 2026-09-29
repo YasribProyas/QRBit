@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#EEF2F6" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B0F19" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F6F9" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0E1420" />
     <meta name="color-scheme" content="light dark" />
     <meta name="description" content="Scan a QR code. Files appear. No login. No cloud. No trace." />
     <meta name="referrer" content="no-referrer" />
@@ -15,11 +15,17 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <title>QRBit</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <!--
+      Fonts are self-hosted, not fetched from a CDN. Two reasons, and the first is the product:
+      a "No cloud. No trace." tool must not hand every visitor's IP and user agent to Google
+      before any of our JavaScript runs. The second is that the CDN route never worked anyway --
+      the deployed CSP is `style-src 'self'` with no Google origin, so the remote stylesheet was
+      blocked and the app rendered in system fallbacks on every device.
+    -->
+    <link rel="preload" href="/fonts/plus-jakarta-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
   </head>
-  <body class="bg-[#EEF2F6] text-[#0F172A] antialiased selection:bg-[#1D4ED8] selection:text-white">
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
