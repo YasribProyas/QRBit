@@ -45,8 +45,8 @@ import { FolderPickerModal } from './FolderPickerModal'
 import type { FolderPickerChoice } from './FolderPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
-import { describeSendFailure, findUnsendableBlocks } from '../../lib/dossier'
-import { ROOT_FOLDER_ID } from '../../lib/library'
+import { describeSendFailure, encryptBlockPayload, findUnsendableBlocks } from '../../lib/dossier'
+import { ROOT_FOLDER_ID, unprotectedSecretBlocks } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
 
@@ -69,6 +69,23 @@ export interface FileEditViewProps {
 
 /** The gap `space-y-3` puts between block rows, in px at the default root size. */
 const ROW_GAP_PX = 12
+
+/**
+ * What the user pressed, and therefore what the editor owes them once a blocked Save unblocks.
+ *
+ * `'save'` and `'leave'` are the two paths through `persist`; `'send'` is the one that must never
+ * put a payload on the wire that the user did not write, so it runs the unsendable gate on the
+ * way out.
+ */
+type SaveIntent = 'save' | 'leave' | 'send'
+
+/** The open "this block is not encrypted" prompt: what to encrypt, and what to do afterwards. */
+interface EncryptPrompt {
+  block: FileBlock
+  /** The draft as it was when the prompt opened, so answering resumes exactly that save. */
+  draft: LibraryFile
+  intent: SaveIntent
+}
 
 /** A store failure, as something safe to put on screen. */
 function describeMoveFailure(cause: unknown): string {
@@ -105,6 +122,36 @@ export function FileEditView({
   const [sendError, setSendError] = useState<string | null>(null)
   const [isLeaveDialogOpen, setIsLeaveDialogOpen] = useState(false)
 
+  /*
+   * ---------------------------------------------------------------------
+   * Save cannot leave a block "locked" while its secret is plaintext: the record must hold the
+   * ciphertext tuple and nothing else (PLAN.md §6.2, and D16.1's explicit-save contract).
+   *
+   * Encryption needs a password, and a password is not a field of a stored block — inventing one
+   * is exactly the bug this editor had: the block's own password written down beside the secret,
+   * under an "Encrypted" badge. So when a Save, a Save-and-leave or a Send meets a block that is
+   * marked as a secret and holds plaintext with no tuple, the editor STOPS and asks for the
+   * password, in the foreground, naming the block. It never encrypts behind the user's back and
+   * it never writes a row that pretends to be safe.
+   *
+   * Two ways out of that prompt, and each of them is the user's decision:
+   *   - a password (typed twice, per decision D7): the block is encrypted through the same
+   *     `encryptBlockPayload` the row's Lock button uses, the draft is rewritten with the tuple,
+   *     and the interrupted action continues;
+   *   - "Cancel the save": nothing is written. The way to keep this block as plaintext is the
+   *     row's own `Remove lock`, an explicit per-block act that also takes the lock claim off it.
+   *
+   * There is deliberately no "save it anyway" option: a block the user still calls locked is a
+   * block they expect to be ciphertext, and offering to write it as text is how the old build
+   * came to hold a guessable password next to the secret it claimed to protect.
+   * ---------------------------------------------------------------------
+   */
+  const [encryptPrompt, setEncryptPrompt] = useState<EncryptPrompt | null>(null)
+  const [encryptPassword, setEncryptPassword] = useState('')
+  const [encryptConfirm, setEncryptConfirm] = useState('')
+  const [encryptError, setEncryptError] = useState<string | null>(null)
+  const [isEncrypting, setIsEncrypting] = useState(false)
+
   if (seededFromId !== file.id) {
     // React's "adjust state when a prop changes" during render: no effect, no frame drawn
     // against the previous dossier, and no chance for a stale draft to be saved over it.
@@ -116,6 +163,10 @@ export function FileEditView({
     setIsEditingTitle(false)
     setIsLeaveDialogOpen(false)
     setIsFolderPickerOpen(false)
+    setEncryptPrompt(null)
+    setEncryptPassword('')
+    setEncryptConfirm('')
+    setEncryptError(null)
     setMoveError(null)
     setSendError(null)
   }
@@ -208,37 +259,19 @@ export function FileEditView({
   }
 
   const handleAddBlockType = (type: BlockType): void => {
+    /*
+     * A new block starts empty apart from its type — including `locked`.
+     *
+     * The `locked` case used to arrive pre-filled: a label nobody asked for, a made-up token
+     * payload, and a password from the source — a secret "encrypted" under a guessable key, added
+     * every time anybody pressed the button. There is nothing to invent here: the label is the
+     * user's, the secret is the user's, and the password is the user's or the block is not
+     * encrypted at all. The row shows an empty protected field and says so.
+     */
     const newBlock: FileBlock = { id: `b-${Date.now()}`, type }
-
-    switch (type) {
-      case 'heading':
-        newBlock.content = 'New Section Heading'
-        break
-      case 'shortText':
-        newBlock.label = 'Key'
-        newBlock.value = 'Value'
-        break
-      case 'richText':
-        newBlock.content = 'New documentation or notes...'
-        break
-      case 'image':
-        // NOTHING is pre-filled. An attachment block starts as an empty promise: no filename,
-        // no caption, no size, because there are no bytes and the row says so. `AttachmentPicker`
-        // is the only thing that can put `blob`, `fileName`, `mimeType` and a byte count on it.
-        // Pre-filling them is how a dossier came to transmit 100 null bytes under a filename the
-        // user never typed, at a size nobody measured.
-        break
-      case 'fileAttachment':
-        break
-      case 'locked':
-        newBlock.label = 'Encrypted Key'
-        newBlock.content = 'sec_k982_token_payload'
-        newBlock.password = 'pass'
-        newBlock.isLocked = true
-        newBlock.isUnlocked = false
-        break
-      case 'divider':
-        break
+    if (type === 'locked') {
+      newBlock.isLocked = true
+      newBlock.isUnlocked = false
     }
 
     commitBlocks((current) => [...current, newBlock])
@@ -280,43 +313,102 @@ export function FileEditView({
     return true
   }
 
+  const closeEncryptPrompt = (): void => {
+    setEncryptPrompt(null)
+    // The password exists only while the prompt is open (PLAN.md §6.2: it is stored nowhere),
+    // so leaving it goes — typed, half-typed, successful or cancelled.
+    setEncryptPassword('')
+    setEncryptConfirm('')
+    setEncryptError(null)
+  }
+
+  /** The rest of whatever the user pressed, once nothing needs a password any more. */
+  const finishSave = async (draft: LibraryFile, intent: SaveIntent): Promise<void> => {
+    const needsPassword = unprotectedSecretBlocks(draft)[0]
+    if (needsPassword !== undefined) {
+      setSendError(null)
+      setEncryptPrompt({ block: needsPassword, draft, intent })
+      return
+    }
+
+    if (intent === 'send') {
+      /*
+       * The refusal happens HERE, before a byte of the draft is handed over. `lib/dossier.ts`
+       * throws for an attachment block with no file and for a locked block that was never
+       * encrypted, which is the backstop; this is the front line, and it is what turns "the
+       * transfer silently carried fake data" into a sentence on screen that names what to do
+       * about it. A draft can still be SAVED with an empty attachment block — that is work in
+       * progress, not a payload.
+       */
+      const first = findUnsendableBlocks(draft)[0]
+      if (first !== undefined) {
+        setSendError(describeSendFailure(first))
+        return
+      }
+      if (!persist(draft)) return
+
+      // The host's send is allowed to be async (that is how `pages/Home.tsx` wires it, and the
+      // conversion inside it can still reject). Awaiting it here is what keeps the failure visible
+      // without this editor having to own a page-level file.
+      void Promise.resolve(onSendFile(draft)).catch((cause: unknown) => {
+        setSendError(describeSendFailure(cause))
+      })
+      return
+    }
+
+    if (!persist(draft)) return
+    if (intent === 'leave') {
+      setIsLeaveDialogOpen(false)
+      onBack()
+    }
+  }
+
   const handleSave = (): void => {
-    persist(draftFile())
+    void finishSave(draftFile(), 'save')
   }
 
   /** Send gives the channel what is on screen: the draft is persisted, then the same record goes out. */
   const handleSend = (): void => {
-    const current = draftFile()
     setSendError(null)
-
-    /*
-     * The refusal happens HERE, before a byte of the draft is handed over. `lib/dossier.ts`
-     * throws for an attachment block with no file, which is the backstop; this is the front line,
-     * and it is what turns "the transfer silently carried fake data" into a sentence on screen
-     * that names what to do about it. A draft can still be SAVED with an empty attachment block
-     * — that is work in progress, not a payload.
-     */
-    const unsendable = findUnsendableBlocks(current)
-    const first = unsendable[0]
-    if (first !== undefined) {
-      setSendError(describeSendFailure(first))
-      return
-    }
-
-    if (!persist(current)) return
-
-    // The host's send is allowed to be async (that is how `pages/Home.tsx` wires it, and the
-    // conversion inside it can still reject). Awaiting it here is what keeps the failure visible
-    // without this editor having to own a page-level file.
-    void Promise.resolve(onSendFile(current)).catch((cause: unknown) => {
-      setSendError(describeSendFailure(cause))
-    })
+    void finishSave(draftFile(), 'send')
   }
 
   const handleSaveAndLeave = (): void => {
-    if (persist(draftFile())) {
-      setIsLeaveDialogOpen(false)
-      onBack()
+    void finishSave(draftFile(), 'leave')
+  }
+
+  /** "Encrypt and save": the block becomes a tuple, then the interrupted action resumes. */
+  const submitEncryptPrompt = async (): Promise<void> => {
+    if (encryptPrompt === null) return
+    const { block, draft, intent } = encryptPrompt
+    if (encryptPassword !== encryptConfirm) {
+      setEncryptError('The two passwords do not match. Nothing was encrypted or saved.')
+      return
+    }
+
+    setIsEncrypting(true)
+    setEncryptError(null)
+    try {
+      const lockedData = await encryptBlockPayload(block, encryptPassword)
+      const nextDraft: LibraryFile = {
+        ...draft,
+        blocks: draft.blocks.map((row) =>
+          row.id === block.id
+            ? { ...row, isLocked: true, isUnlocked: false, lockedData }
+            : row,
+        ),
+      }
+      // The rows on screen have to show what was just written, or the editor would go on
+      // displaying a secret as unprotected next to a ciphertext that replaces it.
+      setDraftBlocks(nextDraft.blocks)
+      // Only after the ciphertext exists: a prompt that closes on a failed encryption would
+      // hide the reason it is still open.
+      closeEncryptPrompt()
+      await finishSave(nextDraft, intent)
+    } catch (cause: unknown) {
+      setEncryptError(describeSendFailure(cause))
+    } finally {
+      setIsEncrypting(false)
     }
   }
 
@@ -555,6 +647,11 @@ export function FileEditView({
         onClose={() => setIsFolderPickerOpen(false)}
         folders={folders}
         fileName={draftName}
+        // This dialog moves an existing dossier between folders; it does not save anything. Without
+        // `purpose` the modal falls back to its 'save' wording and offers "Save to library" as the
+        // answer to "Move to..." — found by the folder-membership tests, which asserted the old
+        // labels and were right to fail.
+        purpose="move"
         onSelectFolder={(choice) => {
           void handleFolderChoice(choice)
         }}
@@ -573,6 +670,145 @@ export function FileEditView({
           }}
         />
       ) : null}
+
+      {/* A locked block cannot be written down until the user gives it a password. */}
+      {encryptPrompt !== null ? (
+        <EncryptBeforeSaveDialog
+          blockLabel={encryptPrompt.block.label ?? encryptPrompt.block.id}
+          password={encryptPassword}
+          confirm={encryptConfirm}
+          busy={isEncrypting}
+          error={encryptError}
+          onPassword={(value) => {
+            setEncryptPassword(value)
+            setEncryptError(null)
+          }}
+          onConfirm={(value) => {
+            setEncryptConfirm(value)
+            setEncryptError(null)
+          }}
+          onCancel={closeEncryptPrompt}
+          onSubmit={() => {
+            void submitEncryptPrompt()
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+interface EncryptBeforeSaveDialogProps {
+  /** The block the save is stuck on, named the way the row names it. */
+  blockLabel: string
+  password: string
+  confirm: string
+  busy: boolean
+  error: string | null
+  onPassword: (value: string) => void
+  onConfirm: (value: string) => void
+  onCancel: () => void
+  onSubmit: () => void
+}
+
+/**
+ * The prompt behind requirement "saving it must encrypt it": a block the user marked as a secret
+ * is written as ciphertext or not at all, and the password that makes that possible is asked for
+ * here, in the foreground, at the moment of saving.
+ *
+ * Two fields, because decision D7 already settled the argument for a session locked item: this
+ * password is the only way back in and there is no recovery, so a typo would lock the user out
+ * of their own secret with nothing to show for it. Submit is disabled until both agree.
+ *
+ * Cancelling writes nothing. The alternative — saving the block as plaintext with a warning — is
+ * a legitimate thing for a user to want, but it is the row's `Remove lock` action that says
+ * "this is not a secret", which keeps the claim and the record in one place instead of letting a
+ * dialog quietly persist a key under a label nobody read.
+ */
+function EncryptBeforeSaveDialog({
+  blockLabel,
+  password,
+  confirm,
+  busy,
+  error,
+  onPassword,
+  onConfirm,
+  onCancel,
+  onSubmit,
+}: EncryptBeforeSaveDialogProps) {
+  const headingId = useId()
+  const canSubmit = password !== '' && password === confirm
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={headingId}
+    >
+      <form
+        className="w-full max-w-sm bg-white rounded-xl border border-[#D1D9E4] shadow-2xl p-5 modal-enter"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (canSubmit && !busy) onSubmit()
+        }}
+      >
+        <h3 id={headingId} className="font-display font-bold text-base text-[#0F172A] mb-1">
+          Encrypt \"{blockLabel}\" before saving
+        </h3>
+        <p className="text-xs text-[#5B6B82] mb-3">
+          This block is marked as a secret but still holds plaintext, which means it is stored in
+          the library as readable text. Choose a password and it will be saved as PBKDF2 +
+          AES-256-GCM ciphertext instead. A lost password cannot be recovered, and nothing is
+          written while this dialog is open.
+        </p>
+
+        <div className="space-y-2">
+          <input
+            type="password"
+            autoFocus
+            aria-label="Password for this block"
+            placeholder="Password"
+            value={password}
+            onChange={(event) => {
+              onPassword(event.target.value)
+            }}
+            className="w-full text-xs px-2.5 py-1.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
+          />
+          <input
+            type="password"
+            aria-label="Confirm the password for this block"
+            placeholder="Repeat the password"
+            value={confirm}
+            onChange={(event) => {
+              onConfirm(event.target.value)
+            }}
+            className="w-full text-xs px-2.5 py-1.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
+          />
+        </div>
+
+        {error !== null ? (
+          <p className="text-[11px] text-red-600 pt-2" role="alert" data-encrypt-error="true">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="flex justify-end gap-2 pt-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg tactile-btn cursor-pointer"
+          >
+            Cancel the save
+          </button>
+          <button
+            type="submit"
+            disabled={!canSubmit || busy}
+            className="px-3.5 py-1.5 bg-[#C2410C] hover:bg-[#9A3412] disabled:opacity-40 text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
+          >
+            {busy ? 'Encrypting...' : 'Encrypt and save'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }

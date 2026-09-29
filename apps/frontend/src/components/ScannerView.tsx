@@ -23,6 +23,7 @@ import { ActionIcon, Badge, Group, Stack, Text, Title } from '@mantine/core'
 import { IconLock, IconX } from '@tabler/icons-react'
 
 import type { LibraryFile } from '../lib/library'
+import { isProtectedBlock } from '../lib/library'
 import { ManualCodeEntry } from './ManualCodeEntry'
 import { QRScanner } from './QRScanner'
 import { WithMantine } from './common/WithMantine'
@@ -53,7 +54,11 @@ export function ScannerView({
   onCancel,
 }: ScannerViewProps) {
   const blocks = selectedFile?.blocks ?? []
-  const hasLockedBlock = blocks.some((block) => block.type === 'locked' || block.isLocked)
+  // The badge claims ENCRYPTION, so it keys on the ciphertext, not on a lock flag: a block can
+  // be marked as a secret and still hold plaintext because nothing has encrypted it yet (the
+  // user has not supplied a password). Showing "Encrypted" over that row would be the same
+  // dishonesty the lock badge had before this was fixed. See lib/library.ts isProtectedBlock.
+  const hasProtectedBlock = blocks.some(isProtectedBlock)
 
   return (
     <WithMantine>
@@ -104,7 +109,7 @@ export function ScannerView({
                     {blocks.length} {blocks.length === 1 ? 'block' : 'blocks'}
                   </Text>
                 </Stack>
-                {hasLockedBlock ? <EncryptedBadge /> : null}
+                {hasProtectedBlock ? <EncryptedBadge /> : null}
               </Group>
             ) : (
               <Text className="qrbit-text-body-secondary" c="dimmed">

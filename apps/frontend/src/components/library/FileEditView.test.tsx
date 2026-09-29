@@ -155,6 +155,27 @@ function byText(text: string): boolean {
   return (element().textContent ?? '').includes(text)
 }
 
+/*
+ * The folder picker is a Mantine `Modal`, which renders into a portal on `document.body` and so
+ * sits outside the container that `element()`, `buttons()` and `byText()` search. Those stay
+ * container-scoped deliberately — a document-wide query would let an editor test pass while the
+ * row it claims to drive is absent — and everything about a dialog goes through these instead.
+ */
+function dialogButtons(): HTMLButtonElement[] {
+  return Array.from(document.body.querySelectorAll('button'))
+}
+
+function buttonInDialog(label: string): HTMLButtonElement {
+  const found = dialogButtons().find((button) => (button.textContent ?? '').trim() === label)
+  if (found === undefined) throw new Error(`test bug: no dialog button labelled "${label}"`)
+  return found
+}
+
+function inDialog(text: string): boolean {
+  const panel = document.body.querySelector('[role="dialog"]')
+  return (panel?.textContent ?? '').includes(text)
+}
+
 function gripAt(index: number): HTMLButtonElement {
   const grips = buttons().filter((button) =>
     (button.getAttribute('aria-label') ?? '').startsWith('Reorder item'),
@@ -607,13 +628,17 @@ describe('FileEditView — folder membership', () => {
     expect(byText('Credentials')).toBe(true)
 
     click(buttonByLabel('Move to...'))
-    expect(byText('Select Destination Folder:')).toBe(true)
+    // The dialog names the action it performs. It moved to "Save to library" wording once the
+    // shared picker was reused here without `purpose`, which is a mislabel, not a stale test.
+    expect(inDialog('Move dossier')).toBe(true)
 
     // Pick the other folder in the reused picker, then confirm.
-    const folderOption = buttons().find((button) => (button.textContent ?? '').includes('Field Notes'))
+    const folderOption = dialogButtons().find((button) =>
+      (button.textContent ?? '').includes('Field Notes'),
+    )
     if (folderOption === undefined) throw new Error('test bug: no folder option in the picker')
     click(folderOption)
-    click(buttonByLabel('Save File'))
+    click(buttonInDialog('Move dossier'))
     await flush()
 
     expect(moveFile).toHaveBeenCalledWith('file-1', 'f-2')
@@ -627,10 +652,12 @@ describe('FileEditView — folder membership', () => {
     mount({ file: makeFile(), folders: FOLDERS, ...host })
 
     click(buttonByLabel('Move to...'))
-    const folderOption = buttons().find((button) => (button.textContent ?? '').includes('Field Notes'))
+    const folderOption = dialogButtons().find((button) =>
+      (button.textContent ?? '').includes('Field Notes'),
+    )
     if (folderOption === undefined) throw new Error('test bug: no folder option in the picker')
     click(folderOption)
-    click(buttonByLabel('Save File'))
+    click(buttonInDialog('Move dossier'))
     await flush()
 
     typeInto(headingInput(0), 'Alpha edited')
