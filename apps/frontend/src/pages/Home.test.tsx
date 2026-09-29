@@ -9,6 +9,17 @@
  * When a peer connects and pairs, the session surface (SessionView) replaces the library.
  * Once the session ends, Home auto-recovers to mint a fresh live code so the next peer
  * gets a joinable QR rather than a burned one (D10).
+ *
+ * ORCHESTRATION D16 changed what can be reached from this page. The `sr-only`
+ * `LibraryBrowser` mount is gone (D16.4), and with it the only multi-select UI Home ever
+ * shipped — so the "select items, then Scan & Send queues them" page tests went too,
+ * because there is nothing on the page left to ask. `LibraryBrowser.test.tsx` still pins
+ * that component directly. What replaces them is asserted through the library panel that
+ * is now on screen: a dossier row opens the editor, `+ New file` writes into the folder
+ * whose list it heads (the `folders[0]?.id || 'f-1'` fallback is dead, so a test seeds
+ * two folders and proves the second one is the one that gets the dossier), `Scan & Send`
+ * belongs to the QR panel rather than the header, and the header's Settings control
+ * navigates.
  */
 
 import 'fake-indexeddb/auto'
@@ -22,14 +33,16 @@ import type { Mock } from 'vitest'
 
 import { Home } from './Home'
 import { Session } from './Session'
+import { WithMantine } from '../components/common/WithMantine'
 import {
   closeLibraryDatabase,
+  createFile,
   createFolder,
-  getItemsInFolder,
+  getFile,
+  getFilesInFolder,
   ROOT_FOLDER_ID,
-  saveItem,
 } from '../lib/library'
-import type { LibraryItem } from '../lib/library'
+import type { FileBlock } from '../lib/library'
 import { deriveSessionMaterial, takeQueuedLibrarySends } from '../hooks/useSession'
 import { APP_URL, buildNewSessionUrl } from '../config'
 import { useLibraryStore } from '../store/libraryStore'
@@ -243,17 +256,9 @@ async function freshLibraryDatabase(): Promise<void> {
   })
 }
 
-function note(folderId: string, name: string): LibraryItem {
-  const now = Date.now()
-  return {
-    id: globalThis.crypto.randomUUID(),
-    folderId,
-    name,
-    type: 'text',
-    createdAt: now,
-    updatedAt: now,
-    content: `content of ${name}`,
-  }
+/** One heading block, so a seeded dossier has the blocks `parseFile` expects. */
+function heading(content: string): FileBlock[] {
+  return [{ id: `b-${content}`, type: 'heading', content }]
 }
 
 function jsonResponse(body: unknown): unknown {
@@ -265,6 +270,11 @@ function SessionRoute() {
   return <div className="session-route" data-search={location.search} />
 }
 
+/** A stand-in for `pages/Settings.tsx`, so the header link can be asserted as a navigation. */
+function SettingsRoute() {
+  return <div className="settings-route" />
+}
+
 function renderHome(): HTMLDivElement {
   const element = document.createElement('div')
   document.body.append(element)
@@ -272,12 +282,17 @@ function renderHome(): HTMLDivElement {
 
   act(() => {
     created.render(
-      <MemoryRouter initialEntries={['/']}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/session" element={<SessionRoute />} />
-        </Routes>
-      </MemoryRouter>,
+      // `main.tsx` provides Mantine at the root; `WithMantine` keeps this harness honest
+      // about components that assume it, without one of them having to care.
+      <WithMantine>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/session" element={<SessionRoute />} />
+            <Route path="/settings" element={<SettingsRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </WithMantine>,
     )
   })
 
@@ -316,10 +331,54 @@ function buttonByClass(element: HTMLElement, className: string): HTMLButtonEleme
   return node
 }
 
-function itemNames(element: HTMLElement): (string | undefined)[] {
-  return [...element.querySelectorAll<HTMLElement>('.library-item__name')].map(
+/** The dossier rows the library panel lists, in the order it lists them. */
+function dossierNames(element: HTMLElement): (string | undefined)[] {
+  return [...element.querySelectorAll<HTMLElement>('.library-panel__file-name')].map(
     (name) => name.textContent ?? undefined,
   )
+}
+
+function folderHeadings(element: HTMLElement): (string | undefined)[] {
+  return [...element.querySelectorAll<HTMLElement>('.library-panel__folder-name')].map(
+    (name) => name.textContent?.trim(),
+  )
+}
+
+/** A wait predicate has to answer "not yet" rather than throw the way `sectionFor` does. */
+function hasSection(element: HTMLElement, name: string): boolean {
+  return [...element.querySelectorAll<HTMLElement>('.library-panel__folder')].some(
+    (node) => node.querySelector('.library-panel__folder-name')?.textContent?.trim() === name,
+  )
+}
+
+function sectionFor(element: HTMLElement, name: string): HTMLElement {
+  for (const node of element.querySelectorAll<HTMLElement>('.library-panel__folder')) {
+    if (node.querySelector('.library-panel__folder-name')?.textContent?.trim() === name) return node
+  }
+  throw new Error(`test bug: no folder section named ${name}`)
+}
+
+function rowFor(element: HTMLElement, name: string): HTMLElement {
+  for (const row of element.querySelectorAll<HTMLElement>('.library-panel__file')) {
+    if (row.querySelector('.library-panel__file-name')?.textContent?.trim() === name) return row
+  }
+  throw new Error(`test bug: no dossier row named ${name}`)
+}
+
+function buttonIn(scope: HTMLElement, selector: string, what: string): HTMLButtonElement {
+  const node = scope.querySelector(selector)
+  if (!(node instanceof HTMLButtonElement)) throw new Error(`test bug: no ${what}`)
+  return node
+}
+
+/** The dossier row's `···` menu entry, opening the menu first. */
+function rowMenuItem(element: HTMLElement, name: string, label: string): HTMLButtonElement {
+  const row = rowFor(element, name)
+  click(buttonIn(row, '.library-panel__file-menu-toggle', 'row menu'))
+  for (const item of row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) {
+    if (item.textContent === label) return item
+  }
+  throw new Error(`test bug: no dossier menu item labelled ${label}`)
 }
 
 let mintFetch: Mock
@@ -330,7 +389,7 @@ beforeEach(async () => {
   fakePeers = []
   ;(globalThis as unknown as Record<string, unknown>)['WebSocket'] = FakeWebSocket
   ;(globalThis as unknown as Record<string, unknown>)['RTCPeerConnection'] = FakeRTCPeerConnection
-  useLibraryStore.setState({ folders: [], items: [], loading: false, error: null })
+  useLibraryStore.setState({ folders: [], items: [], files: [], loading: false, error: null })
   useSessionStore.getState().reset()
   takeQueuedLibrarySends()
   mintFetch = vi.fn(async (): Promise<unknown> => jsonResponse({ code: HOME_CODE }))
@@ -366,27 +425,27 @@ afterEach(async () => {
 })
 
 describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
-  it('renders the library from the store, and navigates folders', async () => {
+  it('renders the library from the store, and opens a dossier in the editor', async () => {
     const folder = await createFolder('Uni Stuff', null)
-    await saveItem(note(ROOT_FOLDER_ID, 'Loose note'))
-    await saveItem(note(folder.id, 'Portal password'))
+    await createFile('Portal password', folder.id, heading('Portal'))
+    await createFile('Loose note', ROOT_FOLDER_ID, heading('Loose'))
 
     const element = renderHome()
-    await waitFor(() => itemNames(element).length === 1, 'the library to load')
+    await waitFor(() => dossierNames(element).length === 2, 'the library to load')
 
-    expect(itemNames(element)).toEqual(['Loose note'])
-    expect(element.textContent).toContain('Uni Stuff')
+    expect(dossierNames(element).sort()).toEqual(['Loose note', 'Portal password'])
+    expect(folderHeadings(element)).toContain('Uni Stuff')
+    // Root is a section of its own, so a dossier nobody filed is still on screen.
+    expect(folderHeadings(element)).toContain('Root')
 
-    const folderName = [...element.querySelectorAll<HTMLButtonElement>('.folder-node__name')].find(
-      (candidate) => candidate.textContent?.includes('Uni Stuff') === true,
-    )
-    if (!folderName) throw new Error('test bug: no folder named Uni Stuff')
-    click(folderName)
+    click(buttonIn(rowFor(element, 'Portal password'), '.library-panel__file-open', 'row body'))
 
-    expect(itemNames(element)).toEqual(['Portal password'])
+    // Home swaps the whole shell for the editor, and the dossier it opened is this one.
+    expect(element.querySelector('.library-panel')).toBe(null)
+    expect(element.textContent).toContain('Portal password')
   })
 
-  it('reports a store failure in the browser instead of throwing it', async () => {
+  it('reports a store failure in the library panel instead of throwing it', async () => {
     const element = renderHome()
     await settle()
 
@@ -394,41 +453,36 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
       useLibraryStore.setState({ error: 'library: no folder with id "gone"' })
     })
 
-    expect(element.querySelector('.library-browser__error')?.textContent).toContain(
+    expect(element.querySelector('.library-panel__error')?.textContent).toContain(
       'no folder with id "gone"',
     )
   })
 
-  it('deletes an item through the browser, in the store and in IndexedDB', async () => {
-    const item = note(ROOT_FOLDER_ID, 'Loose note')
-    await saveItem(item)
+  it('deletes a dossier through the panel, in the store and in IndexedDB', async () => {
+    const dossier = await createFile('Loose note', ROOT_FOLDER_ID, heading('Loose'))
 
     const element = renderHome()
-    await waitFor(() => itemNames(element).length === 1, 'the library to load')
+    await waitFor(() => dossierNames(element).length === 1, 'the library to load')
 
-    click(buttonByClass(element, 'library-item__menu-toggle'))
-    const remove = [...element.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
-      (menuItem) => menuItem.textContent === 'Delete',
-    )
-    if (!remove) throw new Error('test bug: no Delete menu item')
-    click(remove)
+    click(rowMenuItem(element, 'Loose note', 'Delete'))
 
     const dialog = element.querySelector('[role="dialog"]')
     if (!(dialog instanceof HTMLElement)) throw new Error('test bug: no confirmation dialog')
-    expect(itemNames(element)).toEqual(['Loose note'])
-    expect((await getItemsInFolder(ROOT_FOLDER_ID)).map((stored) => stored.id)).toEqual([
-      item.id,
+    expect(dossierNames(element)).toEqual(['Loose note'])
+    expect((await getFilesInFolder(ROOT_FOLDER_ID)).map((stored) => stored.id)).toEqual([
+      dossier.id,
     ])
 
     const confirm = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(
-      (candidate) => candidate.textContent === 'Delete item permanently',
+      (candidate) => candidate.textContent === 'Delete dossier permanently',
     )
     if (!confirm) throw new Error('test bug: no destructive confirm button in the dialog')
     click(confirm)
-    await waitFor(() => itemNames(element).length === 0, 'the item to be deleted')
+    await waitFor(() => dossierNames(element).length === 0, 'the dossier to be deleted')
 
-    expect(itemNames(element)).toEqual([])
-    expect(await getItemsInFolder(ROOT_FOLDER_ID)).toEqual([])
+    expect(dossierNames(element)).toEqual([])
+    expect(await getFilesInFolder(ROOT_FOLDER_ID)).toEqual([])
+    expect(await getFile(dossier.id)).toBeUndefined()
     expect(useLibraryStore.getState().error).toBe(null)
   })
 
@@ -452,61 +506,76 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
   })
 })
 
-describe('Home — send selected (PLAN.md §7 flow A, decision D8)', () => {
-  it('queues the selected library items for the live host session', async () => {
-    const first = note(ROOT_FOLDER_ID, 'Portal password')
-    const second = note(ROOT_FOLDER_ID, 'Thesis draft')
-    const untouched = note(ROOT_FOLDER_ID, 'Not selected')
-    await saveItem(first)
-    await saveItem(second)
-    await saveItem(untouched)
+/*
+ * D16 behaviour changes 2 and 3, at page level: the folder a new dossier lands in is the
+ * folder whose list the `+ New file` row heads. This is the test that pins the removal of
+ * `folders[0]?.id || 'f-1'` — the first version wrote whichever folder happened to be
+ * first, and fell back to a mock id that no longer exists anywhere.
+ */
+describe('Home — the top bar (ORCHESTRATION D16 behaviour change 1)', () => {
+  it('carries Settings, which navigates, and exactly one Scan & Send — in the QR panel', async () => {
+    const element = renderHome()
+    await settle()
+
+    const scanButtons = [...element.querySelectorAll<HTMLButtonElement>('button')].filter(
+      (candidate) => candidate.textContent?.includes('Scan & Send') === true,
+    )
+    expect(scanButtons).toHaveLength(1)
+    // The one Scan & Send belongs to the panel whose action it is, not to the header.
+    expect(scanButtons[0]?.closest('.home__qr-panel')).not.toBe(null)
+    expect(scanButtons[0]?.closest('header')).toBe(null)
+
+    const settings = element.querySelector<HTMLElement>('.home__settings')
+    if (!settings) throw new Error('test bug: no Settings control in the header')
+    click(settings)
+    await waitFor(() => element.querySelector('.settings-route') !== null, 'the /settings route')
+
+    expect(element.querySelector('.library-panel')).toBe(null)
+  })
+})
+
+describe('Home — the folder a dossier is created in (ORCHESTRATION D16)', () => {
+  it('creates the dossier in the folder whose + New file row was pressed', async () => {
+    const first = await createFolder('Work', null)
+    const second = await createFolder('Research', null)
 
     const element = renderHome()
-    await waitFor(() => itemNames(element).length === 3, 'the library to load')
+    await waitFor(() => folderHeadings(element).includes('Research'), 'both folders on screen')
 
-    click(buttonByClass(element, 'library-browser__select'))
-    const checkboxes = [...element.querySelectorAll<HTMLInputElement>('.library-item__checkbox')]
-    expect(checkboxes).toHaveLength(3)
+    const newFile = sectionFor(element, 'Research').querySelector<HTMLButtonElement>(
+      '.library-panel__new-file',
+    )
+    if (!newFile) throw new Error('test bug: Research has no + New file row')
+    click(newFile)
+    await waitFor(() => element.textContent?.includes('New Dossier') === true, 'the editor to open')
 
-    const names = itemNames(element)
-    const boxFor = (name: string): HTMLInputElement => {
-      const index = names.indexOf(name)
-      const box = checkboxes[index]
-      if (!box) throw new Error(`test bug: no checkbox for ${name}`)
-      return box
-    }
-    click(boxFor('Portal password'))
-    click(boxFor('Thesis draft'))
+    const stored = await getFilesInFolder(second.id)
+    expect(stored.map((file) => file.name)).toEqual(['New Dossier'])
+    expect(await getFilesInFolder(first.id)).toEqual([])
+    expect(await getFilesInFolder('f-1')).toEqual([])
+    expect(useLibraryStore.getState().error).toBe(null)
 
-    await waitFor(() => mintFetch.mock.calls.length >= 1, 'the mint to complete')
-
-    click(buttonByClass(element, 'library-browser__send-selected'))
-
-    // Home is already the host session: it does not navigate away to /session,
-    // and the queued items wait in memory to be sent once a peer scans Home's QR.
-    expect(element.querySelector('.session-route')).toBe(null)
-
-    const queued = takeQueuedLibrarySends()
-    expect(queued.map((item) => item.name).sort()).toEqual(['Portal password', 'Thesis draft'])
-    expect(queued.map((item) => item.id).sort()).toEqual([first.id, second.id].sort())
-    expect(await getItemsInFolder(ROOT_FOLDER_ID)).toHaveLength(3)
+    // And it is the editor that came up, not a second copy of the panel.
+    expect(element.querySelector('.library-panel')).toBe(null)
   })
 
-  it('sends a single item from the row menu without a selection', async () => {
-    const only = note(ROOT_FOLDER_ID, 'Portal password')
-    await saveItem(only)
-
+  it('creates an unfiled dossier from Root when there is no folder at all', async () => {
     const element = renderHome()
-    await waitFor(() => itemNames(element).length === 1, 'the library to load')
+    await waitFor(() => hasSection(element, 'Root'), "Root's section")
 
-    click(buttonByClass(element, 'library-item__menu-toggle'))
-    const send = [...element.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
-      (menuItem) => menuItem.textContent === 'Send',
+    const newFile = sectionFor(element, 'Root').querySelector<HTMLButtonElement>(
+      '.library-panel__new-file',
     )
-    if (!send) throw new Error('test bug: no Send menu item')
-    click(send)
+    if (!newFile) throw new Error('test bug: Root has no + New file row')
+    click(newFile)
+    await waitFor(() => element.textContent?.includes('New Dossier') === true, 'the editor to open')
 
-    expect(takeQueuedLibrarySends().map((item) => item.id)).toEqual([only.id])
+    // `root` is a real target for a file in the library layer, so this write lands rather
+    // than being rejected as an unknown folder — which is what a mock-id fallback would be.
+    expect((await getFilesInFolder(ROOT_FOLDER_ID)).map((file) => file.name)).toEqual([
+      'New Dossier',
+    ])
+    expect(useLibraryStore.getState().error).toBe(null)
   })
 })
 
@@ -637,20 +706,23 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
     // Home renders session board in place of the library
     expect(element.querySelector('.session-board')).not.toBe(null)
     expect(element.querySelector('.safety-phrase')).toBe(null)
-    expect(element.querySelector('.library-browser')).toBe(null)
-    expect(element.textContent).not.toContain('Your Library')
+    expect(element.querySelector('.library-panel')).toBe(null)
+    expect(element.textContent).not.toContain('Local Library')
   })
 
-  it('the library is visible while waiting', async () => {
+  it('the library panel is visible while waiting', async () => {
     const element = renderHome()
     await waitFor(() => sockets.length === 1, 'the host signaling socket')
     sockets[0]!.fireOpen()
     await settle()
 
-    expect(element.textContent).toContain('Your Library')
-    expect(element.querySelector('.library-browser')).not.toBe(null)
+    expect(element.textContent).toContain('Local Library')
+    expect(element.querySelector('.library-panel')).not.toBe(null)
     expect(element.querySelector('.home__scan')).not.toBe(null)
     expect(element.querySelector('.manual-code')).not.toBe(null)
+    // D16 behaviour change 1: the header carries Settings, not a second Scan & Send.
+    expect(element.querySelector('header .home__scan')).toBe(null)
+    expect(element.querySelector('.home__settings')).not.toBe(null)
   })
 
   it('ending a session returns to the library with a FRESH live code', async () => {
@@ -689,11 +761,8 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
     expect(secondJoin?.['role']).toBe('host')
 
     // Library view is restored with the fresh QR
-    expect(element.querySelector('.library-browser')).not.toBe(null)
-    expect(element.textContent).toContain('Your Library')
-    // D13: the fresh code only appears once the new attempt has joined, and the
-    // publication lands a microtask after the join frame. Waiting on the rendered QR is
-    // both the flush and the real assertion -- a stale or unjoined code must not show.
+    expect(element.querySelector('.library-panel')).not.toBe(null)
+    expect(element.textContent).toContain('Local Library')
     await waitFor(() => element.textContent?.includes(FRESH_CODE) === true, 'the fresh live QR')
   })
 
@@ -791,48 +860,17 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
   })
 })
 
-describe('Home — Scan & Send, PLAN.md §7 flow A (PLAN.md §16 Phase 6, D8)', () => {
-  function selectItems(element: HTMLElement, names: string[]): void {
-    click(buttonByClass(element, 'library-browser__select'))
-    const displayed = itemNames(element)
-    const checkboxes = [...element.querySelectorAll<HTMLInputElement>('.library-item__checkbox')]
-
-    for (const name of names) {
-      const box = checkboxes[displayed.indexOf(name)]
-      if (!box) throw new Error(`test bug: no checkbox for ${name}`)
-      click(box)
-    }
-  }
-
-  it('queues exactly the selected items and joins the scanned session as the guest', async () => {
-    const first = note(ROOT_FOLDER_ID, 'Portal password')
-    const second = note(ROOT_FOLDER_ID, 'Thesis draft')
-    await saveItem(first)
-    await saveItem(second)
-    await saveItem(note(ROOT_FOLDER_ID, 'Not selected'))
-
+/*
+ * The page-level "select library items, then Scan & Send queues them" tests lived here.
+ * They drove the `sr-only` `LibraryBrowser` mount that D16.4 deleted, so the page has no
+ * multi-select left to test — `LibraryBrowser.test.tsx` still pins that component, and the
+ * surviving half of the flow (open the camera from the QR panel, join what it scanned) is
+ * asserted below.
+ */
+describe('Home — Scan & Send, PLAN.md §7 flow A (PLAN.md §16 Phase 6, D8, D16)', () => {
+  it('joins the scanned session with an empty queue when nothing was sent first', async () => {
     const element = renderHome()
-    await waitFor(() => itemNames(element).length === 3, 'the library to load')
-
-    selectItems(element, ['Portal password', 'Thesis draft'])
-    expect(buttonByClass(element, 'home__scan').textContent).toContain('(2)')
-
-    click(buttonByClass(element, 'home__scan'))
-    click(buttonByClass(element, 'scanner__scan-valid'))
-
-    const route = element.querySelector<HTMLElement>('.session-route')
-    expect(route?.getAttribute('data-search')).toBe(`?code=${PEER_CODE}`)
-
-    const queued = takeQueuedLibrarySends()
-    expect(queued.map((item) => item.id).sort()).toEqual([first.id, second.id].sort())
-    expect(queued.map((item) => item.name).sort()).toEqual(['Portal password', 'Thesis draft'])
-  })
-
-  it('joins the scanned session plainly when nothing is selected', async () => {
-    await saveItem(note(ROOT_FOLDER_ID, 'Not selected'))
-
-    const element = renderHome()
-    await waitFor(() => itemNames(element).length === 1, 'the library to load')
+    await settle()
 
     click(buttonByClass(element, 'home__scan'))
     click(buttonByClass(element, 'scanner__scan-valid'))

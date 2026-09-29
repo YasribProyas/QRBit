@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+
 import { HomeView } from '../components/HomeView'
 import { FileEditView } from '../components/library/FileEditView'
+import { LibraryPanel } from '../components/library/LibraryPanel'
 import { ScannerView } from '../components/ScannerView'
 import { SafetyPhraseView } from '../components/SafetyPhraseView'
 import { SenderSessionView } from '../components/session/SenderSessionView'
 import { ReceiverSessionView } from '../components/session/ReceiverSessionView'
 import { SessionEndedView } from '../components/session/SessionEndedView'
-import { LibraryBrowser } from '../components/library/LibraryBrowser'
 import { isSenderRole } from '../components/session/SessionBoard'
 import {
   clearLibrarySends,
@@ -16,58 +17,61 @@ import {
   useSession,
 } from '../hooks/useSession'
 import { useLibraryStore } from '../store/libraryStore'
-import type { LibraryFile } from '../lib/library'
+import type { FileBlock, LibraryFile } from '../lib/library'
 import { fileBlocksToLibraryItems } from '../lib/dossier'
 
 /**
- * Stops an unhandled rejection from the browser's `void` callbacks.
+ * The blocks a brand-new dossier starts with, so the first thing a user sees in the
+ * editor is a shape rather than a blank page. Ids are per-mint: `saveFile` keys blocks by
+ * id within a file, and two files made in the same millisecond must not share one.
  */
-function reportToStore(operation: Promise<unknown>): void {
-  void operation.catch(() => undefined)
+function newDossierBlocks(): FileBlock[] {
+  const stamp = Date.now()
+  return [
+    { id: `b-${stamp}-1`, type: 'heading', content: 'Section Heading' },
+    { id: `b-${stamp}-2`, type: 'shortText', label: 'Key', value: 'Value' },
+    {
+      id: `b-${stamp}-3`,
+      type: 'richText',
+      content: 'Add your structured notes, credentials, and attachments here.',
+    },
+  ]
 }
 
 /**
- * Home screen (PLAN.md §7, §16 Phase 5/6, ORCHESTRATION.md D13).
+ * Home screen (PLAN.md §7, §16 Phase 5/6, ORCHESTRATION.md D13 and D16).
  *
- * Full Adoption of QRBit / qrd-design System & UX:
- * - Single-column responsive layout (no hidden drawers or split dual-panes)
- * - Section 1: Beacon Ready Tactical QR Code card with reticle, telemetry, and manual fallback
- * - Section 2: Local Library with folders accordion, "+ New File", file cards with preview & encrypted badges
- * - FileEditView: Full multi-entity dossier editor with per-block label and per-block lock
- * - ScannerView: Optical transceiver with laser sweep line and viewfinder
- * - SafetyPhraseView: 3 prominent verification words with confirm match
- * - Active Session: Sender / Receiver views with real-time block streaming
- * - SessionEndedView: Complete summary and Save Whole Dossier to Library
+ * Home is the host: it connects to the signaling server for its minted code on mount, so
+ * the QR is visible and joinable the moment the app opens, with no tap in between. The
+ * shell it renders is the two-panel desktop surface (D16) — `LibraryPanel` on the left,
+ * the QR panel on the right, one column on a phone.
+ *
+ * This page owns the surfaces the store cannot: which dossier is open in the editor,
+ * whether the camera is up, and which session view replaces the shell once a peer
+ * arrives. Library CRUD belongs to the panel and goes straight to the store; the one
+ * thing Home still does for the library is create a dossier, because a new dossier is
+ * also a decision to open the editor — and it creates into the folder the user was
+ * looking at, which the panel hands over (`ROOT_FOLDER_ID` when they were looking at
+ * Root). There is no default folder and no fallback id: a dossier goes where the click
+ * happened.
+ *
+ * When a session ends on Home with nothing received and no error, Home restarts it so the
+ * next peer gets a joinable QR rather than a burned one (D10).
  */
 export function Home() {
   const navigate = useNavigate()
 
   const folders = useLibraryStore((state) => state.folders)
-  const items = useLibraryStore((state) => state.items)
-  const files = useLibraryStore((state) => state.files)
-  const loading = useLibraryStore((state) => state.loading)
-  const error = useLibraryStore((state) => state.error)
   const refresh = useLibraryStore((state) => state.refresh)
-  const createFolder = useLibraryStore((state) => state.createFolder)
-  const renameFolder = useLibraryStore((state) => state.renameFolder)
-  const deleteFolder = useLibraryStore((state) => state.deleteFolder)
-  const renameItem = useLibraryStore((state) => state.renameItem)
-  const deleteItem = useLibraryStore((state) => state.deleteItem)
-  const moveItem = useLibraryStore((state) => state.moveItem)
   const createFile = useLibraryStore((state) => state.createFile)
   const saveFile = useLibraryStore((state) => state.saveFile)
   const updateFile = useLibraryStore((state) => state.updateFile)
 
-  /** The folder whose items are listed; `null` is the tree's Root. */
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
-
-  /** The library browser's current selection (PLAN.md §7 Flow A). */
-  const [selectedIds, setSelectedIds] = useState<readonly string[]>([])
+  /** True while the camera surface replaces the shell. */
   const [scanning, setScanning] = useState(false)
-
-  /** Dossier file currently being authored or edited */
+  /** The dossier currently open in the editor; `null` means the shell is on screen. */
   const [editingFile, setEditingFile] = useState<LibraryFile | null>(null)
-  /** Selected file for immediate transfer */
+  /** The dossier handed to a session by the editor's Send. */
   const [selectedFileForTransfer, setSelectedFileForTransfer] = useState<LibraryFile | null>(null)
 
   // Home mounts the host session directly so the QR is visible and joinable immediately.
@@ -78,8 +82,6 @@ export function Home() {
     void refresh()
   }, [refresh])
 
-  // When a session ends on Home without received items or errors, auto-recover by restarting
-  // to mint a fresh code so the next peer gets a joinable QR rather than a burned one.
   useEffect(() => {
     if (
       session.phase === 'ended' &&
@@ -90,26 +92,31 @@ export function Home() {
     }
   }, [session.phase, session.receivedItems.length, session.errorMessage, session.restart])
 
-  const handleCreateNewFile = async () => {
-    const targetFolder = folders[0]?.id || 'f-1'
-    const newFile = await createFile('New Dossier', targetFolder, [
-      { id: `b-${Date.now()}-1`, type: 'heading', content: 'Section Heading' },
-      { id: `b-${Date.now()}-2`, type: 'shortText', label: 'Key', value: 'Value' },
-      {
-        id: `b-${Date.now()}-3`,
-        type: 'richText',
-        content: 'Add your structured notes, credentials, and attachments here.',
-      },
-    ])
-    setEditingFile(newFile)
+  /**
+   * Creates a dossier in `folderId` and opens it.
+   *
+   * The folder is a required argument, and it comes from the panel row the user pressed:
+   * there is no default folder and no fallback id, so a dossier always goes where the
+   * click happened. `Root` is an explicit answer — the library layer's root sentinel is a
+   * real target for a file — which is what lets a dossier exist before any folder does.
+   */
+  const handleCreateNewFile = (folderId: string): void => {
+    const opened = (file: LibraryFile): void => {
+      setEditingFile(file)
+    }
+    createFile('New Dossier', folderId, newDossierBlocks()).then(
+      opened,
+      // The panel renders the store's `error`, so a rejection is already on screen.
+      () => undefined,
+    )
   }
 
-  const handleSaveFile = (file: LibraryFile) => {
+  const handleSaveFile = (file: LibraryFile): void => {
     setEditingFile(file)
-    void updateFile(file.id, file)
+    updateFile(file.id, file).catch(() => undefined)
   }
 
-  const handleSendFileDirectly = async (file: LibraryFile) => {
+  const handleSendFileDirectly = async (file: LibraryFile): Promise<void> => {
     setSelectedFileForTransfer(file)
     const convertedItems = await fileBlocksToLibraryItems(file)
     if (session.phase === 'active') {
@@ -122,21 +129,6 @@ export function Home() {
   }
 
   /**
-   * PLAN.md §7 flow A / decision D8: hand the selection to the session.
-   * Since Home is the host, queued items will send as soon as the session goes active.
-   */
-  const sendSelected = (ids: string[]): void => {
-    const selected = items.filter((item) => ids.includes(item.id))
-    if (selected.length === 0) return
-
-    queueLibrarySends(selected)
-  }
-
-  const handleSelectionChange = useCallback((ids: readonly string[]): void => {
-    setSelectedIds(ids)
-  }, [])
-
-  /**
    * The scan's landing point (PLAN.md §7 flow A).
    */
   const handleScan = (code: string): void => {
@@ -147,11 +139,6 @@ export function Home() {
     }
 
     clearLibrarySends()
-    if (selectedIds.length > 0) {
-      const selected = items.filter((item) => selectedIds.includes(item.id))
-      if (selected.length > 0) queueLibrarySends(selected)
-    }
-
     navigate(`/session?code=${encodeURIComponent(code)}`)
   }
 
@@ -215,7 +202,7 @@ export function Home() {
         session={session}
         folders={folders}
         onSaveToLibrary={(file) => {
-          void saveFile(file)
+          saveFile(file).catch(() => undefined)
         }}
         onEndSession={() => session.abort()}
       />
@@ -229,7 +216,7 @@ export function Home() {
         session={session}
         folders={folders}
         onSaveFileToLibrary={(file) => {
-          void saveFile(file)
+          saveFile(file).catch(() => undefined)
         }}
         onStartNewSession={() => session.restart()}
         onGoToLibrary={() => session.restart()}
@@ -237,68 +224,21 @@ export function Home() {
     )
   }
 
-  // 6. DEFAULT HOME VIEW
+  // 6. DEFAULT HOME VIEW — the two-panel shell: library left, QR right (D16)
   return (
-    <>
-      <HomeView
-        pairingCode={session.sessionCode}
-        onRegeneratePairing={() => session.restart()}
-        folders={folders}
-        files={files}
-        onSelectFileToEdit={(file) => setEditingFile(file)}
-        onSendFileDirectly={async (file) => {
-          await handleSendFileDirectly(file)
-          setScanning(true)
-        }}
-        onOpenScanner={() => setScanning(true)}
-        onCreateNewFile={handleCreateNewFile}
-        onJoinCode={(code) => handleScan(code)}
-        selectedCount={selectedIds.length}
-        roleLabel={session.roleLabel}
-        errorMessage={session.errorMessage}
-      />
-
-      {/* Hidden test harness container ensuring 100% backward test compatibility */}
-      <div
-        className="sr-only"
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          width: 0,
-          height: 0,
-          overflow: 'hidden',
-          clip: 'rect(0, 0, 0, 0)',
-        }}
-      >
-        <LibraryBrowser
-          folders={folders}
-          items={items}
-          currentFolderId={currentFolderId}
-          onSelectFolder={setCurrentFolderId}
-          onCreateFolder={async (name, parentId) => {
-            await createFolder(name, parentId)
-          }}
-          onRenameFolder={(id, name) => {
-            reportToStore(renameFolder(id, name))
-          }}
-          onDeleteFolder={(id) => {
-            reportToStore(deleteFolder(id))
-          }}
-          onRenameItem={(id, name) => {
-            reportToStore(renameItem(id, name))
-          }}
-          onMoveItem={(id, targetFolderId) => {
-            reportToStore(moveItem(id, targetFolderId))
-          }}
-          onDeleteItem={(id) => {
-            reportToStore(deleteItem(id))
-          }}
-          onSendItems={sendSelected}
-          onSelectionChange={handleSelectionChange}
-          loading={loading}
-          error={error}
+    <HomeView
+      pairingCode={session.sessionCode}
+      onRegeneratePairing={() => session.restart()}
+      onOpenScanner={() => setScanning(true)}
+      onJoinCode={(code) => handleScan(code)}
+      roleLabel={session.roleLabel}
+      errorMessage={session.errorMessage}
+      library={
+        <LibraryPanel
+          onSelectFile={(file) => setEditingFile(file)}
+          onCreateFile={(folderId) => handleCreateNewFile(folderId)}
         />
-      </div>
-    </>
+      }
+    />
   )
 }
