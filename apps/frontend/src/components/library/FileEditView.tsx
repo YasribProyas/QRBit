@@ -45,6 +45,7 @@ import { FolderPickerModal } from './FolderPickerModal'
 import type { FolderPickerChoice } from './FolderPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
+import { describeSendFailure, findUnsendableBlocks } from '../../lib/dossier'
 import { ROOT_FOLDER_ID } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
@@ -55,7 +56,7 @@ export interface FileEditViewProps {
   /** Persists the whole draft. Called by `Save`, by `Save & leave`, and once before `Send`. */
   onSaveFile: (file: LibraryFile) => void
   /** Hands the dossier to the transfer path — always with the current draft, after it was persisted. */
-  onSendFile: (file: LibraryFile) => void
+  onSendFile: (file: LibraryFile) => void | Promise<void>
   /** Candidate destinations for the folder picker; the file's own folder is looked up here for the label. */
   folders: LibraryFolder[]
   /**
@@ -100,6 +101,8 @@ export function FileEditView({
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
   const [isMoving, setIsMoving] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
+  /** Why a Send was refused, in words the user can act on. Cleared by the next Send. */
+  const [sendError, setSendError] = useState<string | null>(null)
   const [isLeaveDialogOpen, setIsLeaveDialogOpen] = useState(false)
 
   if (seededFromId !== file.id) {
@@ -114,6 +117,7 @@ export function FileEditView({
     setIsLeaveDialogOpen(false)
     setIsFolderPickerOpen(false)
     setMoveError(null)
+    setSendError(null)
   }
 
   const onDirtyChangeRef = useRef(onDirtyChange)
@@ -144,6 +148,9 @@ export function FileEditView({
   const commitBlocks = useCallback((update: (current: FileBlock[]) => FileBlock[]): void => {
     setDraftBlocks((current) => update(current))
     setIsDirty(true)
+    // Any edit is the user acting on a refused Send — picking the file that was missing, or
+    // deleting the block — so the complaint goes away with the edit that answers it.
+    setSendError(null)
   }, [])
 
   /**
@@ -215,12 +222,13 @@ export function FileEditView({
         newBlock.content = 'New documentation or notes...'
         break
       case 'image':
-        newBlock.fileName = 'attachment_photo.png'
-        newBlock.caption = 'Telemetry capture'
+        // NOTHING is pre-filled. An attachment block starts as an empty promise: no filename,
+        // no caption, no size, because there are no bytes and the row says so. `AttachmentPicker`
+        // is the only thing that can put `blob`, `fileName`, `mimeType` and a byte count on it.
+        // Pre-filling them is how a dossier came to transmit 100 null bytes under a filename the
+        // user never typed, at a size nobody measured.
         break
       case 'fileAttachment':
-        newBlock.fileName = 'data_export.bin'
-        newBlock.fileSize = '2.4 MB'
         break
       case 'locked':
         newBlock.label = 'Encrypted Key'
@@ -279,7 +287,30 @@ export function FileEditView({
   /** Send gives the channel what is on screen: the draft is persisted, then the same record goes out. */
   const handleSend = (): void => {
     const current = draftFile()
-    if (persist(current)) onSendFile(current)
+    setSendError(null)
+
+    /*
+     * The refusal happens HERE, before a byte of the draft is handed over. `lib/dossier.ts`
+     * throws for an attachment block with no file, which is the backstop; this is the front line,
+     * and it is what turns "the transfer silently carried fake data" into a sentence on screen
+     * that names what to do about it. A draft can still be SAVED with an empty attachment block
+     * — that is work in progress, not a payload.
+     */
+    const unsendable = findUnsendableBlocks(current)
+    const first = unsendable[0]
+    if (first !== undefined) {
+      setSendError(describeSendFailure(first))
+      return
+    }
+
+    if (!persist(current)) return
+
+    // The host's send is allowed to be async (that is how `pages/Home.tsx` wires it, and the
+    // conversion inside it can still reject). Awaiting it here is what keeps the failure visible
+    // without this editor having to own a page-level file.
+    void Promise.resolve(onSendFile(current)).catch((cause: unknown) => {
+      setSendError(describeSendFailure(cause))
+    })
   }
 
   const handleSaveAndLeave = (): void => {
@@ -469,6 +500,11 @@ export function FileEditView({
         {moveError ? (
           <p className="px-3 text-[11px] text-red-600" role="status">
             {moveError}
+          </p>
+        ) : null}
+        {sendError !== null ? (
+          <p className="px-3 text-[11px] text-red-600" role="alert" data-send-error="true">
+            {sendError}
           </p>
         ) : null}
 

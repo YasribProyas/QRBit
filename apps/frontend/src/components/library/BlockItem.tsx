@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   GripVertical,
   Lock,
@@ -6,7 +6,6 @@ import {
   KeyRound,
   FileCode,
   Download,
-  UploadCloud,
   Trash2,
   Copy,
   ChevronUp,
@@ -17,8 +16,12 @@ import {
   Shield,
   Tag,
 } from 'lucide-react'
+import { IconX } from '@tabler/icons-react'
 import type { FileBlock } from '../../lib/library'
-import { decryptItem, encryptItem } from '../../lib/crypto'
+import { decryptItem, encryptItem, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from '../../lib/crypto'
+import { formatByteSize, fileSizeText } from '../../lib/byteSize'
+import { AttachmentPicker, LIBRARY_ATTACHMENT_MAX_BYTES } from './AttachmentPicker'
+import type { AttachmentSelection } from './AttachmentPicker'
 import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
 
 export interface BlockItemProps {
@@ -77,6 +80,8 @@ export function BlockItem({
   const [showLockConfigModal, setShowLockConfigModal] = useState(false)
   const [newLockPassword, setNewLockPassword] = useState('')
   const [isEncrypting, setIsEncrypting] = useState(false)
+  /** Why a lock was refused, in words: an oversized or empty payload cannot be encrypted. */
+  const [lockError, setLockError] = useState<string | null>(null)
 
   // Every edit-mode row is a measured reorder item, grip or no grip: the hook counts those
   // markers to index a drag, so the set of them has to be the whole list.
@@ -150,11 +155,40 @@ export function BlockItem({
     if (!newLockPassword.trim()) return
 
     setIsEncrypting(true)
+    setLockError(null)
     try {
-      const plaintext = block.content || block.value || ''
+      /*
+       * What locking a block locks: its file bytes when it has them, otherwise its text. The
+       * old code encrypted `content || value || ''` whatever the block held, so locking an
+       * attachment produced an empty ciphertext that looked locked while the real file sat on
+       * the block — and `fileBlocksToLibraryItems` then shipped those bytes unencrypted, on the
+       * theory that an `image` block is an image block. Both are wrong: the file is the
+       * payload, so the file is what gets encrypted, and D6's cap is checked before that.
+       */
+      const blob = block.blob
+      const plaintext =
+        blob instanceof Blob
+          ? new Uint8Array(await blob.arrayBuffer())
+          : new TextEncoder().encode(block.content ?? block.value ?? '')
+
+      if (plaintext.byteLength === 0) {
+        setLockError(
+          blob instanceof Blob
+            ? 'That file is empty, so there is nothing to encrypt.'
+            : 'This block has no content to encrypt. Write something or choose a file first.',
+        )
+        return
+      }
+      if (plaintext.byteLength > LOCKED_ITEM_MAX_PLAINTEXT_BYTES) {
+        setLockError(
+          `A locked item carries at most ${formatByteSize(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)} (decision D6), and this payload is ${formatByteSize(plaintext.byteLength)}. Send it as a plain attachment instead.`,
+        )
+        return
+      }
+
       const enc = await encryptItem(
         newLockPassword,
-        new TextEncoder().encode(plaintext),
+        plaintext,
       )
 
       onUpdate?.(block.id, {
@@ -164,6 +198,7 @@ export function BlockItem({
           ciphertext: enc.ciphertext,
           iv: enc.iv,
           salt: enc.salt,
+          innerType: blob instanceof Blob ? 'fileAttachment' : undefined,
         },
         isUnlocked: false,
       })
@@ -255,6 +290,39 @@ export function BlockItem({
       </div>
     )
   }
+
+  // --- attachment display (the two blocks that carry bytes) ----------------
+  const attachmentBlob = block.blob
+  /**
+   * The size shown on the row, measured from what is actually on the block.
+   *
+   * `blob.size` when a file is chosen — that number is the only honest size there is. A stored
+   * `fileSize` is read only for a record whose bytes are not in memory (a demo dossier, or
+   * anything written before the picker existed), and a missing one says so instead of falling
+   * back to a plausible-looking literal, which is exactly how `'2.4 MB'` got into this file.
+   */
+  const attachmentSizeLabel =
+    attachmentBlob instanceof Blob
+      ? formatByteSize(attachmentBlob.size)
+      : fileSizeText(block.fileSize)
+  /**
+   * Whether a preview can be drawn: an `image` row shows the bytes only if they announced
+   * themselves as an image (or announced nothing at all, which a `File` from an unknown
+   * extension does, and which the picker's type check already refused to write).
+   */
+  const canPreviewImage =
+    attachmentBlob instanceof Blob &&
+    (attachmentBlob.type === '' || attachmentBlob.type.startsWith('image/'))
+  /**
+   * The ceiling for this block. A locked attachment travels as one `locked-payload` frame, so
+   * it is capped by D6, not by the library cap; an unlocked one is a chunked file item and gets
+   * `LIBRARY_ATTACHMENT_MAX_BYTES`. `AttachmentPicker` refuses above the number, and the draft
+   * keeps whatever was on the block before.
+   */
+  const attachmentMaxBytes =
+    block.type === 'locked' || block.isLocked === true
+      ? LOCKED_ITEM_MAX_PLAINTEXT_BYTES
+      : LIBRARY_ATTACHMENT_MAX_BYTES
 
   return (
     <div
@@ -444,32 +512,18 @@ export function BlockItem({
         {block.type === 'image' && (
           <div className="space-y-2">
             <div className="relative aspect-video max-h-48 w-full bg-[#0F172A] rounded-md overflow-hidden border border-[#D1D9E4] flex flex-col items-center justify-center p-4">
-              <svg className="w-full h-full max-h-36 opacity-85" viewBox="0 0 400 160" fill="none">
-                <rect
-                  x="10"
-                  y="10"
-                  width="380"
-                  height="140"
-                  rx="4"
-                  stroke="#334155"
-                  strokeWidth="1"
-                  strokeDasharray="4 4"
-                />
-                <circle cx="100" cy="80" r="36" stroke="#2563EB" strokeWidth="2" fill="#1E3A8A" fillOpacity="0.2" />
-                <circle cx="300" cy="80" r="36" stroke="#059669" strokeWidth="2" fill="#065F46" fillOpacity="0.2" />
-                <path d="M136 80 H264" stroke="#94A3B8" strokeWidth="1.5" strokeDasharray="3 3" />
-                <path d="M200 40 V120" stroke="#F59E0B" strokeWidth="1.5" />
-                <circle cx="200" cy="80" r="6" fill="#F59E0B" />
-                <text x="100" y="84" fill="#93C5FD" fontSize="11" textAnchor="middle" fontFamily="monospace">
-                  CAM_01
-                </text>
-                <text x="300" y="84" fill="#6EE7B7" fontSize="11" textAnchor="middle" fontFamily="monospace">
-                  LIDAR_A
-                </text>
-                <text x="200" y="138" fill="#CBD5E1" fontSize="10" textAnchor="middle" fontFamily="monospace">
-                  OFFSET: Δ120mm
-                </text>
-              </svg>
+              {canPreviewImage && attachmentBlob instanceof Blob ? (
+                <ImagePreview blob={attachmentBlob} name={block.fileName ?? 'Chosen image'} />
+              ) : (
+                <p
+                  className="text-[11px] font-mono text-slate-400 text-center px-4"
+                  data-attachment-empty="true"
+                >
+                  {attachmentBlob instanceof Blob
+                    ? 'The bytes on this block are not an image, so there is no preview to draw.'
+                    : 'No image chosen yet — this block holds no bytes.'}
+                </p>
+              )}
 
               {transferStatus === 'in_progress' && (
                 <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs flex flex-col items-center justify-center p-6">
@@ -486,50 +540,60 @@ export function BlockItem({
               )}
             </div>
 
-            <div className="flex items-center justify-between text-xs text-[#5B6B82] pt-1">
-              <span className="font-mono text-slate-800 font-medium">
-                {block.fileName || 'image_attachment.png'}
+            <div className="flex items-center justify-between gap-2 text-xs text-[#5B6B82] pt-1">
+              <span className="font-mono text-slate-800 font-medium truncate">
+                {block.fileName ?? 'No file chosen'}
               </span>
-              <span>{block.caption || '1920×1080 · 412 KB'}</span>
+              <span className="shrink-0">
+                {attachmentSizeLabel ?? 'no size until a file is chosen'}
+              </span>
             </div>
+
+            {block.caption !== undefined && block.caption !== '' ? (
+              <p className="text-[11px] text-[#5B6B82]">{block.caption}</p>
+            ) : null}
+
+            {mode === 'edit' ? (
+              <AttachmentControls block={block} maxBytes={attachmentMaxBytes} onUpdate={onUpdate} />
+            ) : null}
           </div>
         )}
 
         {/* FILE ATTACHMENT BLOCK */}
         {block.type === 'fileAttachment' && (
-          <div className="flex items-center justify-between p-3 bg-slate-50 rounded-md border border-[#D1D9E4]">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded bg-white border border-[#D1D9E4] flex items-center justify-center text-[#1D4ED8] shrink-0">
-                <FileCode className="w-5 h-5" />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-md border border-[#D1D9E4]">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded bg-white border border-[#D1D9E4] flex items-center justify-center text-[#1D4ED8] shrink-0">
+                  <FileCode className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[13px] font-mono font-medium text-[#0F172A] truncate">
+                    {block.fileName ?? 'No file chosen'}
+                  </p>
+                  <p className="text-[11px] text-[#5B6B82]">
+                    {attachmentSizeLabel ?? 'no size until a file is chosen'}
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <p className="text-[13px] font-mono font-medium text-[#0F172A] truncate">
-                  {block.fileName || 'file_attachment.bin'}
-                </p>
-                <p className="text-[11px] text-[#5B6B82]">{block.fileSize || 'Unknown size'}</p>
-              </div>
+
+              {mode !== 'edit' ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => alert(`Saved ${block.fileName} to local sandbox.`)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-[#D1D9E4] rounded hover:bg-slate-100 tactile-btn cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Save</span>
+                  </button>
+                </div>
+              ) : null}
             </div>
 
-            <div className="flex items-center gap-2">
-              {mode === 'edit' ? (
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-[#1D4ED8] bg-white border border-[#D1D9E4] rounded hover:bg-blue-50 tactile-btn cursor-pointer"
-                >
-                  <UploadCloud className="w-3.5 h-3.5" />
-                  <span>Replace</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => alert(`Saved ${block.fileName} to local sandbox.`)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-[#D1D9E4] rounded hover:bg-slate-100 tactile-btn cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Save</span>
-                </button>
-              )}
-            </div>
+            {mode === 'edit' ? (
+              <AttachmentControls block={block} maxBytes={attachmentMaxBytes} onUpdate={onUpdate} />
+            ) : null}
           </div>
         )}
 
@@ -664,6 +728,12 @@ export function BlockItem({
                       className="w-full text-xs px-2.5 py-1.5 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
                     />
                   </div>
+                  {lockError !== null ? (
+                    <p className="text-[11px] text-red-600" role="alert" data-lock-error="true">
+                      {lockError}
+                    </p>
+                  ) : null}
+
                   <div className="flex justify-end gap-2 pt-2">
                     <button
                       type="button"
@@ -710,4 +780,148 @@ export function BlockItem({
       </div>
     </div>
   )
+}
+
+interface AttachmentControlsProps {
+  block: FileBlock
+  /** D6's cap for a locked block, `LIBRARY_ATTACHMENT_MAX_BYTES` for a plain one. */
+  maxBytes: number
+  onUpdate?: (id: string, changes: Partial<FileBlock>) => void
+}
+
+/**
+ * Choose / replace / remove, for the two block types that hold bytes.
+ *
+ * The message state lives on the row because a refusal belongs to the block it refuses and
+ * disappears with it. The rule that makes this file's old behaviour impossible: `onUpdate` is
+ * called only with a file that passed both checks, so a wrong-type or oversized choice cannot
+ * leave a half-written block in the draft — the block keeps the file it had, or keeps having
+ * none. Removing an attachment clears the bytes and the metadata together, so a block can never
+ * claim a filename it no longer holds.
+ */
+function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsProps) {
+  const [error, setError] = useState<string | null>(null)
+  const blockType = block.type === 'image' ? 'image' : 'fileAttachment'
+  const word = blockType === 'image' ? 'image' : 'file'
+  const hasFile = block.blob !== undefined
+
+  /*
+   * A locked attachment's ciphertext was made from the bytes that were on the block when the
+   * lock was set (see `handleSetLockPassword`). Choosing or removing a file after that would
+   * leave the row showing one payload and `fileBlocksToLibraryItems` sending the other one —
+   * the same species of defect as a fabricated blob, so it is refused here rather than detected
+   * later. `fileBlocksToLibraryItems` sends the stored tuple byte-for-byte (D9), which is only
+   * safe because nothing can silently rewrite these bytes underneath it.
+   */
+  if (block.isLocked === true) {
+    return (
+      <p className="text-[11px] text-[#5B6B82]" data-attachment-locked="true">
+        This block is locked. Remove the lock to choose a different {word}.
+      </p>
+    )
+  }
+
+  const apply = (attachment: AttachmentSelection): void => {
+    setError(null)
+    onUpdate?.(block.id, {
+      blob: attachment.blob,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      // A byte count taken from the chosen Blob, stored as a number. The row displays
+      // `blob.size` directly; this is the same measurement kept on the record.
+      fileSize: attachment.sizeInBytes,
+    })
+  }
+
+  const remove = (): void => {
+    setError(null)
+    onUpdate?.(block.id, {
+      blob: undefined,
+      fileName: undefined,
+      fileSize: undefined,
+      mimeType: undefined,
+    })
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <AttachmentPicker
+          blockType={blockType}
+          label={hasFile ? `Replace ${word}` : `Choose ${word}`}
+          maxBytes={maxBytes}
+          onSelect={apply}
+          onReject={(message) => {
+            setError(message)
+          }}
+        />
+        {hasFile ? (
+          <button
+            type="button"
+            onClick={remove}
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-white border border-red-200 rounded hover:bg-red-50 tactile-btn cursor-pointer"
+          >
+            <IconX size={14} aria-hidden="true" />
+            <span>Remove {word}</span>
+          </button>
+        ) : null}
+      </div>
+
+      {error !== null ? (
+        <p className="text-[11px] text-red-600" role="alert" data-attachment-error="true">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The image block's own bytes, drawn.
+ *
+ * There was a diagram here: a fixed SVG of two circles labelled `CAM_01` and `LIDAR_A` with an
+ * `OFFSET: Δ120mm` caption, shown for every image block whether or not it held anything. It read
+ * as the user's picture and it was decoration. A row now draws a picture only when it has one.
+ */
+function ImagePreview({ blob, name }: { blob: Blob; name: string }) {
+  const url = useObjectUrl(blob)
+  if (url === null) return null
+
+  return (
+    <img
+      className="max-h-full max-w-full object-contain"
+      src={url}
+      alt={name}
+      data-attachment-preview="true"
+    />
+  )
+}
+
+/**
+ * An object URL for `blob`, released on every exit path.
+ *
+ * `URL.createObjectURL` hands out a reference to the Blob that outlives the component that took
+ * it, so the revocation is the effect's cleanup and the dependency is the Blob: replacing a
+ * file re-runs the effect, which revokes the URL of the file that is gone before creating the
+ * URL of the one that replaced it, and unmounting revokes the last one. Deleting the attachment
+ * unmounts this preview entirely, so its URL goes with it.
+ *
+ * An environment without `createObjectURL` (jsdom unless a test stubs it, as
+ * `LibraryItemRow.test.tsx` does) gets `null` and renders no `<img>`, never a crash.
+ */
+function useObjectUrl(blob: Blob): string | null {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (typeof URL.createObjectURL !== 'function') return undefined
+
+    const created = URL.createObjectURL(blob)
+    setUrl(created)
+    return () => {
+      URL.revokeObjectURL(created)
+      setUrl(null)
+    }
+  }, [blob])
+
+  return url
 }

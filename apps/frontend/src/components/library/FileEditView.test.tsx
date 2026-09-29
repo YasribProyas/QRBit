@@ -35,6 +35,7 @@ import type { Mock } from 'vitest'
 
 import { FileEditView } from './FileEditView'
 import type { FileEditViewProps } from './FileEditView'
+import { fileBlocksToLibraryItems } from '../../lib/dossier'
 import { WithMantine } from '../common/WithMantine'
 import { DEFAULT_ITEM_HEIGHT } from '../../lib/reorder'
 import { useLibraryStore } from '../../store/libraryStore'
@@ -637,5 +638,153 @@ describe('FileEditView — folder membership', () => {
 
     const saved = savedDraft(host)
     expect(saved.folderId).toBe('f-2')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Attachments: chosen, or the Send is refused
+// ---------------------------------------------------------------------------
+
+/**
+ * The editor is where an `image`/`fileAttachment` block gets its bytes, and where it used to get
+ * a filename instead. `handleAddBlockType` pre-filled `attachment_photo.png` at `Telemetry
+ * capture`, and `data_export.bin` at `2.4 MB`, so every new dossier looked like it carried files
+ * it did not have — and `lib/dossier.ts` transmitted 100 null bytes to match the claim. These
+ * cases pin the two halves of the fix: a new attachment block is empty and says so, and a Send
+ * that would have had to invent something stops with a sentence on screen.
+ */
+
+function buttonContaining(text: string): HTMLButtonElement {
+  const button = buttons().find((candidate) => (candidate.textContent ?? '').includes(text))
+  if (button === undefined) throw new Error(`test bug: no button containing "${text}"`)
+  return button
+}
+
+function attachmentInput(): HTMLInputElement {
+  const input = element().querySelector<HTMLInputElement>('input[type="file"]')
+  if (input === null) throw new Error('test bug: no file input in the editor')
+  return input
+}
+
+function chooseFile(file: File | null): void {
+  const input = attachmentInput()
+  Object.defineProperty(input, 'files', { value: file === null ? [] : [file], configurable: true })
+  act(() => {
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+function sendErrorText(): string | null {
+  return element().querySelector('[data-send-error]')?.textContent ?? null
+}
+
+function attachmentBlockOf(file: LibraryFile, index = 0) {
+  const block = file.blocks[index]
+  if (block === undefined) throw new Error('test bug: the draft has no block at that index')
+  return block
+}
+
+describe('FileEditView — an attachment block holds a file the user chose', () => {
+  it('adds an image block with nothing invented on it', async () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    click(buttonContaining('Add Block to Dossier'))
+    click(buttonContaining('Image Payload'))
+    await flush()
+
+    // The row reads as what it is: a block waiting for a file.
+    expect(byText('No image chosen yet')).toBe(true)
+    expect(byText('Choose image')).toBe(true)
+    for (const invented of [
+      'attachment_photo.png',
+      'Telemetry capture',
+      'data_export.bin',
+      '2.4 MB',
+      'image_attachment.png',
+      '1920×1080',
+    ]) {
+      expect(byText(invented)).toBe(false)
+    }
+
+    // And a Save writes the same emptiness to the library, because an unfinished attachment is
+    // work in progress — it just cannot be sent.
+    click(buttonByLabel('Save'))
+    const saved = attachmentBlockOf(savedDraft(host), 3)
+    expect(saved.type).toBe('image')
+    expect(saved.fileName).toBeUndefined()
+    expect(saved.fileSize).toBeUndefined()
+    expect(saved.caption).toBeUndefined()
+    expect(saved.blob).toBeUndefined()
+  })
+
+  it('refuses to Send a dossier whose attachment block has no file, and says why', () => {
+    const host = callbacks()
+    const file = makeFile({
+      blocks: [heading('b-1', 'Alpha'), { id: 'b-img', type: 'image' }],
+    })
+    mount({ file, folders: FOLDERS, ...host })
+
+    click(buttonByLabel('Send'))
+
+    expect(host.onSendFile).not.toHaveBeenCalled()
+    // Nothing is persisted on the way either: a refused Send changes nothing at all.
+    expect(host.onSaveFile).not.toHaveBeenCalled()
+    expect(sendErrorText()).toContain('no file chosen yet')
+    expect(byText('Unsaved changes')).toBe(false)
+  })
+
+  it('sends the real bytes once a file is chosen, and they survive the conversion', async () => {
+    const host = callbacks()
+    const file = makeFile({ blocks: [heading('b-1', 'Alpha'), { id: 'b-img', type: 'image' }] })
+    mount({ file, folders: FOLDERS, ...host })
+
+    const payload = new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2, 1])
+    chooseFile(new File([payload], 'rig.png', { type: 'image/png' }))
+
+    expect(byText('rig.png')).toBe(true)
+    expect(byText('9 B')).toBe(true)
+    expect(sendErrorText()).toBe(null)
+
+    click(buttonByLabel('Send'))
+    expect(host.onSendFile).toHaveBeenCalledTimes(1)
+
+    const block = attachmentBlockOf(sentDraft(host), 1)
+    expect(block.blob).toBeInstanceOf(Blob)
+    expect(block.fileSize).toBe(payload.byteLength)
+
+    // The whole point, end to end: the item that goes to the transfer path carries these bytes
+    // and this size — not 100 zeros, not '2.4 MB'.
+    const items = await fileBlocksToLibraryItems(sentDraft(host))
+    const image = items[1]
+    if (image?.type !== 'image') throw new Error('test bug: the attachment did not convert')
+    expect(image.size).toBe(payload.byteLength)
+    expect(new Uint8Array(await image.blob.arrayBuffer())).toEqual(payload)
+  })
+
+  it('refuses a wrong-type choice before it can reach the draft', () => {
+    const host = callbacks()
+    const file = makeFile({ blocks: [{ id: 'b-img', type: 'image' }] })
+    mount({ file, folders: FOLDERS, ...host })
+
+    chooseFile(new File(['a,b,c'], 'telemetry.csv', { type: 'text/csv' }))
+
+    expect(byText('Choose image')).toBe(true)
+    expect(byText('no size until a file is chosen')).toBe(true)
+
+    // Save now: the draft still holds an empty block, so the refusal wrote nothing half-way.
+    click(buttonByLabel('Save'))
+    expect(host.onSaveFile).not.toHaveBeenCalled() // a no-op choice left the draft clean
+  })
+
+  it('surfaces a send failure raised by the host, instead of swallowing it', async () => {
+    const host = callbacks()
+    host.onSendFile.mockRejectedValue(new Error('No peer is on the channel yet'))
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    click(buttonByLabel('Send'))
+    await flush()
+
+    expect(sendErrorText()).toContain('No peer is on the channel yet')
   })
 })

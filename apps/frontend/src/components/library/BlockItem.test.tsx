@@ -40,6 +40,7 @@ import type { Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BlockItem } from './BlockItem'
+import { decryptItem } from '../../lib/crypto'
 import { useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
 import type { FileBlock } from '../../lib/library'
@@ -427,5 +428,333 @@ describe('BlockItem — editing a block', () => {
     expect(grips()).toHaveLength(0)
     expect(headingInputs()).toHaveLength(0)
     expect(element().textContent ?? '').toContain('Alpha')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Attachments: bytes are chosen, never invented
+// ---------------------------------------------------------------------------
+
+/**
+ * The image/fileAttachment rows used to render a filename, a resolution and a size that no file
+ * ever supplied (`image_attachment.png`, `1920×1080 · 412 KB`, `data_export.bin` at `2.4 MB`),
+ * and `fileBlocksToLibraryItems` then transmitted 100 null bytes for them. These tests hold the
+ * line at the row: an empty block says it is empty, a size is always `blob.size`, and a refused
+ * choice writes nothing.
+ */
+
+function attachmentInput(): HTMLInputElement {
+  const input = element().querySelector<HTMLInputElement>('input[type="file"]')
+  if (input === null) throw new Error('test bug: the row rendered no file input')
+  return input
+}
+
+function chooseFile(file: File | null): void {
+  const input = attachmentInput()
+  Object.defineProperty(input, 'files', {
+    value: file === null ? [] : [file],
+    configurable: true,
+  })
+
+  act(() => {
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+function buttonByLabel(label: string): HTMLButtonElement {
+  const button = Array.from(element().querySelectorAll('button')).find(
+    (candidate) => (candidate.textContent ?? '').trim() === label,
+  )
+  if (button === undefined) throw new Error(`test bug: no button labelled "${label}"`)
+  return button as HTMLButtonElement
+}
+
+function screenText(): string {
+  return element().textContent ?? ''
+}
+
+/** Opens the block's lock dialog, the way the shield in its header bar does. */
+function openLockModal(): void {
+  const trigger = Array.from(element().querySelectorAll('button')).find(
+    (button) => (button.getAttribute('title') ?? '') === 'Lock this entity with password',
+  )
+  if (trigger === undefined) throw new Error('test bug: no lock button on the row')
+  click(trigger)
+}
+
+function passwordField(): HTMLInputElement {
+  const field = element().querySelector<HTMLInputElement>('input[type="password"]')
+  if (field === null) throw new Error('test bug: the lock dialog never opened')
+  return field
+}
+
+/**
+ * Submits the lock dialog's form and waits for it to settle — either the announced tuple or the
+ * refusal. PBKDF2 at 600,000 iterations (PLAN.md §11.4) is real work rather than a microtask, so
+ * a single flush would race it, and the wait is on the outcome the test then asserts (D15).
+ */
+async function submitLock(onUpdate: ReturnType<typeof vi.fn>): Promise<void> {
+  const form = element().querySelector('form')
+  if (form === null) throw new Error('test bug: the lock dialog has no form')
+
+  act(() => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  })
+
+  const settled = (): boolean =>
+    onUpdate.mock.calls.length > 0 || element().querySelector('[data-lock-error]') !== null
+
+  await act(async () => {
+    for (let attempt = 0; attempt < 400 && !settled(); attempt += 1) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10)
+      })
+    }
+  })
+
+  if (!settled()) throw new Error('test bug: the lock dialog neither wrote a tuple nor refused')
+}
+
+function imageFile(name: string, byteLength: number): File {
+  const payload = new Uint8Array(byteLength)
+  for (let index = 0; index < byteLength; index += 1) {
+    payload[index] = (index * 37 + 11) % 251
+  }
+  return new File([payload], name, { type: 'image/png' })
+}
+
+describe('BlockItem — an attachment block holds a file or it holds nothing', () => {
+  it('says an image block has no image, and shows none of the invented metadata', () => {
+    mount({ blocks: [{ id: 'b-img', type: 'image' }] })
+
+    expect(screenText()).toContain('No image chosen yet')
+    expect(attachmentInput().accept).toBe('image/*')
+    expect(buttonByLabel('Choose image')).toBeInstanceOf(HTMLButtonElement)
+
+    // Absence, the D15 lesson: every one of these was on screen before, next to a block with no
+    // bytes, and none of them could fail a "does it render" test.
+    for (const invented of [
+      'image_attachment.png',
+      'attachment_photo.png',
+      '1920×1080',
+      '412 KB',
+      'Telemetry capture',
+      'CAM_01',
+      'LIDAR_A',
+    ]) {
+      expect(screenText()).not.toContain(invented)
+    }
+  })
+
+  it('says a fileAttachment block has no file and claims no size', () => {
+    mount({ blocks: [{ id: 'b-file', type: 'fileAttachment' }] })
+
+    expect(screenText()).toContain('No file chosen')
+    expect(screenText()).toContain('no size until a file is chosen')
+    for (const invented of ['file_attachment.bin', 'data_export.bin', '2.4 MB']) {
+      expect(screenText()).not.toContain(invented)
+    }
+  })
+
+  it('writes the chosen file onto the block: bytes, name, type and a measured byte count', () => {
+    const onUpdate = vi.fn()
+    mount({ blocks: [{ id: 'b-img', type: 'image' }], onUpdate })
+    const file = imageFile('rig.png', 5)
+
+    chooseFile(file)
+
+    const changes = vi.mocked(onUpdate).mock.calls[0]?.[1]
+    if (changes === undefined) throw new Error('test bug: the row announced nothing')
+    expect(vi.mocked(onUpdate).mock.calls[0]?.[0]).toBe('b-img')
+    expect(changes.blob).toBe(file)
+    expect(changes.fileName).toBe('rig.png')
+    expect(changes.mimeType).toBe('image/png')
+    // A number of bytes, not a display string: this is `blob.size`, stored as what it is.
+    expect(changes.fileSize).toBe(5)
+
+    expect(screenText()).toContain('rig.png')
+    expect(screenText()).toContain('5 B')
+    expect(buttonByLabel('Replace image')).toBeInstanceOf(HTMLButtonElement)
+  })
+
+  it('shows the size measured from the blob, never the string stored beside it', () => {
+    // A record that carries both a real 12-byte file and a stale hand-written label: the
+    // measurement wins, because the label is the thing that lied.
+    mount({
+      blocks: [
+        {
+          id: 'b-file',
+          type: 'fileAttachment',
+          fileName: 'thing.bin',
+          fileSize: '14.2 MB',
+          blob: new Blob([new Uint8Array(12)], { type: 'application/octet-stream' }),
+        },
+      ],
+    })
+
+    expect(screenText()).toContain('12 B')
+    expect(screenText()).not.toContain('14.2 MB')
+  })
+
+  it('refuses a non-image on an image block and writes nothing to the block', () => {
+    const onUpdate = vi.fn()
+    mount({ blocks: [{ id: 'b-img', type: 'image' }], onUpdate })
+
+    chooseFile(new File(['a,b,c'], 'payload.csv', { type: 'text/csv' }))
+
+    expect(onUpdate).not.toHaveBeenCalled()
+    const error = element().querySelector('[data-attachment-error]')
+    expect(error?.getAttribute('role')).toBe('alert')
+    expect(error?.textContent).toContain('is not an image')
+    // The block is still the empty block it was: no half-written draft, no orphaned filename.
+    expect(screenText()).toContain('No image chosen yet')
+  })
+
+  it('refuses to lock a payload over D6, and writes no tuple', async () => {
+    const onUpdate = vi.fn()
+    mount({
+      blocks: [
+        {
+          id: 'b-file',
+          type: 'fileAttachment',
+          fileName: 'weights.bin',
+          fileSize: 3 * 1024 * 1024 + 1,
+          blob: new File([new Uint8Array(3 * 1024 * 1024 + 1)], 'weights.bin', {
+            type: 'application/octet-stream',
+          }),
+        },
+      ],
+      onUpdate,
+    })
+
+    openLockModal()
+    typeInto(passwordField(), 'sentry-4')
+    await submitLock(onUpdate)
+
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(element().querySelector('[data-lock-error]')?.textContent).toContain('3.0 MiB')
+  })
+
+  it('locks the bytes the block actually holds, and stores only the tuple', async () => {
+    // Requirement: a locked attachment is ciphertext of ITS OWN file, never of the literal
+    // `'secret'` the send path used to fall back to, and never of nothing at all.
+    const onUpdate = vi.fn()
+    const payload = new File([new Uint8Array([12, 34, 56, 78])], 'key.bin', {
+      type: 'application/octet-stream',
+    })
+    mount({
+      blocks: [{ id: 'b-file', type: 'fileAttachment', fileName: 'key.bin', blob: payload }],
+      onUpdate,
+    })
+
+    openLockModal()
+    typeInto(passwordField(), 'sentry-4')
+    await submitLock(onUpdate)
+
+    const changes = vi.mocked(onUpdate).mock.calls[0]?.[1]
+    if (changes?.lockedData === undefined) throw new Error('test bug: locking announced no tuple')
+    expect(changes.isLocked).toBe(true)
+    expect(changes.lockedData.innerType).toBe('fileAttachment')
+    expect(changes.lockedData.iv).toHaveLength(12)
+    expect(changes.lockedData.salt).toHaveLength(16)
+
+    const decrypted = await decryptItem(
+      'sentry-4',
+      changes.lockedData.salt as Uint8Array,
+      changes.lockedData.iv as Uint8Array,
+      changes.lockedData.ciphertext as Uint8Array,
+    )
+    expect(decrypted).toEqual(new Uint8Array([12, 34, 56, 78]))
+  })
+
+  it('will not let a locked attachment be swapped out from under its own ciphertext', () => {
+    // The row shows one payload while the tuple holds another is the same defect in a hat.
+    mount({
+      blocks: [
+        {
+          id: 'b-img',
+          type: 'image',
+          fileName: 'locked.png',
+          blob: new File([new Uint8Array(3)], 'locked.png', { type: 'image/png' }),
+          isLocked: true,
+          password: 'sentry-4',
+        },
+      ],
+    })
+
+    expect(element().querySelector('[data-attachment-locked]')?.textContent).toContain(
+      'Remove the lock',
+    )
+    expect(element().querySelector('input[type="file"]')).toBe(null)
+    expect(screenText()).toContain('locked.png')
+  })
+
+  it('replaces a chosen file, and the new bytes are what the row shows', () => {
+    const onUpdate = vi.fn()
+    mount({ blocks: [{ id: 'b-img', type: 'image' }], onUpdate })
+
+    chooseFile(imageFile('first.png', 5))
+    chooseFile(imageFile('second.png', 9))
+
+    const last = vi.mocked(onUpdate).mock.calls.at(-1)?.[1]
+    if (last === undefined) throw new Error('test bug: no replacement was announced')
+    expect(last.fileName).toBe('second.png')
+    expect(last.fileSize).toBe(9)
+  })
+
+  it('removes an attachment by taking its bytes and its metadata off the block together', () => {
+    const onUpdate = vi.fn()
+    mount({ blocks: [{ id: 'b-img', type: 'image' }], onUpdate })
+    chooseFile(imageFile('rig.png', 5))
+    onUpdate.mockClear()
+
+    click(buttonByLabel('Remove image'))
+
+    const changes = vi.mocked(onUpdate).mock.calls[0]?.[1]
+    if (changes === undefined) throw new Error('test bug: removing announced nothing')
+    expect(changes.blob).toBeUndefined()
+    expect(changes.fileName).toBeUndefined()
+    expect(changes.fileSize).toBeUndefined()
+    expect(changes.mimeType).toBeUndefined()
+    expect(screenText()).toContain('No file chosen')
+    expect(screenText()).not.toContain('rig.png')
+  })
+
+  it('draws the chosen image with an object URL, and releases it on every exit path', () => {
+    const createObjectURL = vi.fn((): string => 'blob:qrbit/1')
+    const revokeObjectURL = vi.fn()
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+
+    try {
+      const onUpdate = vi.fn()
+      mount({ blocks: [{ id: 'b-img', type: 'image' }], onUpdate })
+
+      // No bytes, no URL: nothing is created for an empty block to leak.
+      expect(createObjectURL).not.toHaveBeenCalled()
+
+      const first = imageFile('first.png', 5)
+      chooseFile(first)
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      expect(createObjectURL).toHaveBeenCalledWith(first)
+      expect(element().querySelector('[data-attachment-preview]')).not.toBe(null)
+
+      // Replacing the file releases the old URL before drawing the new one.
+      const second = imageFile('second.png', 7)
+      chooseFile(second)
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:qrbit/1')
+      expect(createObjectURL).toHaveBeenCalledTimes(2)
+
+      act(() => {
+        root?.unmount()
+        root = null
+      })
+      expect(revokeObjectURL).toHaveBeenCalledTimes(2)
+    } finally {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    }
   })
 })
