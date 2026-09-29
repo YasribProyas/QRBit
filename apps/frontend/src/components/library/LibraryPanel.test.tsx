@@ -667,6 +667,63 @@ describe('LibraryPanel — what the panel lists', () => {
     expect(second.querySelector('.library-panel__file-preview')?.textContent).toBe('Cluster keys')
   })
 
+  /*
+   * The row's width contract, reported by the owner as a badge reading `ENCRY…` next to a name
+   * that was also cut.
+   *
+   * The mechanism is not the name's fault but the badge's own: a Mantine `Badge` root is an
+   * `inline-grid` with `overflow: hidden`, `text-overflow: ellipsis` and a label column of `1fr`
+   * (that is its documented clipping behaviour when a caller gives it a width), and as a flex
+   * item it shrinks by default — `overflow: hidden` makes its automatic minimum size 0. So in a
+   * row that had no room, BOTH the name and the badge clipped, and the badge clipped to a word
+   * that is not a word. The fix is the split: the name is the flexible half (`truncate` plus
+   * `min-w-0`, so it gives its width back and ellipsises) and the badge is not a shrink candidate
+   * at all (`flex: none`, `white-space: nowrap`).
+   *
+   * jsdom runs no layout, so this cannot measure which box lost pixels; it asserts the two
+   * declarations that decide that, and the text itself.
+   */
+  it('truncates a long name and never truncates the Encrypted badge', async () => {
+    const vault = await seedFolder('Vault')
+    const longName = 'Quarterly board pack with annexes and supporting schedules'
+    await seedFile(longName, vault.id, 1000, [
+      {
+        id: 'b-locked-long',
+        type: 'locked',
+        label: 'Board pack',
+        isLocked: true,
+        lockedData: {
+          ciphertext: new Uint8Array(32).fill(7),
+          iv: new Uint8Array(12).fill(1),
+          salt: new Uint8Array(16).fill(2),
+        },
+      },
+    ])
+    await loadLibrary()
+
+    renderPanel()
+
+    const row = fileRow(longName)
+    const badge = row.querySelector<HTMLElement>('.library-panel__encrypted-badge')
+    if (badge === null) throw new Error('test bug: the long-named dossier lost its badge')
+
+    // The whole word, in the DOM and in the box that paints it.
+    expect(badge.textContent).toBe('Encrypted')
+    // A badge that cannot shrink and cannot wrap has nothing left to clip.
+    expect(badge.style.flexShrink).toBe('0')
+    expect(badge.style.flexGrow).toBe('0')
+    expect(badge.style.whiteSpace).toBe('nowrap')
+
+    // The name is the thing that gives way: an ellipsis rule and a zero floor, both of which the
+    // badge deliberately does not carry.
+    const name = row.querySelector<HTMLElement>('.library-panel__file-name')
+    if (name === null) throw new Error('test bug: no dossier name')
+    expect(name.textContent).toBe(longName)
+    expect(name.classList.contains('truncate')).toBe(true)
+    expect(name.classList.contains('min-w-0')).toBe(true)
+    expect(name.style.flex).toBe('')
+  })
+
   it('says it is loading, and does not call an unread library empty', async () => {
     renderPanel()
     await act(async () => {

@@ -16,18 +16,25 @@
  * The shared drawing settings are in `qrSurface.ts`; the colours are left to the renderer's
  * documented black-on-white default, for the reason recorded there.
  *
- * ## The link row
+ * ## The code line and the link row
  *
- * Under the symbol is one line: the link a peer opens, and the control that puts the FULL
- * version of it on the clipboard. The previous revision printed the whole URL as a wrapped
- * grey paragraph, which took three lines on a phone and buried the session code in the middle
- * of it. The row therefore clips the *front* of the URL (the origin, which the user has no way
- * to verify anyway) and never clips the end (`?code=…`, the part a user reads back against the
- * code on the other screen). The anchor's own text is the complete URL, so assistive tech, the
- * page-level assertion in `Home.test.tsx` and a paste into another app all still see the whole
- * thing — clipping here is a rendering decision, not a data one. It cannot be selected by hand,
- * though: `styles.css` sets `user-select: none` on every `a`, which is why the blocked state
- * points at the typed field rather than at the link.
+ * Under the symbol are two statements of the same fact, at two sizes. The first is the code
+ * alone: eight characters, on a line of its own, because that is the string a user reads ALOUD
+ * ("does your other screen say A7X3K9P2?") and the one they type into the field under the panel's
+ * hairline if the camera will not start. It used to be gone entirely — the code survived only as
+ * the tail of a URL — which is a regression for a product whose primary verification step is
+ * saying eight characters out loud.
+ *
+ * The second is one line: the link a peer opens, and the control that puts the FULL version of it
+ * on the clipboard. The previous revision printed the whole URL as a wrapped grey paragraph, which
+ * took three lines on a phone and buried the session code in the middle of it. The row therefore
+ * clips the *front* of the URL (the origin, which the user has no way to verify anyway) and never
+ * clips the end (`?code=…`, the part a user reads back against the code on the other screen). The
+ * anchor's own text is the complete URL, so assistive tech, the page-level assertion in
+ * `Home.test.tsx` and a paste into another app all still see the whole thing — clipping here is a
+ * rendering decision, not a data one. It cannot be selected by hand, though: `styles.css` sets
+ * `user-select: none` on every `a`, which is why the blocked state points at the typed field
+ * rather than at the link.
  *
  * The copy control is the panel's one icon-only affordance, so it takes DESIGN.md's icon-only
  * row: `<ActionIcon variant="subtle">`, transparent fill, Ink Secondary glyph, 44px because a
@@ -90,6 +97,23 @@ const WELL_STYLE = {
   background: 'var(--qrbit-signal-subtle)',
   borderRadius: 'var(--qrbit-radius-md)',
   padding: 'var(--qrbit-space-md)',
+} as const
+
+/**
+ * The code as a person reads it, not as a machine parses it.
+ *
+ * The element is a plain `<code>` wearing `styles.css`'s `.code` primitive (mono, 24px, 600,
+ * tracked 0.18em — the same primitive `QRDisplay` projects in its enlarge modal, and what
+ * `.session-qr .code` was written for). It cannot be a Mantine `Text`: `Text`'s own root class
+ * declares `font-size: var(--text-fz)` and `font-weight: regular`, and measured in a browser a
+ * `Text component="code" className="code"` came out at 14px/400 — the primitive silently lost to
+ * the component. `tabular-nums` is restated here because this is the Data role's figure set
+ * (DESIGN.md, "The Mono Means Data Rule"), and centred because the plate above it is.
+ */
+const CODE_STYLE = {
+  display: 'block',
+  textAlign: 'center',
+  fontVariantNumeric: 'tabular-nums',
 } as const
 
 /** Which of the three copy states the control is in — the code is always on screen anyway. */
@@ -265,7 +289,18 @@ export function TacticalQRCode({
 
   return (
     <WithMantine>
-      <Stack align="center" gap="md" className="tactical-qr">
+      {/*
+        `w="100%"` is load-bearing, not cosmetic. A Mantine `Stack` with `align="center"` is a
+        column flex container, so a child that is not stretched is sized by `fit-content` — and
+        `fit-content` only clamps to the parent's width when that width is *definite*. Left at
+        `width: auto` inside a panel that also centres it, this Stack resolved to its own
+        max-content (measured in a browser at 1280×900: 451px inside a 352px content box), which
+        pushed the link row 34px past each side of the card and straight over the panel's border
+        and reticle corners. Giving the Stack a definite width makes the row's `width: 100%` mean
+        100% of the card, so the row is contained by construction and the anchor inside it ellipsises
+        the origin instead of the layout spilling.
+      */}
+      <Stack align="center" gap="md" w="100%" className="tactical-qr">
         <div className="tactical-qr__well" style={WELL_STYLE}>
           {/* The frame reserves the code's square so the panel does not jump when it lands. */}
           <div
@@ -302,6 +337,29 @@ export function TacticalQRCode({
             ) : null}
           </div>
         </div>
+
+        {/*
+          The code on its own line, in its own right — not only as the tail of a URL.
+
+          This is the string a user reads ALOUD to check that the two devices are on the same
+          session, and the one they type into the field under the hairline if the camera fails, so
+          it gets a line of its own between the symbol and the link. It wears the stylesheet's
+          session-code primitive (`.code`: the mono family, 24px, 600, tracked 0.18em — the same
+          primitive `QRDisplay` projects in its enlarge modal), and the element is a real `<code>`,
+          which is what picks up `styles.css`'s `code, pre, kbd { font-variant-numeric: tabular-nums }`
+          — the Data role's figures. Not the Data role's *size*: 13px on the Data ladder is a byte
+          count, and a code a person has to read across a table is not that.
+
+          It sits BELOW the plate rather than on it: the plate is `--qrbit-signal-subtle`, which
+          deliberately does not flip in the dark scheme, and `--qrbit-ink` does, so code painted on
+          the plate would be light-on-light there. A scanner reads the plate's luminance; a person
+          reads this line.
+        */}
+        {code !== null ? (
+          <code className="code tactical-qr__code" style={CODE_STYLE}>
+            {code}
+          </code>
+        ) : null}
 
         {showLabel ? (
           <Stack gap="xs" className="tactical-qr__label" w="100%">

@@ -1234,8 +1234,16 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
         >
           <span className="block min-w-0">
             <span className="flex items-center gap-[8px]">
-              {/* The contained label: the Body role, lighter than the container above it. */}
-              <span className="library-panel__file-name qrbit-text-body truncate">{file.name}</span>
+              {/*
+                The contained label: the Body role, lighter than the container above it, and the
+                only thing in this row allowed to lose characters. `truncate` supplies the ellipsis
+                and `min-w-0` is what lets a flex item give its width back below its own text —
+                without the pair the row has two candidates for "the thing that gets cut", which is
+                how the badge ended up reading `ENCRY…`.
+              */}
+              <span className="library-panel__file-name qrbit-text-body truncate min-w-0">
+                {file.name}
+              </span>
               {encrypted ? (
                 <Badge
                   className="library-panel__encrypted-badge"
@@ -1246,6 +1254,14 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
                   variant="light"
                   size="sm"
                   radius="full"
+                  // `flex: none` and `white-space: nowrap`, both inline and both load-bearing.
+                  // A Mantine `Badge` is an `inline-grid` with `overflow: hidden`, a label column
+                  // of `1fr` and `text-overflow: ellipsis` — i.e. it is built to clip politely
+                  // when something constrains its width, and as a flex item with `overflow: hidden`
+                  // its automatic minimum size is 0, so on a long dossier name it *was* constrained
+                  // and it *did* clip, to "ENCRYPT…". A status badge that reads "ENCRY" is worse
+                  // than no badge: the word is the claim. The name carries that trade instead.
+                  style={{ flex: 'none', whiteSpace: 'nowrap' }}
                   leftSection={<IconLock size={14} aria-hidden="true" />}
                 >
                   Encrypted

@@ -29,12 +29,18 @@
  * left of the shell, in a band that is the shell's last flex row.
  *
  * That band is the whole reason the control can be trusted not to cover the object it is for.
- * The button is `position: fixed`, so it stays reachable while the panel scrolls; the band is
- * `flex: none`, so the panels row ends above it and no scroll offset on any screen can bring
- * the QR, its reticle corners or the manual-code field underneath a fixed element that is
- * pinned inside reserved space. The band's height and the button's `bottom` offset both carry
- * `env(safe-area-inset-bottom)`, so on a phone with a home indicator the button lifts out of
- * that strip and stays inside the space reserved for it.
+ * The button is `position: absolute` inside the band, so the space the band reserves is the
+ * space the control occupies — there is no third thing (the viewport) for the two to disagree
+ * about. It used to be `position: fixed`, which is resolved against the viewport unless an
+ * ancestor establishes a containing block, and the shell does neither job reliably: the shell is
+ * `max-width: 84rem` and centred, so at 1600px the fixed control was left of the band it belongs
+ * to, in the page gutter, and a `fixed` box can be pulled anywhere by an ancestor's
+ * `transform`. Neither was observable in a test, because the control's position is a computed
+ * geometry and jsdom has no layout. The band is `flex: none`, so the panels row ends above it
+ * and no scroll offset on any screen can bring the QR, its reticle corners or the manual-code
+ * field underneath a control that is pinned inside reserved space. The band's height and the
+ * button's `bottom` offset both carry `env(safe-area-inset-bottom)`, so on a phone with a home
+ * indicator the button lifts out of that strip and stays inside the space reserved for it.
  *
  * The selection count that used to ride on the scan button is gone with it. Nothing on this
  * screen can put anything in a selection — D16.4 deleted the last multi-select — so a count
@@ -44,16 +50,21 @@
  *
  * It is the one surface that shows the product's mechanics, so it is the one surface that earns
  * geometry: reticle corners on the panel, a status dot with the line that states what the host
- * is doing, the code on a light plate, and the typed fallback under a hairline. Everything else
- * is flat.
+ * is doing, the code on a light plate, the code again as text a person can read aloud, and the
+ * typed fallback under a hairline. Everything else is flat.
  *
- * The panel is `--qrbit-raised`, which is DESIGN.md's Panel row. It used to inherit Mantine's
- * `Paper` background — `--mantine-color-body`, which `theme.ts` bridges to `--qrbit-canvas` —
- * so a panel was painted in its own page's colour and read as a grey slab with a border, worst
- * in the dark scheme. The plate under the code stays `--qrbit-signal-subtle`, the one
- * documented surface that does not flip under `[data-theme='dark']`: a scanner measures
- * luminance, so that plate is a requirement, not a preference (`TacticalQRCode`).
- * `--qrbit-sunken` is spent on real insets, and the link row is one.
+ * The panel is DESIGN.md's Panel row in all three of its parts — `--qrbit-raised` fill, a
+ * 1px `--qrbit-border`, `--qrbit-radius-lg` — and it now states all three itself. It used to
+ * inherit Mantine's `Paper` background (`--mantine-color-body`, bridged to `--qrbit-canvas`) so
+ * the fill went inline; then `withBorder` was left to Mantine, whose border is a *scheme-scoped*
+ * rule keyed on `data-mantine-color-scheme`. That attribute is not this app's switch (`theme.ts`
+ * mirrors the scheme on `data-theme` and writes the variables through the CSSOM), so the panel
+ * had no edge: in the dark scheme the only thing separating a #171F2C card from a #0E1420 page
+ * is that hairline, and losing it is why the card read as having no surface at all. The plate
+ * under the code stays `--qrbit-signal-subtle`, the one documented surface that does not flip
+ * under `[data-theme='dark']`: a scanner measures luminance, so that plate is a requirement, not
+ * a preference (`TacticalQRCode`). `--qrbit-sunken` is spent on real insets, and the link row is
+ * one.
  *
  * Nothing here claims a state the session has not reached. The dot and the status line live
  * inside the branch that has a code, because a code only exists once this device has joined as
@@ -137,20 +148,35 @@ const MOBILE_SHELL_QUERY = '(max-width: 63.9375rem)'
 const THUMB_TARGET = 'max-md:min-h-11!'
 
 /**
- * The resting size of the code: the top of DESIGN.md's 195–240px band, and the size that makes
- * the reticle corners frame the symbol instead of the air around it. The frame keeps
+ * The resting size of the code: inside DESIGN.md's 195–240px band, and the size that makes the
+ * reticle corners frame the symbol instead of the air around it. The frame keeps
  * `maxWidth: 100%`, so a phone narrower than the band shrinks the code rather than the layout.
+ *
+ * It was 240 — the top of the band — and restoring the code line (item 7) is what decides the
+ * number now. Measured in a browser at 1440×900, where the session column's scrollport is 645px:
+ * the block needs 605px with the plate at 240 and 585px at 220, so 240 leaves 20px of slack above
+ * and below the centred panel and 220 leaves 30. Both overflow a 1280×800 window, which is what
+ * the column's own scroll is for; the point of the 20px is that the typed fallback and the bottom
+ * reticles stop being the first thing a shorter window cuts off. 220 stays inside DESIGN's band.
  */
-const QR_SIZE = 240
+const QR_SIZE = 220
 
 /**
  * One corner of the panel's reticle: 12px of 2px signal on the two edges that face the corner.
- * The lengths are DESIGN's `sm`/`md` spacing steps, so the marks sit on the scale; the colour
- * is a token because a `var()` inside a utility cannot be checked at build time.
+ *
+ * The 2px inset is the whole point and it is not cosmetic. The panel's content starts at its `lg`
+ * (16px) padding edge, so a mark that spans 2px→14px from the border stays inside the padding band
+ * with 2px to spare and cannot intersect what it frames. The `space-sm` (8px) inset it replaces put
+ * the arms at 8px→20px — 4px past the content edge — and measured in a browser at 1440×900 that made
+ * four real collisions: the status sentence crossed the top-right mark, and the typed fallback's
+ * hairline plus its `Join session` button crossed both bottom marks. DESIGN.md's "it is the
+ * product's signature geometry, and it appears on exactly that panel" is a claim about the marks
+ * framing the panel's content, so the arithmetic that keeps them out of the content belongs to the
+ * mark. The lengths are DESIGN's spacing steps: `xxs` in, `md` along each edge, 2px wide.
  */
 function reticle(corner: 'top' | 'bottom', side: 'left' | 'right'): CSSProperties {
   const edge = { position: 'absolute', pointerEvents: 'none' } as const
-  const inset = { [corner]: 'var(--qrbit-space-sm)', [side]: 'var(--qrbit-space-sm)' }
+  const inset = { [corner]: 'var(--qrbit-space-xxs)', [side]: 'var(--qrbit-space-xxs)' }
   const width = side === 'left' ? 'borderLeftWidth' : 'borderRightWidth'
   const height = corner === 'top' ? 'borderTopWidth' : 'borderBottomWidth'
   return {
@@ -168,10 +194,10 @@ function reticle(corner: 'top' | 'bottom', side: 'left' | 'right'): CSSPropertie
 /**
  * The band the floating scan control is pinned inside.
  *
- * `huge + lg` is 64px: the 44px control, its 16px inset from the bottom of the band, and the
- * 4px left over. The safe-area term is added here as well as to the control's own offset, so a
- * notched phone lifts the control out of the home-indicator strip *and* grows the space that is
- * set aside for it — the two cannot drift apart, which is the whole overlap argument.
+ * `huge + lg` is 64px: the 44px control and the 20px that keeps it off the panels row. The
+ * safe-area term is added here as well as to the control's own offset, so a notched phone lifts
+ * the control out of the home-indicator strip *and* grows the space that is set aside for it —
+ * the two cannot drift apart, which is the whole overlap argument.
  */
 const FAB_BAND_STYLE = {
   flex: 'none',
@@ -179,15 +205,57 @@ const FAB_BAND_STYLE = {
   height: 'calc(var(--qrbit-space-huge) + var(--qrbit-space-lg) + env(safe-area-inset-bottom, 0px))',
 } as const satisfies CSSProperties
 
-/** The control: bottom-left of the viewport, above the page, inside its band's vertical span. */
+/**
+ * The control, pinned inside its band's box — not to the viewport.
+ *
+ * It used to be `position: fixed`, which made its position somebody else's problem: a fixed box is
+ * resolved against the nearest ancestor that establishes a containing block (any `transform`,
+ * `filter`, `backdrop-filter`, `perspective`, `will-change` or `contain`) and against the
+ * *viewport* otherwise — and the viewport is not the band. Measured in a browser at 1440×900 the
+ * shell (`max-width: 84rem`, centred) put its band at x=64..1376 while the fixed control stayed at
+ * x=16..60, and at 1600×1000 the band started at x=139 with the control still at x=16: 123px of the
+ * shell's own left gutter, outside the reserved space, on the empty page. It is in the DOM and it
+ * is painted (the same measurements hit-test a signal-blue 44px box there, and its ancestor chain
+ * establishes no containing block, so the transform hypothesis is ruled out by measurement, not by
+ * reading) — it is just not where the layout promises it, and at those widths it is off in a margin
+ * rather than under the library column it belongs to.
+ *
+ * `absolute` inside the band takes the dependency away entirely: the band is the shell's last
+ * flex row, the shell is `h-dvh overflow-hidden` and never scrolls (each column scrolls inside
+ * itself), so a control pinned to the band is on screen exactly as reliably as one pinned to the
+ * viewport — and it can never be laid out outside the room reserved for it. The band's bottom edge
+ * is the shell's content edge, 16px above the viewport, so the control's own `xxs` inset keeps the
+ * 16px-plus-2px it had as a fixed box, and the safe-area term lifts it inside the extra height the
+ * band already claimed for a home indicator.
+ */
 const FAB_STYLE = {
-  position: 'fixed',
+  position: 'absolute',
   left: 'var(--qrbit-space-lg)',
-  bottom: 'calc(var(--qrbit-space-lg) + env(safe-area-inset-bottom, 0px))',
+  bottom: 'calc(var(--qrbit-space-xxs) + env(safe-area-inset-bottom, 0px))',
   zIndex: 'var(--mantine-z-index-app)',
   // DESIGN.md's sheet shadow: this control is genuinely above the page, which is the only
   // reason a resting surface gets one.
   boxShadow: 'var(--qrbit-shadow-sheet)',
+} as const satisfies CSSProperties
+
+/**
+ * DESIGN.md's Panel row: Raised fill, 1px Border, radius lg, no shadow at rest.
+ *
+ * The fill was already inline; the border was not, and a dark scheme whose only surface step is
+ * #171F2C on #0E1420 — a 1.05:1 luminance difference — cannot afford to lose its hairline. The
+ * component used to ask for that hairline with `withBorder`, which is a *scheme-scoped* rule in
+ * Mantine's static sheet (`[data-mantine-color-scheme='dark'] .mantine-Paper-root` sets
+ * `--paper-border-color`). This app mirrors the scheme onto `data-theme` and delivers the
+ * variable map through the CSSOM (`theme.ts`), so an attribute Mantine sets during mount is the
+ * wrong thing to hang a panel's edge on: measured in a browser with that attribute absent, the
+ * panel's computed border is `0px none` and the card is a fill floating on the page. Stating the
+ * three values here costs nothing and makes the panel's surface the component's own guarantee.
+ */
+const PANEL_STYLE = {
+  background: 'var(--qrbit-raised)',
+  border: '1px solid var(--qrbit-border)',
+  borderRadius: 'var(--qrbit-radius-lg)',
+  width: '100%',
 } as const satisfies CSSProperties
 
 export function HomeView({
@@ -283,7 +351,18 @@ export function HomeView({
               a block at the top of a tall column with a void under it, and it collapses to zero
               instead of clipping when the content is taller than the column.
             */}
-            <Stack gap="md" m="auto" maw="min(100%, 24rem)" w="100%">
+            {/*
+              `28rem` is the measure the panel's own lines ask for. Measured in a browser, the
+              status sentence is 344px wide at the Body role and the dot plus its gap costs 16
+              more, so the block wants ~360px of content box; `24rem` gave 352px and the sentence
+              wrapped to two lines, which is defect 5 as reported. The link row wants the same
+              room. The centring is unchanged and was already even (measured 34px above the block
+              and 34px below at 1440×900), so this widens the panel inside its own space rather
+              than moving it: the leftover is still split above and below, and DESIGN's rhythm is
+              honoured inside the block, where the headline has `xl` above it and its subline `xs`
+              below.
+            */}
+            <Stack gap="md" m="auto" maw="min(100%, 28rem)" w="100%">
               {/*
                 The panel's title, at the same two roles as `Local Library` / `Dossiers stored
                 on this device`: Headline for the title, Body Secondary for the subline, and more
@@ -330,10 +409,9 @@ export function HomeView({
                 "The Floating Only Rule"); the reticle corners are the only geometry it owns.
               */}
               <Paper
-                withBorder
                 p="lg"
                 className="home__pairing-panel relative flex flex-col items-center"
-                style={{ background: 'var(--qrbit-raised)', width: '100%' }}
+                style={PANEL_STYLE}
               >
                 <span aria-hidden="true" style={reticle('top', 'left')} />
                 <span aria-hidden="true" style={reticle('top', 'right')} />
@@ -348,7 +426,16 @@ export function HomeView({
                       dot is the only "liveness" mark here — it is a host marker, not a claim
                       that a peer is connected, because nothing in the session says so yet.
                     */}
+                    {/*
+                      `align="flex-start"` plus the dot's own top inset: the dot is a flex item,
+                      so a centred alignment against a two-line sentence parks it in the middle
+                      of the block — which is what read as "the dot sits alone on the left of the
+                      second line". The inset is written in `em` of the *text's* line box
+                      (1.5em, the Body role) less the dot's height (DESIGN's `space-sm`), halved,
+                      so the dot rides on the first line wherever the sentence breaks.
+                    */}
                     <Group
+                      align="flex-start"
                       gap="sm"
                       wrap="nowrap"
                       justify="center"
@@ -358,9 +445,20 @@ export function HomeView({
                       <span
                         aria-hidden="true"
                         className="home__status-dot size-2 flex-none rounded-full"
-                        style={{ background: 'var(--qrbit-signal)' }}
+                        style={{
+                          background: 'var(--qrbit-signal)',
+                          // The dot never moves; the sentence gives way. `flex-none` is a utility
+                          // and utilities are not loaded in a component test, so the pair is
+                          // stated inline as well — the contract is that the dot is not a shrink
+                          // candidate and the text owns all of the wrapping.
+                          flexShrink: 0,
+                          marginTop: 'calc((1.5em - var(--qrbit-space-sm)) / 2)',
+                        }}
                       />
-                      <Text className="qrbit-text-body">
+                      <Text
+                        className="qrbit-text-body session-qr__status-text"
+                        style={{ minWidth: 0 }}
+                      >
                         {roleLabel || 'Host — waiting for another device to scan your code'}
                       </Text>
                     </Group>

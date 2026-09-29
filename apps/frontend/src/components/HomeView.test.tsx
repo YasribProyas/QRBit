@@ -283,19 +283,109 @@ describe('HomeView — the pairing panel has a title (D17 item 1)', () => {
     expect(element.textContent).not.toContain(SESSION_URL)
   })
 
-  it('paints the panel Raised, keeps the code plate light, and spends Sunken on the inset', () => {
+  it('paints the panel Raised, bordered, and square-cornered like every other Panel', () => {
     stubViewport(1280)
     const element = renderView()
 
-    expect(one(element, '.home__pairing-panel', 'the pairing panel').style.background).toContain(
-      'var(--qrbit-raised)',
-    )
+    const panel = one(element, '.home__pairing-panel', 'the pairing panel')
+    // DESIGN.md's Panel row is a fill AND a 1px border. The border used to come from Mantine's
+    // `withBorder`, which is a scheme-scoped rule in its static sheet (`[data-mantine-color-scheme=
+    // 'dark'] …`): with the scheme mirrored on `data-theme` instead — which is what `theme.ts`
+    // does — the panel's computed border is `0px none`, and a Raised fill on a canvas one step
+    // darker with no edge is why the card read as having no surface at all. The component now
+    // states all three values itself, so the surface does not depend on an attribute it cannot see.
+    expect(panel.style.background).toContain('var(--qrbit-raised)')
+    expect(panel.style.border).toBe('1px solid var(--qrbit-border)')
+    expect(panel.style.borderRadius).toBe('var(--qrbit-radius-lg)')
+    // …and no third shadow: a resting surface is flat ("The Floating Only Rule").
+    expect(panel.style.boxShadow).toBe('')
+  })
+
+  it('keeps the code plate light and spends Sunken on the inset', () => {
+    stubViewport(1280)
+    const element = renderView()
+
     expect(one(element, '.tactical-qr__well', 'the code plate').style.background).toContain(
       'var(--qrbit-signal-subtle)',
     )
     expect(one(element, '.tactical-qr__link-row', 'the link inset').style.background).toContain(
       'var(--qrbit-sunken)',
     )
+  })
+
+  /*
+   * The reported defect: the link row drew *across* the panel's border — 34px past each edge in a
+   * 1280×900 browser, straight through the corner reticles — because the block that holds it was
+   * sized by its own max-content (an unstretched flex item in a centred column), so its
+   * `width: 100%` resolved against nothing. jsdom lays nothing out, so this cannot be asserted as
+   * a rectangle; it is asserted as the declaration that makes the rectangle impossible: the
+   * block has a definite width, so the row inside it cannot be wider than the card.
+   *
+   * The geometry was measured in a headless browser instead: the row's box is inside the card's
+   * padding box (content 416px, row 416px, card 448px) at 1280, 1024 and 1600 wide, where the
+   * previous layout overflowed at all three.
+   */
+  it('keeps the link row inside the card the reticles mark out', () => {
+    stubViewport(1280)
+    const element = renderView()
+
+    const qr = one(element, '.tactical-qr', 'the code block')
+    expect(qr.style.width).toBe('100%')
+    // The row is a child of that definite width, and it is the card's content box that owns it.
+    const row = one(element, '.tactical-qr__link-row', 'the link row')
+    expect(qr.contains(row)).toBe(true)
+    expect(row.style.width).toBe('100%')
+    // It is not sitting on the panel's border: it is a flow child of the panel, below the plate.
+    expect(row.closest('.home__pairing-panel')).not.toBe(null)
+    expect(row.parentElement?.classList.contains('tactical-qr__label')).toBe(true)
+    expect(row.style.position).toBe('')
+    // The anchor is the only thing allowed to clip, and it is the head that does.
+    expect(one(element, '.tactical-qr__link-head', 'the clipped half').style.textOverflow).toBe(
+      'ellipsis',
+    )
+    expect(one(element, '.tactical-qr__link-code', 'the code tail').style.flexGrow).toBe('0')
+  })
+
+  it('displays the session code as its own line, in the Data role, not only inside the URL', () => {
+    stubViewport(1280)
+    const element = renderView()
+
+    const code = one(element, '.tactical-qr__code', 'the code line')
+    expect(code.tagName).toBe('CODE')
+    expect(code.textContent).toBe(PAIRING_CODE)
+    // The repo's session-code primitive: the Data role's mono family and tabular figures at the
+    // size a person can read across a table (`styles.css`'s `.code`, which also carries the
+    // 0.18em tracking the typed field uses, so the two renderings of the code look alike).
+    expect(code.className).toContain('code')
+    expect(code.style.fontVariantNumeric).toBe('tabular-nums')
+    // It is on the panel, not on the light plate: `--qrbit-ink` flips with the scheme and the
+    // plate deliberately does not, so code painted on the plate would be light-on-light in dark.
+    expect(code.closest('.tactical-qr__well')).toBe(null)
+    expect(one(element, '.home__pairing-panel', 'the pairing panel').contains(code)).toBe(true)
+    // And the link row still carries the whole address (the copy control's contract).
+    expect(one(element, '.tactical-qr__link', 'the link').textContent).toBe(SESSION_URL)
+  })
+
+  it('shows no code line before the host has joined one', () => {
+    stubViewport(1280)
+    const element = renderView({ pairingCode: null })
+    expect(element.querySelector('.tactical-qr__code')).toBe(null)
+  })
+
+  it('keeps the status dot on the first line of its own sentence', () => {
+    stubViewport(1280)
+    const element = renderView()
+
+    const status = one(element, '.session-qr__status', 'the status line')
+    const dot = one(status, '.home__status-dot', 'the status dot')
+    const text = one(status, '.session-qr__status-text', 'the status sentence')
+    // Top-aligned row, so a wrapping sentence cannot carry the dot to its vertical middle; the
+    // dot's own top inset is half the Body line box less the dot's height.
+    expect(status.style.getPropertyValue('--group-align')).toBe('flex-start')
+    expect(dot.style.flexShrink).toBe('0')
+    expect(dot.style.marginTop).toBe('calc((1.5em - var(--qrbit-space-sm)) / 2)')
+    // The text is the flexible half: it may give its width back, the dot may not.
+    expect(text.style.minWidth).toBe('0px')
   })
 })
 
@@ -448,7 +538,7 @@ describe('HomeView — the floating scan control (D17 item 4)', () => {
 
       // Pinned inside the height the band already claimed, and lifted by the safe area on a
       // notched phone so it never sits on the home-indicator strip.
-      expect(scan.style.position).toBe('fixed')
+      expect(scan.style.position).toBe('absolute')
       expect(scan.style.left).toBe('var(--qrbit-space-lg)')
       expect(scan.style.bottom).toContain('env(safe-area-inset-bottom')
       expect(band.style.height).toContain('env(safe-area-inset-bottom')
@@ -457,6 +547,65 @@ describe('HomeView — the floating scan control (D17 item 4)', () => {
       // 44px target.
       expect(scan.style.getPropertyValue('--ai-size')).toBe('var(--ai-size-xl)')
     }
+  })
+
+  /*
+   * The defect this replaces: the control was `position: fixed`, so its box was resolved against
+   * the nearest ancestor that establishes a containing block and against the *viewport* when no
+   * such ancestor exists. Neither answer is the band's, which is the only place on the shell that
+   * promises the control a space nothing else is laid out in — at 1600px wide the shell is
+   * `max-width: 84rem` and centred, so the fixed control sat 123px left of the band's own edge,
+   * in the gutter outside the page.
+   *
+   * What jsdom can and cannot assert here, stated plainly: it runs no layout and resolves no
+   * `var()`, so the old failure was not observable in a test either way. What it CAN assert is
+   * the contract the fix is made of — the button is a child of a box that establishes its own
+   * containing block (`position: relative`), the chain from the band to the document holds no
+   * inline `transform`/`filter`/`backdrop-filter`/`perspective`/`will-change`/`contain` (those
+   * are the only such declarations in the shell: `styles.css` sets none), and the node the
+   * handler is bound to is the node the tests and the user reach. The geometry itself was
+   * measured in a headless browser, not here.
+   */
+  it('is pinned to a box of its own, not to the viewport', () => {
+    stubViewport(1600)
+    let opened = 0
+    const element = renderView({
+      onOpenScanner: () => {
+        opened += 1
+      },
+    })
+
+    const scan = one(element, '.home__scan', 'the scan control')
+    const band = scan.parentElement
+    if (!(band instanceof HTMLElement)) throw new Error('test bug: no band')
+
+    // The band is the containing block: it is positioned, and the control is inside it.
+    expect(band.style.position).toBe('relative')
+    expect(scan.style.position).toBe('absolute')
+
+    // Nothing between the band and the document establishes one instead.
+    const CONTAINING_BLOCK_PROPERTIES = [
+      'transform',
+      'filter',
+      'backdropFilter',
+      'perspective',
+      'willChange',
+      'contain',
+    ] as const
+    const offenders: string[] = []
+    for (let node: HTMLElement | null = band; node !== null; node = node.parentElement) {
+      for (const property of CONTAINING_BLOCK_PROPERTIES) {
+        if (node.style.getPropertyValue(property) !== '') {
+          offenders.push(`${node.className || node.tagName}:${property}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+
+    // One node carries the class, and it is the node the handler is bound to.
+    expect(element.querySelectorAll('.home__scan')).toHaveLength(1)
+    click(scan)
+    expect(opened).toBe(1)
   })
 
   it('opens the camera when the floating control is pressed', () => {
