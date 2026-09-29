@@ -30,6 +30,9 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { CSSProperties, JSX } from 'react'
 
+import { Button, Stack, Text, Title } from '@mantine/core'
+import { IconX } from '@tabler/icons-react'
+
 import {
   createHtml5QrcodeSource,
   createNativeDetector,
@@ -37,6 +40,7 @@ import {
   parseSessionCode,
 } from '../lib/barcode'
 import type { BarcodeDetectorLike, BarcodeSource } from '../lib/barcode'
+import { WithMantine } from './common/WithMantine'
 
 /**
  * The rear camera: the peer's QR is on a screen held in front of this device, so the
@@ -150,9 +154,14 @@ export interface QRScannerProps {
   sourceFactory?: () => BarcodeSource
 }
 
-// Geometry only. Appearance belongs to `src/styles.css` (which the class names below
-// address); these few styles are the parts the overlay cannot function without: a
-// viewport-covering dialog, a sized camera surface, and a viewfinder to aim with.
+// Geometry and the few colours that carry meaning here. The `qr-scanner__*` class names are
+// behaviour and test hooks (styles.css has no rules for them), so the appearance of this
+// surface lives with the component that owns it.
+//
+// Every colour is a token, because the surface has to be legible in both schemes: the scrim is
+// the page colour at 85% (so it darkens with a dark page and lifts with a light one), the
+// letterbox behind the video is the sunken surface, and the aim frame is signal blue — the one
+// hue that means *put the thing here* (DESIGN.md, "The Meaningful Colour Rule").
 const OVERLAY_STYLE: CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -160,16 +169,23 @@ const OVERLAY_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  background: 'rgba(0, 0, 0, 0.85)',
+  padding: 'var(--qrbit-space-lg)',
+  background: 'color-mix(in srgb, var(--qrbit-canvas) 85%, transparent)',
 }
 
 const PANEL_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: '0.75rem',
+  gap: 'var(--qrbit-space-md)',
   width: 'min(100%, 420px)',
-  padding: '1rem',
-  color: '#f5f5f5',
+  // A dialog genuinely floats above the page, so it is the one place the sheet shadow is
+  // allowed (DESIGN.md, "The Floating Only Rule"); in the dark scheme that token is the
+  // hairline, not a shadow.
+  padding: 'var(--qrbit-space-lg)',
+  background: 'var(--qrbit-raised)',
+  border: '1px solid var(--qrbit-border)',
+  borderRadius: 'var(--qrbit-radius-lg)',
+  boxShadow: 'var(--qrbit-shadow-sheet)',
 }
 
 const STAGE_STYLE: CSSProperties = {
@@ -177,8 +193,8 @@ const STAGE_STYLE: CSSProperties = {
   width: '100%',
   aspectRatio: '1 / 1',
   overflow: 'hidden',
-  borderRadius: '0.75rem',
-  background: '#000',
+  borderRadius: 'var(--qrbit-radius-md)',
+  background: 'var(--qrbit-sunken)',
 }
 
 /** The camera surface: the native <video>, or the container html5-qrcode fills. */
@@ -193,8 +209,25 @@ const SURFACE_STYLE: CSSProperties = {
 const VIEWFINDER_STYLE: CSSProperties = {
   position: 'absolute',
   inset: '18%',
-  border: '2px solid rgba(255, 255, 255, 0.75)',
-  borderRadius: '0.5rem',
+  border: '2px solid var(--qrbit-signal)',
+  borderRadius: 'var(--qrbit-radius-md)',
+  pointerEvents: 'none',
+}
+
+/**
+ * The one authored moment on this surface: the sweep line (`scanSweep` in styles.css, which
+ * also stops it under `prefers-reduced-motion`). It is the only moving thing here and it
+ * means "reading frames", so it is a gradient across the aim band rather than a glowing
+ * laser — a zero-blur coloured halo is decoration, not depth.
+ */
+const SWEEP_STYLE: CSSProperties = {
+  position: 'absolute',
+  left: '18%',
+  right: '18%',
+  top: 0,
+  height: 2,
+  background:
+    'linear-gradient(to right, transparent, var(--qrbit-border-strong), transparent)',
   pointerEvents: 'none',
 }
 
@@ -388,52 +421,72 @@ export function QRScanner({
   }
 
   return (
-    <div
-      className="qr-scanner"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      style={OVERLAY_STYLE}
-    >
-      <div className="qr-scanner__panel" style={PANEL_STYLE}>
-        <h2 className="qr-scanner__title" id={titleId}>
-          Scan a QRBit code
-        </h2>
+    <WithMantine>
+      <div
+        className="qr-scanner"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        style={OVERLAY_STYLE}
+      >
+        <div className="qr-scanner__panel" style={PANEL_STYLE}>
+          <Title order={2} id={titleId} className="qr-scanner__title">
+            Scan a QRBit code
+          </Title>
 
-        {failure === null ? (
-          <div className="qr-scanner__stage" style={STAGE_STYLE}>
-            {kind === 'native' ? (
-              // muted + playsinline: without them the browser refuses to autoplay the
-              // stream and shows a black rectangle instead (PLAN.md §16 Phase 6).
-              <video
-                className="qr-scanner__video"
-                ref={videoRef}
-                style={SURFACE_STYLE}
-                autoPlay
-                muted
-                playsInline
-              />
-            ) : (
-              // The fallback's own container, and NOTHING else may live inside it:
-              // html5-qrcode empties its container on start (`element.innerHTML = ""`),
-              // so a React-managed node in there is deleted behind React's back and the
-              // next commit fails to unmount it. The viewfinder stays outside.
-              <div className="qr-scanner__surface" ref={surfaceRef} style={SURFACE_STYLE} />
-            )}
-            <div className="qr-scanner__viewfinder" style={VIEWFINDER_STYLE} aria-hidden="true" />
-          </div>
-        ) : (
-          <div className="qr-scanner__error" role="alert">
-            <p className="qr-scanner__error-title">{FAILURE_COPY[failure].title}</p>
-            <p className="qr-scanner__error-message">{FAILURE_COPY[failure].message}</p>
-            <p className="qr-scanner__error-hint">{FAILURE_COPY[failure].hint}</p>
-          </div>
-        )}
+          {failure === null ? (
+            <div className="qr-scanner__stage" style={STAGE_STYLE}>
+              {kind === 'native' ? (
+                // muted + playsinline: without them the browser refuses to autoplay the
+                // stream and shows a black rectangle instead (PLAN.md §16 Phase 6).
+                <video
+                  className="qr-scanner__video"
+                  ref={videoRef}
+                  style={SURFACE_STYLE}
+                  autoPlay
+                  muted
+                  playsInline
+                />
+              ) : (
+                // The fallback's own container, and NOTHING else may live inside it:
+                // html5-qrcode empties its container on start (`element.innerHTML = ""`),
+                // so a React-managed node in there is deleted behind React's back and the
+                // next commit fails to unmount it. The viewfinder stays outside.
+                <div className="qr-scanner__surface" ref={surfaceRef} style={SURFACE_STYLE} />
+              )}
+              {/* Sweep and viewfinder are siblings of the camera surface, never children. */}
+              <div className="qr-scanner__sweep animate-scan-sweep" style={SWEEP_STYLE} aria-hidden="true" />
+              <div className="qr-scanner__viewfinder" style={VIEWFINDER_STYLE} aria-hidden="true" />
+            </div>
+          ) : (
+            <div className="qr-scanner__error" role="alert">
+              <Stack gap="xs">
+                <Text className="qrbit-text-title" c="danger" component="p">
+                  {FAILURE_COPY[failure].title}
+                </Text>
+                <Text className="qrbit-text-body" component="p">
+                  {FAILURE_COPY[failure].message}
+                </Text>
+                {/* The recovery, named: every failure here has one, and they are not the same. */}
+                <Text className="qrbit-text-body-secondary" c="dimmed" component="p">
+                  {FAILURE_COPY[failure].hint}
+                </Text>
+              </Stack>
+            </div>
+          )}
 
-        <button type="button" className="qr-scanner__cancel" onClick={handleCancel}>
-          Cancel
-        </button>
+          <Button
+            className="qr-scanner__cancel"
+            variant="default"
+            size="md"
+            w="100%"
+            leftSection={<IconX size={16} aria-hidden="true" />}
+            onClick={handleCancel}
+          >
+            Stop scanning
+          </Button>
+        </div>
       </div>
-    </div>
+    </WithMantine>
   )
 }

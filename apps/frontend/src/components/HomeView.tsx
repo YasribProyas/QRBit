@@ -1,5 +1,6 @@
 /**
- * The home shell — a two-panel desktop surface (ORCHESTRATION D16).
+ * The home shell — a two-panel desktop surface and the product's signature pairing panel
+ * (ORCHESTRATION D16; DESIGN.md, "Signature: the pairing panel").
  *
  * Desktop (≥ 64rem, Tailwind's `lg`): the local library on the left, the QR/session
  * panel on the right, and no page-level scroll — each panel scrolls inside its own
@@ -14,35 +15,45 @@
  * right-hand panel; the library is handed in as `library` so the page owns the store
  * wiring and this file stays about layout.
  *
- * Nothing here writes to the library or to a session: every action is a callback, and
- * the only piece of state is the typed pairing code, which belongs to the form that
- * submits it.
+ * ## The pairing panel, and what it is allowed to say
+ *
+ * It is the one surface that shows the product's mechanics, so it is the one surface that
+ * earns geometry: reticle corners on the panel, a status dot with the line that states what
+ * the host is doing, the code on a light well, `Scan & Send` beneath it, and the typed
+ * fallback under a hairline. Everything else is flat.
+ *
+ * Nothing here claims a state the session has not reached. The dot and the status line live
+ * inside the branch that has a code, because a code only exists once this device has joined
+ * as host (D15) — the previous revision painted a "Beacon Ready" dot above the panel while
+ * the host was still connecting, which is the fabricated-telemetry failure this file must
+ * not repeat. Before the join lands, the panel shows the loading state and says so.
+ *
+ * The typed fallback is `ManualCodeEntry`, mounted here rather than re-implemented here:
+ * there was a second inline copy of the same form in this file, which validated nothing and
+ * left the tested component unreachable.
+ *
+ * Nothing here writes to the library or to a session: every action is a callback, and this
+ * component holds no state at all.
  */
 
-import { useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
-import { Alert, Button, Group, Loader, Paper, Stack, TextInput, Text, Title } from '@mantine/core'
-import {
-  IconArrowRight,
-  IconCamera,
-  IconKeyboard,
-  IconRefresh,
-  IconSettings,
-} from '@tabler/icons-react'
+import type { CSSProperties, ReactNode } from 'react'
+import { Alert, Button, Group, Loader, Paper, Stack, Text } from '@mantine/core'
+import { IconCamera, IconRefresh, IconSettings } from '@tabler/icons-react'
 import { Link } from 'react-router-dom'
 
 import { TacticalQRCode } from './TacticalQRCode'
+import { ManualCodeEntry } from './ManualCodeEntry'
 import { WithMantine } from './common/WithMantine'
 import { APP_URL } from '../config'
 
 export interface HomeViewProps {
   /** The minted session code, or `null` while the host session is still being set up. */
   pairingCode: string | null
-  /** Mints a fresh code (the QR only ever shows a code the host has joined — D14). */
+  /** Mints a fresh code (the QR only ever shows a code the host has joined — D13, D15). */
   onRegeneratePairing: () => void
   /** Opens the camera. This is the QR panel's primary action, not the header's. */
   onOpenScanner: () => void
-  /** A typed code was submitted, already trimmed and upper-cased. */
+  /** A typed code was submitted, already validated and upper-cased by `ManualCodeEntry`. */
   onJoinCode: (code: string) => void
   /**
    * The left panel: the page renders `<LibraryPanel … />` here.
@@ -57,6 +68,30 @@ export interface HomeViewProps {
   errorMessage?: string | null
 }
 
+/**
+ * One corner of the panel's reticle: 12px of 2px signal on the two edges that face the
+ * corner. The lengths are DESIGN's `sm`/`md` spacing steps, so the marks sit on the scale;
+ * the colour is a token because Tailwind's arbitrary-value syntax is not the only consumer
+ * of this file's palette and a `var()` in a utility is the one thing that cannot be checked
+ * at build time.
+ */
+function reticle(corner: 'top' | 'bottom', side: 'left' | 'right'): CSSProperties {
+  const edge = { position: 'absolute', pointerEvents: 'none' } as const
+  const inset = { [corner]: 'var(--qrbit-space-sm)', [side]: 'var(--qrbit-space-sm)' }
+  const width = side === 'left' ? 'borderLeftWidth' : 'borderRightWidth'
+  const height = corner === 'top' ? 'borderTopWidth' : 'borderBottomWidth'
+  return {
+    ...edge,
+    ...inset,
+    width: 'var(--qrbit-space-md)',
+    height: 'var(--qrbit-space-md)',
+    borderStyle: 'solid',
+    borderColor: 'var(--qrbit-signal)',
+    [width]: 2,
+    [height]: 2,
+  }
+}
+
 export function HomeView({
   pairingCode,
   onRegeneratePairing,
@@ -66,14 +101,8 @@ export function HomeView({
   roleLabel,
   errorMessage,
 }: HomeViewProps) {
-  const [manualCode, setManualCode] = useState('')
-
-  const handleManualJoin = (event: FormEvent): void => {
-    event.preventDefault()
-    const code = manualCode.trim()
-    if (code === '') return
-    onJoinCode(code.toUpperCase())
-  }
+  /** The URL a peer opens; printed as text so a code is never *only* a picture. */
+  const sessionUrl = pairingCode === null ? null : `${APP_URL}/session?code=${pairingCode}`
 
   return (
     <WithMantine>
@@ -82,18 +111,16 @@ export function HomeView({
         <header className="home__header page__header shrink-0">
           <Group align="center" gap="sm" wrap="nowrap">
             <img src="/favicon.svg" alt="QRBit" width={28} height={28} />
-            <div>
-              <Title
-                order={1}
-                size="h5"
-                className="page__title font-display font-bold tracking-tight text-[#0F172A]"
-              >
-                QRBit
-              </Title>
-              <Text size="xs" c="dimmed">
-                Air-gapped structured transfer
-              </Text>
-            </div>
+            {/*
+              The wordmark is the display role and needs no tagline under it. The line this
+              header used to carry ("Air-gapped structured transfer") claimed a property the
+              product does not have: signaling runs through the worker, so the devices are
+              not air-gapped. `AppHeader.tsx` still carries the same sentence — see the
+              report for this lane.
+            */}
+            <Text className="qrbit-text-display" component="h1">
+              QRBit
+            </Text>
           </Group>
 
           <Link className="home__settings" to="/settings" style={{ textDecoration: 'none' }}>
@@ -120,17 +147,22 @@ export function HomeView({
           >
             <Stack gap="md">
               {errorMessage ? (
-                <Alert color="red" title="Error" className="home__qr-error" role="alert">
-                  <Stack gap="xs">
-                    <Text size="sm">Could not reach the signaling server.</Text>
-                    <Text size="xs" ff="monospace">
+                <Alert
+                  color="danger"
+                  className="home__qr-error"
+                  role="alert"
+                  title="Could not reach the signaling server"
+                >
+                  <Stack gap="sm">
+                    {/* The runtime's own words, verbatim, as data. */}
+                    <Text className="qrbit-text-data" c="danger" w="min(100%, 40ch)">
                       {errorMessage}
                     </Text>
                     <div>
                       <Button
-                        color="red"
-                        size="xs"
-                        leftSection={<IconRefresh size={14} aria-hidden="true" />}
+                        size="sm"
+                        color="danger"
+                        leftSection={<IconRefresh size={16} aria-hidden="true" />}
                         onClick={onRegeneratePairing}
                       >
                         Try again
@@ -140,40 +172,55 @@ export function HomeView({
                 </Alert>
               ) : null}
 
-              <Paper shadow="xs" p="md" withBorder className="flex flex-col items-center">
-                <Group justify="space-between" wrap="nowrap" style={{ width: '100%' }} mb="md">
-                  <Group gap="xs" wrap="nowrap">
-                    <span
-                      className="home__beacon-dot"
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        backgroundColor: 'var(--mantine-color-telemetry-5)',
-                      }}
-                    />
-                    <Text size="xs" fw={500} c="dimmed">
-                      Beacon Ready
-                    </Text>
-                  </Group>
-                </Group>
+              {/*
+                The pairing panel. Flat and bordered, never shadowed at rest (DESIGN.md,
+                "The Floating Only Rule"); the reticle corners are the only geometry it owns.
+              */}
+              <Paper
+                withBorder
+                p="lg"
+                className="home__pairing-panel relative flex flex-col items-center"
+              >
+                <span aria-hidden="true" style={reticle('top', 'left')} />
+                <span aria-hidden="true" style={reticle('top', 'right')} />
+                <span aria-hidden="true" style={reticle('bottom', 'left')} />
+                <span aria-hidden="true" style={reticle('bottom', 'right')} />
 
-                {pairingCode ? (
+                {pairingCode !== null ? (
                   <div className="session-qr flex w-full flex-col items-center">
-                    <TacticalQRCode pairingCode={pairingCode} onRegenerate={onRegeneratePairing} size={195} showLabel />
+                    {/*
+                      Status dot + line. Both are statements the session has actually earned:
+                      a published code means this device is joined as host and waiting (D15).
+                    */}
+                    <Group
+                      gap="sm"
+                      wrap="nowrap"
+                      justify="center"
+                      mb="md"
+                      className="session-qr__status"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="home__status-dot size-2 flex-none rounded-full"
+                        style={{ background: 'var(--qrbit-signal)' }}
+                      />
+                      <Text className="qrbit-text-body">
+                        {roleLabel || 'Host — waiting for another device to scan your code'}
+                      </Text>
+                    </Group>
 
-                    <Text size="sm" c="telemetry" fw={500} mt="md" ta="center">
-                      {roleLabel || 'Host — waiting for another device to scan your code'}
-                    </Text>
+                    <TacticalQRCode pairingCode={pairingCode} onRegenerate={onRegeneratePairing} size={195} />
 
-                    <Text size="xs" c="dimmed" mt={4} ta="center" ff="monospace">
-                      On the other device, open <code>{`${APP_URL}/session?code=${pairingCode}`}</code>
-                    </Text>
+                    {sessionUrl !== null ? (
+                      <Text className="qrbit-text-data" mt="md" c="dimmed" ta="center" w="min(100%, 44ch)">
+                        On the other device, open {sessionUrl}
+                      </Text>
+                    ) : null}
                   </div>
                 ) : (
-                  <Group py="xl" gap="xs" wrap="nowrap" role="status">
+                  <Group py="xl" gap="xs" wrap="nowrap" role="status" aria-live="polite">
                     <Loader size="sm" />
-                    <Text size="xs" c="dimmed">
+                    <Text className="qrbit-text-body-secondary" c="dimmed">
                       Connecting host session…
                     </Text>
                   </Group>
@@ -184,9 +231,12 @@ export function HomeView({
                   the code a peer scans, rather than in a header that applies to no panel.
                   It stays available while the host code is still being minted, because
                   scanning somebody else's code never depends on having one of your own.
+                  44px, not the table's 36px: this is the thumb target on a phone held at
+                  arm's length, which DESIGN.md's 44px touch rule outranks.
                 */}
                 <Button
-                  className="home__scan mt-4 w-full"
+                  className="home__scan w-full"
+                  mt="lg"
                   color="signal"
                   size="md"
                   leftSection={<IconCamera size={16} aria-hidden="true" />}
@@ -195,39 +245,17 @@ export function HomeView({
                   Scan &amp; Send
                 </Button>
 
-                {/* Manual pairing fallback. */}
+                {/* Manual pairing fallback, under a hairline (DESIGN.md's pairing panel). */}
                 <div
-                  className="mt-4 w-full pt-3"
-                  style={{ borderTop: '1px solid var(--qrd-border, #D1D9E4)' }}
+                  className="home__manual-fallback"
+                  style={{
+                    width: '100%',
+                    marginTop: 'var(--qrbit-space-lg)',
+                    paddingTop: 'var(--qrbit-space-lg)',
+                    borderTop: '1px solid var(--qrbit-border)',
+                  }}
                 >
-                  <Text size="xs" c="dimmed" mb="xs" ff="monospace">
-                    Have a code instead? Type it in:
-                  </Text>
-                  <form className="manual-code flex items-center gap-2" onSubmit={handleManualJoin}>
-                    <Group align="center" gap="sm" wrap="nowrap" style={{ width: '100%' }}>
-                      <TextInput
-                        value={manualCode}
-                        onChange={(event) => {
-                          setManualCode(event.currentTarget.value)
-                        }}
-                        placeholder="Type 8-character code..."
-                        className="manual-code__input desktop-sm min-w-0"
-                        leftSection={<IconKeyboard size={16} aria-hidden="true" />}
-                        size="md"
-                        style={{ flex: 1 }}
-                      />
-                      <Button
-                        type="submit"
-                        disabled={manualCode.trim() === ''}
-                        className="manual-code__submit"
-                        size="md"
-                        color="dark"
-                        rightSection={<IconArrowRight size={14} aria-hidden="true" />}
-                      >
-                        Join
-                      </Button>
-                    </Group>
-                  </form>
+                  <ManualCodeEntry onSubmit={onJoinCode} />
                 </div>
               </Paper>
             </Stack>

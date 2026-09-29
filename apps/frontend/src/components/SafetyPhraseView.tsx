@@ -1,10 +1,28 @@
+/**
+ * The safety-phrase gate (PLAN.md §8 Phase 2; ORCHESTRATION D14).
+ *
+ * This is the product's one security moment, and it is the only place in the app where
+ * colour is allowed to shout. The design follows from that, not from decoration:
+ *
+ *  - the three words are the largest and highest-contrast thing on the screen — they are the
+ *    comparison, so nothing competes with them (`.safety-phrase__word` in `styles.css` sizes
+ *    them with `clamp(1.625rem, 11vw, 3rem)` in the mono face, on a sunken well);
+ *  - the sender's confirmation is the primary action, and the receiver gets no gating button
+ *    at all (D14) — the copy names who is confirming;
+ *  - abort is quiet (`variant="subtle"`, fault red) but always reachable and always enabled
+ *    unless a confirmation is in flight.
+ *
+ * What this surface is NOT allowed to do is claim a relationship the code has not established.
+ * The previous revision printed "Connected to: Peer Device (Air-Gap Handshake)" — a peer name
+ * nothing in the app produces — with an emerald dot asserting the link. The words themselves
+ * are the peer evidence this protocol has, so that is what is shown, plus the two
+ * confirmation flags the session actually reports.
+ */
+
 import { useState } from 'react'
-import {
-  ShieldCheck,
-  Check,
-  X,
-  Info,
-} from 'lucide-react'
+import { Button, Group, Stack, Text, Title } from '@mantine/core'
+import { IconShieldCheck } from '@tabler/icons-react'
+
 import type { SessionRole } from '../lib/signaling'
 
 export interface SafetyPhraseViewProps {
@@ -16,7 +34,12 @@ export interface SafetyPhraseViewProps {
   busy?: boolean
   isSender?: boolean
   role?: SessionRole | null
-  peerName?: string
+  /**
+   * The peer's own name, if the caller has one. There is no default: a name this component
+   * invented would be an assertion about who is on the other end, which is exactly the claim
+   * the phrase exists to test.
+   */
+  peerName?: string | null
 }
 
 export function SafetyPhraseView({
@@ -28,121 +51,114 @@ export function SafetyPhraseView({
   busy = false,
   isSender,
   role,
-  peerName = 'Peer Device (Air-Gap Handshake)',
+  peerName = null,
 }: SafetyPhraseViewProps) {
+  /** D14: the sender (the device that opened the session as guest) is the party that confirms. */
   const sender = isSender ?? (role !== undefined && role !== null ? role === 'guest' : true)
   const [hasConfirmedLocal, setHasConfirmedLocal] = useState(confirmed)
+  const confirmedHere = confirmed || hasConfirmedLocal
 
-  const handleConfirmClick = () => {
+  const handleConfirmClick = (): void => {
     setHasConfirmedLocal(true)
     onConfirm()
   }
 
   return (
     <div
-      className="safety-phrase fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#EEF2F6] overflow-y-auto"
+      className="safety-phrase"
       role="dialog"
       aria-modal="true"
       aria-labelledby="safety-phrase-instruction"
     >
-      <div className="safety-phrase__panel flex flex-col min-h-full max-w-lg mx-auto w-full py-8 justify-between">
-        {/* Top Security Header */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-50 text-[#1D4ED8] border border-blue-200 shadow-2xs mb-2">
-            <ShieldCheck className="w-6 h-6" />
-          </div>
+      <div className="safety-phrase__panel">
+        <Stack gap="sm" align="center">
+          <Group gap="xs" wrap="nowrap" justify="center">
+            <IconShieldCheck size={20} aria-hidden="true" style={{ color: 'var(--qrbit-ink-secondary)' }} />
+            {/* The heading carries its own weight: no kicker line above the words. */}
+            <Title order={1} id="safety-phrase-instruction" className="qrbit-text-headline">
+              Check these three words
+            </Title>
+          </Group>
+          <Text className="qrbit-text-body-secondary" c="dimmed" maw="44ch" ta="center">
+            They come from the key exchange, so they match only if the same session is on both
+            screens.
+          </Text>
+        </Stack>
 
-          <h2 id="safety-phrase-instruction" className="safety-phrase__instruction font-display font-bold text-2xl text-[#0F172A] tracking-tight">
-            Verify Safety Phrase
-          </h2>
-          <p className="text-xs text-[#5B6B82] max-w-xs mx-auto leading-relaxed">
-            Before transferring any data blocks, compare the three verification words with the other screen.
-          </p>
-        </div>
+        {/*
+           The comparison itself. `.safety-phrase__word` is the design system's largest type;
+           there is deliberately nothing else on this surface at that size, and no card inside
+           the card.
+        */}
+        <ul className="safety-phrase__words">
+          {phrase.map((word, index) => (
+            <li className="safety-phrase__word" key={index}>
+              {word}
+            </li>
+          ))}
+        </ul>
 
-        {/* Center 3-Word Prominent Display */}
-        <div className="my-6">
-          <div className="bg-white rounded-2xl border-2 border-[#1D4ED8]/30 shadow-lg p-6 text-center space-y-4 relative overflow-hidden">
-            {/* Subtle security mesh watermark */}
-            <div className="text-[11px] font-mono uppercase tracking-widest text-[#1D4ED8] font-semibold flex items-center justify-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] animate-ping" />
-              Air-Gap Handshake Phrase
-            </div>
+        <Stack gap="xs" className="safety-phrase__status" role="status" aria-live="polite">
+          <Text className="qrbit-text-body-secondary" c="dimmed" ta="center">
+            {peerName === null
+              ? 'Compare these with the words on the other device’s screen.'
+              : `Compare these with the words on ${peerName}.`}
+          </Text>
+          <Text className="qrbit-text-body-secondary" c="danger" ta="center">
+            If they differ, do not continue. Abort and start a new session.
+          </Text>
 
-            {/* 3 WORDS DISPLAYED PROMINENTLY */}
-            <ul className="safety-phrase__words flex flex-col sm:flex-row items-center justify-center gap-3 py-3 list-none m-0 p-0">
-              {phrase.map((word, i) => (
-                <li
-                  key={i}
-                  className="safety-phrase__word w-full sm:w-auto px-4 py-2.5 bg-[#EEF2F6] border border-[#D1D9E4] rounded-lg font-mono font-bold text-lg sm:text-xl text-[#0F172A] tracking-wider shadow-2xs uppercase"
-                >
-                  {word}
-                </li>
-              ))}
-            </ul>
-
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-left flex items-start gap-2.5">
-              <Info className="w-4 h-4 text-[#1D4ED8] shrink-0 mt-0.5" />
-              <p className="text-xs text-slate-600 leading-normal">
-                If the words displayed on <strong className="text-slate-900">{peerName}</strong> are not identical to these, an optical or network interception attempt has occurred. Abort immediately.
-              </p>
-            </div>
-          </div>
-
-          {/* Peer connection badge & status */}
-          <div className="safety-phrase__status mt-4 flex flex-col items-center justify-center gap-2 text-xs text-[#5B6B82]" role="status" aria-live="polite">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>Connected to:</span>
-              <span className="font-semibold text-slate-800">{peerName}</span>
-            </div>
-
-            {sender ? (
-              <p className="safety-phrase__check flex items-center gap-2" data-state={confirmed || hasConfirmedLocal ? 'confirmed' : 'pending'}>
-                <span className="safety-phrase__check-label font-semibold">This device:</span>
-                <span>{confirmed || hasConfirmedLocal ? 'confirmed ✓' : 'not confirmed yet'}</span>
-              </p>
-            ) : (
-              <p className="safety-phrase__check flex items-center gap-2" data-state={peerConfirmed ? 'confirmed' : 'pending'}>
-                <span className="safety-phrase__check-label font-semibold">Sender:</span>
-                <span>{peerConfirmed ? 'confirmed ✓' : 'waiting for confirmation…'}</span>
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Action Buttons: Confirm Match vs Abort Session */}
-        <div className="safety-phrase__actions space-y-3 pt-4 border-t border-[#D1D9E4]">
           {sender ? (
-            <button
-              type="button"
+            <p className="safety-phrase__check" data-state={confirmedHere ? 'confirmed' : 'pending'}>
+              <span className="safety-phrase__check-label">This device:</span>
+              <span>{confirmedHere ? 'confirmed' : 'not confirmed yet'}</span>
+            </p>
+          ) : (
+            <p className="safety-phrase__check" data-state={peerConfirmed ? 'confirmed' : 'pending'}>
+              <span className="safety-phrase__check-label">Sender:</span>
+              <span>{peerConfirmed ? 'confirmed' : 'waiting for confirmation…'}</span>
+            </p>
+          )}
+        </Stack>
+
+        <Stack gap="sm" className="safety-phrase__actions">
+          {sender ? (
+            <Button
+              color="signal"
+              size="md"
+              w="100%"
+              disabled={busy || confirmedHere}
+              // The visible label stays the one the page-level tests select; the accessible
+              // name says what pressing it decides.
+              aria-label="Confirm that these words match the other device"
               onClick={handleConfirmClick}
-              disabled={busy || confirmed || hasConfirmedLocal}
-              className="button safety-phrase__confirm w-full py-3.5 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white rounded-xl font-display font-semibold text-sm shadow-sm flex items-center justify-center gap-2 transition-all tactile-btn cursor-pointer disabled:opacity-50"
             >
               Confirmed
-            </button>
+            </Button>
           ) : null}
 
-          <button
-            type="button"
-            onClick={onAbort}
+          <Button
+            variant="subtle"
+            color="danger"
+            size="sm"
+            w="100%"
             disabled={busy}
-            className="button safety-phrase__abort w-full py-2.5 bg-white hover:bg-red-50 text-slate-600 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded-xl font-medium text-xs flex items-center justify-center gap-2 transition-colors tactile-btn cursor-pointer"
+            onClick={onAbort}
           >
             Abort session
-          </button>
+          </Button>
 
-          <p className="safety-phrase__footnote text-center text-xs text-[#5B6B82] pt-1">
+          {/* The panel centres its own text; the footnote adds no alignment of its own. */}
+          <p className="safety-phrase__footnote qrbit-text-body-secondary">
             {sender
-              ? confirmed || hasConfirmedLocal
+              ? confirmedHere
                 ? 'Confirmed — starting the session…'
                 : 'The session starts once you confirm the words match.'
               : peerConfirmed
                 ? 'Sender confirmed — starting the session…'
                 : 'Waiting for the sender to confirm the safety phrase.'}
           </p>
-        </div>
+        </Stack>
       </div>
     </div>
   )

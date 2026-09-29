@@ -292,8 +292,16 @@ describe('QRDisplay — a code a phone camera can read (PLAN.md §16 Phase 6)', 
     const { options } = draw()
     expect(options.errorCorrectionLevel).toBe('M')
     expect(options.margin).toBeGreaterThanOrEqual(4)
-    expect(options.color?.dark).toBe('#000000ff')
-    expect(options.color?.light).toBe('#ffffffff')
+    /*
+     * The palette is never overridden, which is how the symbol keeps one fixed module/field
+     * pair in both schemes: `qrcode` falls back to its documented default — pure black modules
+     * on a pure white field — and the pixel assertions above are what pin the result. Naming
+     * the two colours here would put a hex in a component, which DESIGN.md forbids, and taking
+     * them from a `--qrbit-*` surface token would invert them under `[data-theme='dark']`.
+     * The renderer normalises the options object in place, so `color` arrives here present but
+     * empty rather than absent.
+     */
+    expect(options.color).toEqual({})
   })
 
   it('rasterises above the CSS size on a high-density screen', async () => {

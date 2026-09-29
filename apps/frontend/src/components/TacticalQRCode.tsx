@@ -1,144 +1,248 @@
+/**
+ * The code a peer scans, drawn on the pairing panel (PLAN.md §7; ORCHESTRATION D13, D15).
+ *
+ * Two rules drive this component.
+ *
+ * 1. **It never draws a code the host has not joined.** There is no default `pairingCode`:
+ *    the previous revision shipped one (`QRB-884-219`, a code no worker ever issued) and a
+ *    `qrbit://` payload no device can open, so an unmounted panel displayed a scannable lie.
+ *    `HomeView` mounts this only once a session code exists, which is D15's point in time.
+ * 2. **Everything it paints is luminance-first.** Dark modules on a light field, a
+ *    four-module quiet zone, a bitmap sized for the screen, and nothing overlapping the
+ *    symbol: the old centred badge sat on real modules, the old crosshairs ran a tint across
+ *    them, and the old one-module margin starved the finder patterns. The reticle corners
+ *    are the panel's geometry (`HomeView`), not the code's furniture.
+ *
+ * The shared drawing settings are in `qrSurface.ts`; the colours are left to the renderer's
+ * documented black-on-white default, for the reason recorded there.
+ */
+
 import { useEffect, useRef, useState } from 'react'
+import type { JSX } from 'react'
 import { toCanvas } from 'qrcode'
-import { RefreshCw, Copy, Check, Zap } from 'lucide-react'
+import { ActionIcon, Button, Group, Loader, Stack, Text } from '@mantine/core'
+import { IconAlertTriangle, IconCheck, IconCopy, IconRefresh } from '@tabler/icons-react'
+
 import { buildSessionUrl } from '../config'
+import { WithMantine } from './common/WithMantine'
+import { qrRenderOptions, releaseCanvasSizing } from './qrSurface'
 
 export interface TacticalQRCodeProps {
+  /**
+   * The session code this device joined as host. Optional and with no default: a code this
+   * component invented could only ever be scanned into a session nobody is waiting on.
+   */
   pairingCode?: string
+  /** A session URL supplied by the caller, which takes precedence over `pairingCode`. */
   sessionUrl?: string
+  /** Starts a fresh session. The control appears only when the caller owns that action. */
   onRegenerate?: () => void
+  /** Rendered width in CSS pixels. DESIGN.md's resting band for the pairing panel is 195–240. */
   size?: number
+  /** Show the caption, the code as text and the code's own controls under the symbol. */
   showLabel?: boolean
+  /** Hide the copy/regenerate controls: the caller renders the code without them. */
   interactive?: boolean
 }
 
+/** Which of the three states the surface is in; `error` always keeps the code typeable. */
+type DrawState = 'drawing' | 'ready' | 'error'
+
+/**
+ * The light plate behind the code.
+ *
+ * `--qrbit-signal-subtle` is the one documented surface that does NOT flip under
+ * `[data-theme='dark']`, so the well stays light on a near-black page instead of inverting
+ * with the panel behind it (`--qrbit-raised` does exactly that, which is why it is not used
+ * here). The symbol itself brings its own white quiet zone.
+ */
+const WELL_STYLE = {
+  background: 'var(--qrbit-signal-subtle)',
+  borderRadius: 'var(--qrbit-radius-md)',
+  padding: 'var(--qrbit-space-md)',
+} as const
+
+/** Which of the three copy states the control is in — the code is always on screen anyway. */
+type CopyState = 'idle' | 'copied' | 'blocked'
+
+/**
+ * What the copy control says it did. The blocked wording names the recovery, because the
+ * code is printed next to the button and can be selected and copied by hand.
+ */
+const COPY_LABEL: Record<CopyState, string> = {
+  idle: 'Copy the session link',
+  copied: 'Session link copied',
+  blocked: 'This browser blocked the copy — select the code and copy it yourself',
+}
+
 export function TacticalQRCode({
-  pairingCode = 'QRB-884-219',
+  pairingCode,
   sessionUrl,
   onRegenerate,
-  size = 200,
+  size = 220,
   showLabel = true,
   interactive = true,
-}: TacticalQRCodeProps) {
+}: TacticalQRCodeProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const [copied, setCopied] = useState(false)
-  const [isSpinning, setIsSpinning] = useState(false)
+  const [state, setState] = useState<DrawState>('drawing')
+  const [copy, setCopy] = useState<CopyState>('idle')
 
-  const payload = sessionUrl || (pairingCode ? buildSessionUrl(pairingCode) : `qrbit://${pairingCode}`)
+  /** The URL the symbol carries — a real session URL, or nothing. */
+  const payload = sessionUrl ?? (pairingCode ? buildSessionUrl(pairingCode) : null)
+  const code = pairingCode ?? null
 
   useEffect(() => {
-    if (canvasRef.current) {
-      toCanvas(canvasRef.current, payload, {
-        width: size,
-        margin: 1,
-        color: {
-          dark: '#0F172A',
-          light: '#FFFFFF',
-        },
-        errorCorrectionLevel: 'H',
-      }).catch((err) => {
-        // Defensive log/catch
-        console.error('TacticalQRCode render failed:', err)
-      })
+    const canvas = canvasRef.current
+    if (canvas === null || payload === null) return undefined
+
+    // A browser (or a jsdom harness) without a 2D context cannot rasterise at all: go
+    // straight to the text fallback instead of rejecting inside the renderer.
+    if (canvas.getContext('2d') === null) {
+      setState('error')
+      return undefined
+    }
+
+    let cancelled = false
+    setState('drawing')
+
+    void toCanvas(canvas, payload, qrRenderOptions(size)).then(
+      () => {
+        releaseCanvasSizing(canvas)
+        if (!cancelled) setState('ready')
+      },
+      () => {
+        releaseCanvasSizing(canvas)
+        if (!cancelled) setState('error')
+      },
+    )
+
+    return () => {
+      cancelled = true
     }
   }, [payload, size])
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(sessionUrl || pairingCode)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1400)
-    } catch {
-      // Ignore clipboard write failure
+  /*
+   * The confirmation is a state with a duration, not a latched switch: it clears itself so
+   * the next copy reads as a copy rather than as the previous one.
+   */
+  useEffect(() => {
+    if (copy === 'idle') return undefined
+    const timer = window.setTimeout(() => setCopy('idle'), 1400)
+    return () => window.clearTimeout(timer)
+  }, [copy])
+
+  const handleCopy = (): void => {
+    if (payload === null) return
+    // A browser with no clipboard API, or one that refuses the write, is answered with the
+    // truth rather than a checkmark: the code stays on screen to copy by hand.
+    const clipboard: Clipboard | undefined = navigator.clipboard
+    if (clipboard === undefined) {
+      setCopy('blocked')
+      return
     }
+    clipboard.writeText(payload).then(
+      () => setCopy('copied'),
+      () => setCopy('blocked'),
+    )
   }
 
-  const handleRefresh = () => {
-    setIsSpinning(true)
-    if (onRegenerate) onRegenerate()
-    setTimeout(() => setIsSpinning(false), 450)
+  /*
+   * No code, nothing to draw. This is the branch that used to render a fabricated one
+   * (`QRB-884-219`), which scanned into a session no worker had ever issued.
+   */
+  if (payload === null) {
+    return (
+      <WithMantine>
+        <Text className="qrbit-text-body-secondary" c="dimmed" ta="center">
+          No session code yet — this device has not joined one.
+        </Text>
+      </WithMantine>
+    )
   }
 
   return (
-    <div className="flex flex-col items-center">
-      {/* Optical Precision Target Frame */}
-      <div className="relative p-5 bg-white rounded-xl border border-[#D1D9E4] shadow-xs">
-        {/* Optical alignment ticks at 4 corners */}
-        <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 border-t-2 border-l-2 border-[#1D4ED8]" />
-        <div className="absolute top-1.5 right-1.5 w-2.5 h-2.5 border-t-2 border-r-2 border-[#1D4ED8]" />
-        <div className="absolute bottom-1.5 left-1.5 w-2.5 h-2.5 border-b-2 border-l-2 border-[#1D4ED8]" />
-        <div className="absolute bottom-1.5 right-1.5 w-2.5 h-2.5 border-b-2 border-r-2 border-[#1D4ED8]" />
-
-        {/* Center reticle crosshair guides */}
-        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[1px] bg-[#1D4ED8]/10 pointer-events-none" />
-        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[1px] bg-[#1D4ED8]/10 pointer-events-none" />
-
-        <canvas
-          ref={canvasRef}
-          className="rounded-md transition-opacity duration-200"
-          style={{ width: size, height: size }}
-          width={size}
-          height={size}
-        />
-
-        {/* Micro optical badge in center of QR */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-md bg-white border border-[#D1D9E4] shadow-xs flex items-center justify-center pointer-events-none">
-          <div className="w-4 h-4 rounded-sm bg-[#1D4ED8] flex items-center justify-center text-white">
-            <Zap className="w-2.5 h-2.5" />
+    <WithMantine>
+      <Stack align="center" gap="md" className="tactical-qr">
+        <div className="tactical-qr__well" style={WELL_STYLE}>
+          {/* The frame reserves the code's square so the panel does not jump when it lands. */}
+          <div
+            className="relative grid place-items-center"
+            style={{ width: size, maxWidth: '100%', aspectRatio: '1 / 1' }}
+          >
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={
+                code === null ? `QR code pairing for ${payload}` : `QR code pairing for session ${code}`
+              }
+              className="absolute inset-0"
+              style={{
+                // Mounted always so a draw always has a target; hidden until it holds
+                // something worth scanning, so a half-drawn code is never on screen.
+                display: state === 'ready' ? 'block' : 'none',
+                width: '100%',
+                height: '100%',
+              }}
+            />
+            {state === 'drawing' ? (
+              <Group gap="xs" wrap="nowrap" role="status" aria-live="polite">
+                <Loader size="sm" />
+                <Text className="qrbit-text-body-secondary" c="dimmed">
+                  Drawing code…
+                </Text>
+              </Group>
+            ) : null}
+            {state === 'error' ? (
+              <Text className="qrbit-text-body-secondary" c="danger" ta="center" w="min(100%, 22ch)">
+                This browser cannot draw the code. Use the text below.
+              </Text>
+            ) : null}
           </div>
         </div>
-      </div>
 
-      {showLabel && (
-        <div className="mt-3.5 text-center flex flex-col items-center">
-          <p className="text-[13px] text-[#5B6B82] max-w-[280px] leading-relaxed">
-            Scan with any device's camera to establish an air-gapped peer transfer channel.
-          </p>
+        {showLabel ? (
+          <Stack align="center" gap="xs" className="tactical-qr__label">
+            <Text className="qrbit-text-body-secondary" c="dimmed" ta="center" maw="34ch">
+              Scan this with the other device’s camera, or open the link it carries.
+            </Text>
 
-          <div className="mt-2.5 flex items-center gap-2">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#D1D9E4] rounded-md font-mono text-[13px] text-[#0F172A] font-semibold shadow-2xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#0F766E] animate-pulse" />
-              {pairingCode}
-            </div>
+            <Group justify="center" gap="xs" wrap="wrap">
+              {/* The code is data a user may read back or type, so it is set as data. */}
+              <Text className="qrbit-text-data" component="span">
+                {code ?? payload}
+              </Text>
 
-            {interactive && (
-              <>
-                <button
-                  type="button"
+              {interactive ? (
+                <ActionIcon
+                  variant="subtle"
+                  size="lg"
+                  aria-label={COPY_LABEL[copy]}
                   onClick={handleCopy}
-                  title="Copy pairing code or link"
-                  className="p-1.5 text-[#5B6B82] hover:text-[#0F172A] bg-white rounded-md border border-[#D1D9E4] tactile-btn shadow-2xs cursor-pointer"
                 >
-                  {copied ? (
-                    <Check className="w-3.5 h-3.5 text-[#0F766E]" />
+                  {copy === 'copied' ? (
+                    <IconCheck size={18} aria-hidden="true" />
+                  ) : copy === 'blocked' ? (
+                    <IconAlertTriangle size={18} aria-hidden="true" />
                   ) : (
-                    <Copy className="w-3.5 h-3.5" />
+                    <IconCopy size={18} aria-hidden="true" />
                   )}
-                </button>
+                </ActionIcon>
+              ) : null}
 
-                {onRegenerate && (
-                  <button
-                    type="button"
-                    onClick={handleRefresh}
-                    title="Generate new pairing code"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium text-[#1D4ED8] bg-white hover:bg-blue-50 border border-blue-200 rounded-md tactile-btn shadow-2xs cursor-pointer"
-                  >
-                    <RefreshCw
-                      className="w-3 h-3 transition-transform"
-                      style={{
-                        transform: isSpinning ? 'rotate(180deg)' : 'rotate(0deg)',
-                        transitionDuration: '400ms',
-                        transitionTimingFunction: 'var(--ease-out)',
-                      }}
-                    />
-                    <span>Regenerate</span>
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+              {interactive && onRegenerate ? (
+                <Button
+                  variant="default"
+                  size="sm"
+                  leftSection={<IconRefresh size={16} aria-hidden="true" />}
+                  onClick={onRegenerate}
+                >
+                  New code
+                </Button>
+              ) : null}
+            </Group>
+          </Stack>
+        ) : null}
+      </Stack>
+    </WithMantine>
   )
 }

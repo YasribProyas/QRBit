@@ -1,15 +1,28 @@
 /**
  * This device's session QR panel (PLAN.md §3, §7, §16 Phase 6).
  *
- * Upgraded with Mantine UI: sleek presentation card, large high-contrast canvas,
- * and fullscreen projection modal on enlarge for easy scanning across rooms or displays.
+ * The drawing settings — quiet zone, error correction, device-pixel sizing — are shared with
+ * the home pairing panel through `qrSurface.ts`, and the palette is deliberately not stated
+ * here: the symbol has to be dark modules on a light field in BOTH schemes, because a scanner
+ * measures luminance and every surface token in `styles.css` flips under `[data-theme]`. The
+ * renderer's documented black/white pair supplies it, and `QRDisplay.test.tsx` pins the result
+ * at the pixels. What the panel adds on top is a fixed light plate
+ * (`--qrbit-signal-subtle`, defined once at `:root` and never redefined for dark) so the code
+ * never sits on an inverted background, and an enlarge treatment that is a real Mantine
+ * `Button` — reachable by tap and by keyboard, `aria-pressed` so the state is announced.
+ *
+ * The URL is always printed as text, whether the code drew or not: a QR that cannot be scanned
+ * must still be typable, and a code that is only a picture is a code that can fail silently.
  */
 
 import { toCanvas } from 'qrcode'
 import { useEffect, useRef, useState } from 'react'
-import { Modal } from '@mantine/core'
+import type { JSX } from 'react'
+import { Button, Group, Modal, Stack, Text, Title } from '@mantine/core'
+import { IconArrowsMaximize, IconRefresh, IconX } from '@tabler/icons-react'
 import { APP_URL, buildSessionUrl } from '../config'
 import { WithMantine } from './common/WithMantine'
+import { qrRenderOptions, releaseCanvasSizing } from './qrSurface'
 
 /** Where the session URL comes from: one of the two, never both. */
 type SessionSource = { url: string; code?: undefined } | { url?: undefined; code: string }
@@ -25,37 +38,28 @@ export type QRDisplayProps = SessionSource & {
   onRefresh?: () => void
 }
 
-/** Default rendered size. Matches the frame's inner width (styles.css: 18rem less padding). */
-const DEFAULT_SIZE = 256
-
 /**
- * The error-correction floor for a screen-to-camera scan: the redundancy buys back a
- * reflection or a slightly soft focus, and level M still keeps a session URL at 29 modules
- * (version 3), which is roughly 7 pixels per module at the default size.
+ * The resting size: the top of DESIGN.md's 195–240px band for the pairing panel, which is the
+ * largest code that still fits the frame's inner width (18rem less padding) and stays readable
+ * at arm's length.
  */
-const QR_ERROR_CORRECTION_LEVEL = 'M'
+const DEFAULT_SIZE = 240
 
-/** The QR spec's quiet zone, in modules. The renderer's default, pinned so it cannot drift. */
-const QR_QUIET_ZONE_MODULES = 4
+/** The plate behind the code: light in both schemes, for the reason given at the top. */
+const WELL_STYLE = {
+  background: 'var(--qrbit-signal-subtle)',
+  borderRadius: 'var(--qrbit-radius-md)',
+} as const
 
-/** The QR palette. `qrcode` parses RGBA hex, so the alpha byte is explicit. */
-const QR_DARK_MODULES = '#000000ff'
-const QR_LIGHT_MODULES = '#ffffffff'
-
-/** The same light colour as CSS: painted behind the canvas, so the panel is light even before the draw. */
-const QR_LIGHT_PANEL = QR_LIGHT_MODULES.slice(0, 7)
-
-/**
- * PLAN.md §7's "enlarge": twice the rendered size, capped so the code still fits a laptop
- * panel instead of swallowing the library below it.
- */
-const ENLARGED_SCALE = 2
-const ENLARGED_MAX_SIZE = 512
-
-/**
- * Rendering above this ratio costs bitmap memory without adding detail a camera can use.
- */
-const MAX_PIXEL_RATIO = 3
+/** The corner reticles, one per corner, on the code's own well. */
+const RETICLE_STYLE = {
+  position: 'absolute',
+  width: 'var(--qrbit-space-md)',
+  height: 'var(--qrbit-space-md)',
+  borderStyle: 'solid',
+  borderColor: 'var(--qrbit-signal)',
+  pointerEvents: 'none',
+} as const
 
 type GenerationStatus = 'generating' | 'ready' | 'error'
 
@@ -82,19 +86,6 @@ function resolveSource(source: SessionSource): { url: string; code: string | nul
   return { url: buildSessionUrl(source.code), code: source.code }
 }
 
-/**
- * The canvas bitmap size in device pixels.
- *
- * The canvas is laid out in CSS pixels but rasterised in its own pixel grid, so a bitmap
- * rendered at one pixel per CSS pixel is upscaled (and blurred) on any modern phone. The
- * ratio is clamped because past 3× the extra pixels are invisible to a camera.
- */
-function bitmapSize(cssSize: number): number {
-  const ratio = window.devicePixelRatio
-  const usable = Number.isFinite(ratio) && ratio > 1 ? Math.min(ratio, MAX_PIXEL_RATIO) : 1
-  return Math.round(cssSize * usable)
-}
-
 export function QRDisplay(props: QRDisplayProps) {
   const { caption = 'Scan this to send files here', size = DEFAULT_SIZE, onRefresh } = props
   const { url, code } = resolveSource(props)
@@ -118,15 +109,7 @@ export function QRDisplay(props: QRDisplayProps) {
           return
         }
 
-        await toCanvas(canvas, url, {
-          errorCorrectionLevel: QR_ERROR_CORRECTION_LEVEL,
-          margin: QR_QUIET_ZONE_MODULES,
-          width: bitmapSize(size),
-          color: {
-            dark: QR_DARK_MODULES,
-            light: QR_LIGHT_MODULES,
-          },
-        })
+        await toCanvas(canvas, url, qrRenderOptions(size))
 
         if (!cancelled) setStatus('ready')
       } catch {
@@ -137,8 +120,7 @@ export function QRDisplay(props: QRDisplayProps) {
          * outrank this element's CSS size. Take the sizing back after every draw, whether
          * it succeeded or not.
          */
-        canvas.style.width = '100%'
-        canvas.style.height = 'auto'
+        releaseCanvasSizing(canvas)
       }
     }
 
@@ -149,21 +131,34 @@ export function QRDisplay(props: QRDisplayProps) {
     }
   }, [url, size])
 
-  // Draw fullscreen canvas when enlarged modal is opened
+  /*
+   * The enlarged code is a second canvas, drawn when the projection opens: a modal that
+   * renders an empty box would be worse than no enlargement at all, and sizing the hidden
+   * resting canvas to 480px would spend memory on pixels nobody is looking at.
+   */
   useEffect(() => {
-    if (!enlarged) return
-    const fsCanvas = fullscreenCanvasRef.current
-    if (!fsCanvas || fsCanvas.getContext('2d') === null) return
+    if (!enlarged) return undefined
+    const fullscreen = fullscreenCanvasRef.current
+    if (fullscreen === null || fullscreen.getContext('2d') === null) return undefined
 
-    void toCanvas(fsCanvas, url, {
-      errorCorrectionLevel: QR_ERROR_CORRECTION_LEVEL,
-      margin: QR_QUIET_ZONE_MODULES,
-      width: 480,
-      color: {
-        dark: QR_DARK_MODULES,
-        light: QR_LIGHT_MODULES,
-      },
-    }).catch(() => {})
+    let cancelled = false
+
+    const draw = async (): Promise<void> => {
+      try {
+        await toCanvas(fullscreen, url, qrRenderOptions(480))
+      } catch {
+        // Nothing to project: the resting code and the printed URL still pair, and the
+        // panel has no second error surface to light up.
+      } finally {
+        if (!cancelled) releaseCanvasSizing(fullscreen)
+      }
+    }
+
+    void draw()
+
+    return () => {
+      cancelled = true
+    }
   }, [enlarged, url])
 
   const ariaLabel = code === null ? `QR code pairing for ${url}` : `QR code pairing for session ${code}`
@@ -172,21 +167,32 @@ export function QRDisplay(props: QRDisplayProps) {
     <WithMantine>
       <div className="qr">
         <div
-          className="qr__frame"
+          className="qr__frame relative"
           style={{
-            ...(enlarged ? { maxWidth: '100%' } : {}),
-            position: 'relative',
+            ...WELL_STYLE,
+            padding: 'var(--qrbit-space-lg)',
+            // `styles.css` still frames this box with the Phase-1 dashed placeholder border.
+            // The code lives here now, so the division is a real 1px hairline (DESIGN.md,
+            // "Panels and Rows"); the colour stays the token the stylesheet already picks.
+            borderStyle: 'solid',
           }}
         >
-          {/* Optical alignment ticks at 4 corners */}
-          <div style={{ position: 'absolute', top: '6px', left: '6px', width: '10px', height: '10px', borderTop: '2px solid #1D4ED8', borderLeft: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
-          <div style={{ position: 'absolute', top: '6px', right: '6px', width: '10px', height: '10px', borderTop: '2px solid #1D4ED8', borderRight: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
-          <div style={{ position: 'absolute', bottom: '6px', left: '6px', width: '10px', height: '10px', borderBottom: '2px solid #1D4ED8', borderLeft: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
-          <div style={{ position: 'absolute', bottom: '6px', right: '6px', width: '10px', height: '10px', borderBottom: '2px solid #1D4ED8', borderRight: '2px solid #1D4ED8', pointerEvents: 'none', zIndex: 2 }} />
-
-          {/* Center reticle crosshair guides */}
-          <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', transform: 'translateY(-50%)', height: '1px', background: 'rgba(29, 78, 216, 0.12)', pointerEvents: 'none', zIndex: 2 }} />
-          <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '1px', background: 'rgba(29, 78, 216, 0.12)', pointerEvents: 'none', zIndex: 2 }} />
+          <span
+            aria-hidden="true"
+            style={{ ...RETICLE_STYLE, top: 'var(--qrbit-space-sm)', left: 'var(--qrbit-space-sm)', borderTopWidth: 2, borderLeftWidth: 2 }}
+          />
+          <span
+            aria-hidden="true"
+            style={{ ...RETICLE_STYLE, top: 'var(--qrbit-space-sm)', right: 'var(--qrbit-space-sm)', borderTopWidth: 2, borderRightWidth: 2 }}
+          />
+          <span
+            aria-hidden="true"
+            style={{ ...RETICLE_STYLE, bottom: 'var(--qrbit-space-sm)', left: 'var(--qrbit-space-sm)', borderBottomWidth: 2, borderLeftWidth: 2 }}
+          />
+          <span
+            aria-hidden="true"
+            style={{ ...RETICLE_STYLE, bottom: 'var(--qrbit-space-sm)', right: 'var(--qrbit-space-sm)', borderBottomWidth: 2, borderRightWidth: 2 }}
+          />
 
           {status === 'generating' ? (
             <span className="qr__placeholder-label" role="status">
@@ -210,103 +216,99 @@ export function QRDisplay(props: QRDisplayProps) {
               display: status === 'ready' ? 'block' : 'none',
               width: '100%',
               height: 'auto',
-              maxWidth: `${enlarged ? Math.min(size * ENLARGED_SCALE, ENLARGED_MAX_SIZE) : size}px`,
-              background: QR_LIGHT_PANEL,
+              maxWidth: `${size}px`,
             }}
           />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '8px', marginBottom: '2px', fontSize: '12px', fontWeight: 600, color: '#0F766E' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981', display: 'inline-block' }} />
-          <span>Beacon Ready · P2P Telemetry</span>
-        </div>
+
         <p className="qr__caption">{caption}</p>
         {/* PLAN.md §16 Phase 6's manual fallback: the code is always readable, QR or not. */}
         <p className="qr__caption">
           Manual entry: <code className="qr__url">{code ?? url}</code>
         </p>
-        <div className="qr__actions">
-          <button
-            type="button"
-            className="button button--link"
+        <Group
+          className="qr__actions"
+          justify="center"
+          gap="xs"
+          wrap="wrap"
+          mt="xs"
+        >
+          <Button
+            variant="subtle"
+            size="sm"
             aria-pressed={enlarged}
+            leftSection={<IconArrowsMaximize size={16} aria-hidden="true" />}
             onClick={() => {
               setEnlarged((current) => !current)
             }}
           >
             {enlarged ? 'Shrink QR' : 'Enlarge QR'}
-          </button>
+          </Button>
           {onRefresh ? (
-            <button type="button" className="button button--link" onClick={onRefresh}>
+            <Button
+              variant="subtle"
+              size="sm"
+              leftSection={<IconRefresh size={16} aria-hidden="true" />}
+              onClick={onRefresh}
+            >
               New code
-            </button>
+            </Button>
           ) : null}
-        </div>
+        </Group>
 
-        {/* Fullscreen Enlarge Modal for easy scanning across rooms or on desktop */}
+        {/* PLAN §7's "enlarge": the same code, projected for a phone across the room. */}
         <Modal
           opened={enlarged}
           onClose={() => setEnlarged(false)}
           fullScreen
-          title="Session QR Code"
+          title="Scan this from the other device"
           styles={{
-            header: { background: '#121316', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' },
+            content: { background: 'var(--qrbit-canvas)' },
+            header: { background: 'var(--qrbit-raised)' },
             body: {
-              background: '#0a0b0e',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
+              gap: 'var(--qrbit-space-xl)',
               minHeight: 'calc(100vh - 60px)',
-              padding: '2rem',
+              padding: 'var(--qrbit-space-xxl)',
             },
           }}
         >
           <div
-            style={{
-              background: '#ffffff',
-              padding: '1.5rem',
-              borderRadius: '16px',
-              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.9)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            className="qr__projected grid place-items-center"
+            style={{ ...WELL_STYLE, padding: 'var(--qrbit-space-lg)' }}
           >
             <canvas
               ref={fullscreenCanvasRef}
+              role="img"
+              aria-label={ariaLabel}
+              className="block"
               style={{
                 width: 'min(70vh, 80vw, 480px)',
                 height: 'min(70vh, 80vw, 480px)',
-                display: 'block',
+                maxWidth: '100%',
               }}
             />
           </div>
           {code ? (
-            <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-              <p style={{ color: '#909296', margin: '0 0 0.5rem 0', fontSize: '0.95rem' }}>
-                Session Code
-              </p>
-              <code
-                style={{
-                  fontSize: '2.25rem',
-                  fontWeight: 700,
-                  letterSpacing: '0.22em',
-                  fontFamily: 'monospace',
-                  color: '#4ade80',
-                }}
-              >
-                {code}
-              </code>
-            </div>
+            <Stack gap="xs" align="center">
+              <Title order={3} className="qrbit-text-title" c="dimmed">
+                Session code
+              </Title>
+              {/* styles.css's `.code` is the session-code primitive: mono, 24px, tracked. */}
+              <code className="code">{code}</code>
+            </Stack>
           ) : null}
-          <button
-            type="button"
-            className="button"
-            style={{ marginTop: '2rem', width: 'auto', padding: '0.75rem 2.5rem' }}
+          <Button
+            variant="default"
+            size="sm"
+            leftSection={<IconX size={16} aria-hidden="true" />}
             onClick={() => setEnlarged(false)}
           >
-            Close Fullscreen
-          </button>
+            Close fullscreen
+          </Button>
         </Modal>
       </div>
     </WithMantine>

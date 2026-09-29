@@ -14,6 +14,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { ManualCodeEntry } from './ManualCodeEntry'
+import type { ManualCodeEntryProps } from './ManualCodeEntry'
 
 const VALID_CODE = 'A7X3K9P2'
 
@@ -30,7 +31,7 @@ function SessionLanding() {
   return <div className="session-landing" data-search={location.search} />
 }
 
-function renderEntry(): HTMLDivElement {
+function renderEntry(props: ManualCodeEntryProps = {}): HTMLDivElement {
   const element = document.createElement('div')
   document.body.append(element)
   const created = createRoot(element)
@@ -39,7 +40,7 @@ function renderEntry(): HTMLDivElement {
     created.render(
       <MemoryRouter initialEntries={['/']}>
         <Routes>
-          <Route path="/" element={<ManualCodeEntry />} />
+          <Route path="/" element={<ManualCodeEntry {...props} />} />
           <Route path="/session" element={<SessionLanding />} />
         </Routes>
       </MemoryRouter>,
@@ -67,7 +68,6 @@ function typeInto(field: HTMLInputElement, value: string): void {
     field.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-
 function submit(element: HTMLElement): void {
   const form = element.querySelector('form')
   if (!(form instanceof HTMLFormElement)) throw new Error('test bug: no form')
@@ -165,5 +165,33 @@ describe('ManualCodeEntry (PLAN.md §8, §16 Phase 6)', () => {
 
     typeInto(codeInput(element), VALID_CODE)
     expect(errorText(element)).toBe(null)
+  })
+
+  /*
+   * The other half of the contract HomeView depends on: when a caller owns routing, the
+   * validated code goes to it and this component does not navigate. Without this case the
+   * panel's fallback would be a form whose submission nobody had checked.
+   */
+  it('hands a validated code to the caller instead of navigating', () => {
+    const onSubmit = vi.fn()
+    const element = renderEntry({ onSubmit })
+
+    typeInto(codeInput(element), VALID_CODE.toLowerCase())
+    submit(element)
+
+    expect(onSubmit).toHaveBeenCalledWith(VALID_CODE)
+    expect(landingSearch(element)).toBe(null)
+  })
+
+  it('does not hand a malformed code to the caller', () => {
+    const onSubmit = vi.fn()
+    const element = renderEntry({ onSubmit })
+
+    typeInto(codeInput(element), 'NOPE1234')
+    submit(element)
+
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(landingSearch(element)).toBe(null)
+    expect(errorText(element)).toContain('session alphabet')
   })
 })
