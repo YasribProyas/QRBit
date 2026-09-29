@@ -91,3 +91,17 @@ left as stale checkboxes; the git log is the record.
 - [ ] **Two icon libraries ship.** `@tabler/icons-react` and `lucide-react` (added by a parallel
       design pass, 10 files). Lanes were told to use tabler in new code and not to mass-migrate.
       A one-commit sweep to tabler would drop a dependency and ~a bundle's worth of duplicates.
+
+- [ ] **`clearLibrary` does not exist — Settings has no Clear/Vault-wipe control, by design.**
+      A Lane D1 restyle brief asked Settings to expose "Clear library" confirmed through
+      `ConfirmDelete`; the capability is absent (`lib/library.ts` exports only
+      `deleteFolder`/`deleteItem`/`deleteFile`; the store exposes no bulk clear). The lane
+      refused rather than looping per-object deletes inside Settings, and it was right: that
+      would create a NEW destructive path which is non-atomic (a mid-run failure leaves a
+      half-cleared vault the user cannot audit) and costs N full `syncFromIdb()` re-reads via
+      `writeThenSync`. Required shape before any UI is allowed: one IDB `readwrite` transaction
+      spanning every store, all-or-nothing, a typed throw on partial failure, `refresh()` once
+      after success, a test proving a forced mid-transaction error leaves the library COMPLETE,
+      and copy that names the consequence ("Delete all N dossiers and M folders from this
+      device?"). Schedule only after the locked-block lane releases `lib/library.ts` +
+      `libraryStore.ts`. Do not ship a disabled placeholder in the meantime.
