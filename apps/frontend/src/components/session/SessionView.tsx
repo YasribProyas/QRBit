@@ -18,7 +18,7 @@ import { FolderPickerModal } from '../library/FolderPickerModal'
 import { WithMantine } from '../common/WithMantine'
 import { sessionItemsToLibraryFile } from '../../lib/dossier'
 import { ROOT_FOLDER_ID } from '../../lib/library'
-import { ITEM_TYPE_ICONS } from '../../lib/itemType'
+import { ITEM_TYPE_ICONS, ITEM_TYPE_MARK_STYLE } from '../../lib/itemType'
 import { APP_URL } from '../../config'
 import type { SaveableSessionItem } from '../library/SaveToLibraryModal'
 import type { UseSessionResult } from '../../hooks/useSession'
@@ -301,36 +301,47 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {  const folder
             you want to keep. Anything you leave is discarded with the session.
           </p>
           <ul className="session-ended__items library-modal__items">
-            {rows.map((row) => (
-              <li
-                className="library-modal__item"
-                key={row.id}
-                data-saved={savedIds.includes(row.id) ? 'true' : undefined}
-              >
-                <span className="library-item__icon" aria-hidden="true">
-                  {ITEM_TYPE_ICONS[row.type]}
-                </span>
-                <span className="library-modal__item-name">{row.name}</span>
-                {savedIds.includes(row.id) ? (
-                  <Badge
-                    className="library-modal__saved"
-                    variant="light"
-                    color="success"
-                    radius="full"
-                    ff="sans"
-                    leftSection={<IconCheck size={13} aria-hidden="true" />}
-                  >
-                    Saved
-                  </Badge>
-                ) : null}
-                {!row.complete ? (
-                  /* Caution, not failure: the transfer stopped, nothing here says it broke. */
-                  <span className="library-modal__item-note qrbit-text-label" style={{ color: 'var(--qrbit-warning)' }}>
-                    Transfer did not finish
+            {rows.map((row) => {
+              const { Icon, label } = ITEM_TYPE_ICONS[row.type]
+
+              return (
+                <li
+                  className="library-modal__item"
+                  key={row.id}
+                  data-saved={savedIds.includes(row.id) ? 'true' : undefined}
+                >
+                  {/*
+                    The receive sheet has to distinguish a locked item from a text note on
+                    more than a picture: the glyph is decorative and the word names the type.
+                  */}
+                  <span className="library-item__icon" style={ITEM_TYPE_MARK_STYLE}>
+                    <Icon size={16} aria-hidden="true" />
+                    <Text span className="qrbit-text-label" c="dimmed">
+                      {label}
+                    </Text>
                   </span>
-                ) : null}
-              </li>
-            ))}
+                  <span className="library-modal__item-name">{row.name}</span>
+                  {savedIds.includes(row.id) ? (
+                    <Badge
+                      className="library-modal__saved"
+                      variant="light"
+                      color="success"
+                      radius="full"
+                      ff="sans"
+                      leftSection={<IconCheck size={13} aria-hidden="true" />}
+                    >
+                      Saved
+                    </Badge>
+                  ) : null}
+                  {!row.complete ? (
+                    /* Caution, not failure: the transfer stopped, nothing here says it broke. */
+                    <span className="library-modal__item-note qrbit-text-label" style={{ color: 'var(--qrbit-warning)' }}>
+                      Transfer did not finish
+                    </span>
+                  ) : null}
+                </li>
+              )
+            })}
           </ul>
           <Group gap="sm" wrap="wrap">
             {/*

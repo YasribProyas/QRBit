@@ -39,7 +39,7 @@ import { LockedItemComposeModal } from './LockedItemComposeModal'
 import type { LockedItemInput } from './LockedItemComposeModal'
 import { FolderPicker } from '../library/FolderPicker'
 import { itemsInFolder } from '../../lib/folders'
-import { ITEM_TYPE_ICONS } from '../../lib/itemType'
+import { ITEM_TYPE_ICONS, ITEM_TYPE_MARK_STYLE } from '../../lib/itemType'
 import type { LibraryItem } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import { fileBlocksToLibraryItems } from '../../lib/dossier'
@@ -310,31 +310,39 @@ function LibrarySendSheetInner({ onSend, onClose }: LibrarySendSheetProps) {
           <p className="library-modal__empty muted">Nothing in this folder.</p>
         ) : (
           <ul className="library-modal__items">
-            {listed.map((item) => (
-              <li className="library-modal__item" key={item.id}>
-                <span className="library-item__icon" aria-hidden="true">
-                  {ITEM_TYPE_ICONS[item.type]}
-                </span>
-                <Button
-                  type="button"
-                  className="library-modal__item-name library-send__item"
-                  variant="subtle"
-                  size="xs"
-                  justify="flex-start"
-                  style={{ flex: '1 1 auto', minWidth: 0 }}
-                  onClick={() => {
-                    send(item)
-                  }}
-                >
-                  {item.name}
-                </Button>
-                {sentIds.includes(item.id) ? (
-                  <Badge className="library-modal__saved" variant="light" color="success" radius="full" ff="sans">
-                    Sent
-                  </Badge>
-                ) : null}
-              </li>
-            ))}
+            {listed.map((item) => {
+              const { Icon, label } = ITEM_TYPE_ICONS[item.type]
+
+              return (
+                <li className="library-modal__item" key={item.id}>
+                  {/* Glyph decorative, word carries the name — see lib/itemType.ts. */}
+                  <span className="library-item__icon" style={ITEM_TYPE_MARK_STYLE}>
+                    <Icon size={16} aria-hidden="true" />
+                    <Text span className="qrbit-text-label" c="dimmed">
+                      {label}
+                    </Text>
+                  </span>
+                  <Button
+                    type="button"
+                    className="library-modal__item-name library-send__item"
+                    variant="subtle"
+                    size="xs"
+                    justify="flex-start"
+                    style={{ flex: '1 1 auto', minWidth: 0 }}
+                    onClick={() => {
+                      send(item)
+                    }}
+                  >
+                    {item.name}
+                  </Button>
+                  {sentIds.includes(item.id) ? (
+                    <Badge className="library-modal__saved" variant="light" color="success" radius="full" ff="sans">
+                      Sent
+                    </Badge>
+                  ) : null}
+                </li>
+              )
+            })}
           </ul>
         )}
 

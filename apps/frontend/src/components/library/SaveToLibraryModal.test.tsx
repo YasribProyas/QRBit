@@ -5,8 +5,10 @@
  * The dialog is presentational: it reports `(itemId, folderId)` per item and a
  * folder for "save all", and the page does the saving. These tests pin the folder
  * picker (Root as `null`, the tree below it), both save shapes, the two states a row
- * cannot be saved from (unfinished transfer, already saved), and the rejection path —
- * a save that failed must not look like a save that worked.
+ * cannot be saved from (unfinished transfer, already saved), the rejection path — a
+ * save that failed must not look like a save that worked — and the row's type mark: a
+ * drawn glyph with the word beside it, never a Unicode character standing in for the
+ * icon system (see `lib/itemType.ts`).
  */
 
 import { act, createElement } from 'react'
@@ -114,6 +116,36 @@ function pickFolder(element: HTMLElement, name: string): void {
   throw new Error(`test bug: no folder option ${name}`)
 }
 
+/**
+ * The characters `lib/itemType.ts` used to hand back as type marks — pilcrow, pencil,
+ * framed picture, paperclip, lock — written as escapes so this file does not itself contain
+ * the glyphs it forbids. A mark is a drawn icon plus a word now; if any of these reappears
+ * in a rendered row, the icon system has been replaced by a Unicode stand-in again.
+ */
+const RETIRED_GLYPHS = ['\u00B6', '\u270E', '\u{1F5BC}', '\u{1F4CE}', '\u{1F512}']
+
+/**
+ * The type mark rendered beside a row's name: the word, plus the drawn glyph beside it.
+ *
+ * This is what the retired emoji array used to pin — that a row says what kind of item it
+ * holds. A locked payload must not be distinguishable from a text note only by a pictograph
+ * a screen reader never hears, so the assertion is on the word and on the glyph being a
+ * real, decorative SVG rather than text.
+ */
+function marksOf(element: HTMLElement): Array<{ word: string; drawn: boolean; decorative: boolean }> {
+  return [...element.querySelectorAll<HTMLElement>('.library-modal__item .library-item__icon')].map(
+    (mark) => {
+      const glyph = mark.querySelector('svg')
+
+      return {
+        word: mark.textContent ?? '',
+        drawn: glyph !== null,
+        decorative: glyph?.getAttribute('aria-hidden') === 'true',
+      }
+    },
+  )
+}
+
 beforeEach(() => {
   ;(globalThis as unknown as Record<string, unknown>)['IS_REACT_ACT_ENVIRONMENT'] = true
   vi.clearAllMocks()
@@ -129,7 +161,7 @@ afterEach(() => {
 })
 
 describe('SaveToLibraryModal', () => {
-  it('lists the items with their type icons and starts on Root', () => {
+  it('lists the items with their type marks and starts on Root', () => {
     const harness = renderModal()
 
     const names = [...harness.element.querySelectorAll('.library-modal__item-name')].map(
@@ -137,14 +169,42 @@ describe('SaveToLibraryModal', () => {
     )
     expect(names).toEqual(['Text note', 'holiday.png', 'Server root key', 'half-sent.pdf'])
 
-    const icons = [...harness.element.querySelectorAll('.library-modal__item .library-item__icon')].map(
-      (node) => node.textContent,
-    )
-    expect(icons).toEqual(['¶', '🖼', '🔒', '📎'])
+    // One drawn, decorative glyph and one word per row, in the row's own type order.
+    expect(marksOf(harness.element)).toEqual([
+      { word: 'Text', drawn: true, decorative: true },
+      { word: 'Image', drawn: true, decorative: true },
+      { word: 'Locked', drawn: true, decorative: true },
+      { word: 'File', drawn: true, decorative: true },
+    ])
 
     const rootOption = harness.element.querySelector('.folder-picker__option')
     expect(rootOption?.getAttribute('aria-checked')).toBe('true')
     expect(button(harness.element, '.library-modal__save-all').textContent).toBe('Save all (3)')
+  })
+
+  it('names a locked item in words, not in a glyph', () => {
+    const harness = renderModal()
+
+    const lockedRow = itemRow(harness.element, 'Server root key')
+    expect(lockedRow.textContent).toContain('Locked')
+    // The text note's row says "Text" instead: the two rows differ by a word a user reads.
+    expect(itemRow(harness.element, 'Text note').textContent).toContain('Text')
+    expect(lockedRow.querySelector('.library-item__icon')?.hasAttribute('aria-hidden')).toBe(false)
+  })
+
+  it('renders no Unicode glyph standing in for an icon', () => {
+    const harness = renderModal()
+    const text = harness.element.textContent ?? ''
+
+    for (const glyph of RETIRED_GLYPHS) {
+      expect(text).not.toContain(glyph)
+    }
+
+    // …and the words the glyphs used to stand for are actually on screen.
+    expect(text).toContain('Text')
+    expect(text).toContain('Image')
+    expect(text).toContain('Locked')
+    expect(text).toContain('File')
   })
 
   it('saves one item into the picked folder', async () => {

@@ -19,10 +19,10 @@
  */
 
 import { useState } from 'react'
-import { Button } from '@mantine/core'
+import { Button, Text } from '@mantine/core'
 import { IconFolderPlus } from '@tabler/icons-react'
 import { FolderPicker } from './FolderPicker'
-import { ITEM_TYPE_ICONS } from '../../lib/itemType'
+import { ITEM_TYPE_ICONS, ITEM_TYPE_MARK_STYLE } from '../../lib/itemType'
 import { WithMantine } from '../common/WithMantine'
 import type { LibraryFolder, LibraryItemType } from '../../lib/library'
 
@@ -143,6 +143,7 @@ function SaveToLibraryModalInner({
           <ul className="library-modal__items">
             {items.map((item) => {
               const saved = savedIds.includes(item.id)
+              const { Icon, label } = ITEM_TYPE_ICONS[item.type]
 
               return (
                 <li
@@ -150,8 +151,16 @@ function SaveToLibraryModalInner({
                   className="library-modal__item"
                   data-saved={saved ? 'true' : undefined}
                 >
-                  <span className="library-item__icon" aria-hidden="true">
-                    {ITEM_TYPE_ICONS[item.type]}
+                  {/*
+                    The drawn glyph is decorative; the word beside it is what names the type,
+                    so a screen reader hears "Locked" rather than nothing and a text-only
+                    rendering still says which kind of item this row is.
+                  */}
+                  <span className="library-item__icon" style={ITEM_TYPE_MARK_STYLE}>
+                    <Icon size={16} aria-hidden="true" />
+                    <Text span className="qrbit-text-label" c="dimmed">
+                      {label}
+                    </Text>
                   </span>
                   <span className="library-modal__item-name">{item.name}</span>
 
