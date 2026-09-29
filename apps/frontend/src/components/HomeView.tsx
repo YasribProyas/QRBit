@@ -346,23 +346,15 @@ export function HomeView({
             aria-label="Pair and send"
           >
             {/*
-              `m="auto"` rather than a centring utility: it takes whatever the column has left
-              over, so the pairing surface sits in the middle of its own space instead of being
-              a block at the top of a tall column with a void under it, and it collapses to zero
-              instead of clipping when the content is taller than the column.
+              `mx="auto"` centres the block horizontally inside a wide column; it is deliberately
+              NOT vertically centred. The two panel headings are peers -- the owner asked for this
+              heading "like the Local Library heading" -- and peers share a top line. With
+              `m="auto"` the left heading sat at ~80px and this one at ~253px, a 173px offset that
+              read as a layout that had not finished, in both the empty state and a full library.
+              Leftover space now goes to the bottom of both columns equally, which is calm; an
+              unaligned pair of headings is not.
             */}
-            {/*
-              `28rem` is the measure the panel's own lines ask for. Measured in a browser, the
-              status sentence is 344px wide at the Body role and the dot plus its gap costs 16
-              more, so the block wants ~360px of content box; `24rem` gave 352px and the sentence
-              wrapped to two lines, which is defect 5 as reported. The link row wants the same
-              room. The centring is unchanged and was already even (measured 34px above the block
-              and 34px below at 1440×900), so this widens the panel inside its own space rather
-              than moving it: the leftover is still split above and below, and DESIGN's rhythm is
-              honoured inside the block, where the headline has `xl` above it and its subline `xs`
-              below.
-            */}
-            <Stack gap="md" m="auto" maw="min(100%, 28rem)" w="100%">
+            <Stack gap="md" mx="auto" maw="min(100%, 28rem)" w="100%">
               {/*
                 The panel's title, at the same two roles as `Local Library` / `Dossiers stored
                 on this device`: Headline for the title, Body Secondary for the subline, and more
