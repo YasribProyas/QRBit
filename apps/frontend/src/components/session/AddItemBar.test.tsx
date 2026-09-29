@@ -8,10 +8,10 @@
  * test honest about the contract without needing a session.
  *
  * Scope rules are pinned here too, because "not built yet" is easy to regress in the
- * other direction: 🔒 must open the Phase 4 compose modal (and call `addLockedItem`,
- * never the other add methods directly), and 📚 must open the Phase 5 library sheet,
- * whose taps go to `sendLibraryItem` — the compose modal and the other add methods
- * stay untouched by it.
+ * other direction: the "Add locked item" control must open the Phase 4 compose modal (and
+ * call `addLockedItem`, never the other add methods directly), and "Send from library" must
+ * open the Phase 5 library sheet, whose taps go to `sendLibraryItem` — the compose modal and
+ * the other add methods stay untouched by it.
  *
  * The sheet is the one part of this component that reads the library store, so the
  * Phase 5 tests seed a real (fake-indexeddb) library and let the sheet load it. That is
@@ -154,6 +154,56 @@ async function seedLibrary(name: string, folderId: string): Promise<LibraryItem>
   return item
 }
 
+/**
+ * Puts one locked item in the library, for the rows that have to say "Locked" in words.
+ *
+ * The byte widths are `lib/library.ts`'s (§6.1: a 12-byte IV, a 16-byte salt) and the payload
+ * is opaque here — the sheet never decrypts, it only lists, so these bytes are never read.
+ */
+async function seedLockedLibrary(name: string, folderId: string): Promise<LibraryItem> {
+  const now = Date.now()
+  const item: LibraryItem = {
+    id: globalThis.crypto.randomUUID(),
+    folderId,
+    name,
+    type: 'locked',
+    createdAt: now,
+    updatedAt: now,
+    label: name,
+    innerType: 'text',
+    ciphertext: new Uint8Array(32),
+    iv: new Uint8Array(12),
+    salt: new Uint8Array(16),
+  }
+  await saveItem(item)
+  await useLibraryStore.getState().refresh()
+  return item
+}
+
+/**
+ * The characters `lib/itemType.ts` used to hand back as type marks — pilcrow, pencil,
+ * framed picture, paperclip, lock — as escapes, so this file does not contain the glyphs it
+ * forbids. A row's type is a drawn glyph plus a word now; any of these in a rendered sheet
+ * means the icon system went back to being a Unicode stand-in.
+ */
+const RETIRED_GLYPHS = ['\u00B6', '\u270E', '\u{1F5BC}', '\u{1F4CE}', '\u{1F512}']
+
+/** The sheet's row for one item name, keyed by the button the tap goes through. */
+function sheetRow(element: HTMLElement, name: string): HTMLElement {
+  for (const row of element.querySelectorAll<HTMLElement>('.library-modal__item')) {
+    if (row.querySelector('.library-send__item')?.textContent === name) return row
+  }
+  throw new Error(`test bug: no sheet row for ${name}`)
+}
+
+/** What one sheet row says about its item's type: the word, and the glyph beside it. */
+function sheetRowMark(element: HTMLElement, name: string): { word: string; glyph: string } {
+  const mark = sheetRow(element, name).querySelector<HTMLElement>('.library-item__icon')
+  if (mark === null) throw new Error(`test bug: no type mark on the row for ${name}`)
+
+  return { word: mark.textContent ?? '', glyph: mark.querySelector('svg')?.getAttribute('aria-hidden') ?? 'missing' }
+}
+
 /** The sheet's refresh runs on mount; this lets its promise land. */
 /** The sheet's refresh runs on mount; this lets its promise land. */
 async function settle(): Promise<void> {
@@ -195,7 +245,7 @@ afterEach(async () => {
 })
 
 describe('AddItemBar — text and rich text (PLAN.md §9)', () => {
-  it('adds an empty text item from T', () => {
+  it('adds an empty text item from the "Add text item" control', () => {
     const api = makeApi()
     const element = renderBar(api)
 
@@ -207,7 +257,7 @@ describe('AddItemBar — text and rich text (PLAN.md §9)', () => {
     expect(api.addFileItem).not.toHaveBeenCalled()
   })
 
-  it('adds an empty rich-text item from ¶', () => {
+  it('adds an empty rich-text item from the "Add rich text item" control', () => {
     const api = makeApi()
     const element = renderBar(api)
 
@@ -251,7 +301,7 @@ describe('AddItemBar — images and files (PLAN.md §9, §16 Phase 3)', () => {
     expect(api.addFileItem).toHaveBeenNthCalledWith(3, files[2])
   })
 
-  it('sends every file chosen through 📎 as its own item', () => {
+  it('sends every file chosen through "Add files" as its own item', () => {
     const api = makeApi()
     const element = renderBar(api)
     const fileInput = input(element, '.add-item-bar__file-input')
@@ -349,7 +399,7 @@ describe('AddItemBar — locked items (PLAN.md §16 Phase 4)', () => {
 })
 
 describe('AddItemBar — the from-library sheet (PLAN.md §9, §16 Phase 5, D8)', () => {
-  it('opens the Phase 5 library sheet from 📚', async () => {
+  it('opens the Phase 5 library sheet from "Send from library"', async () => {
     const api = makeApi()
     await seedLibrary('Portal password', 'root')
     const element = renderBar(api)
@@ -368,6 +418,25 @@ describe('AddItemBar — the from-library sheet (PLAN.md §9, §16 Phase 5, D8)'
     expect(api.sendLibraryItem).not.toHaveBeenCalled()
     expect(api.addTextItem).not.toHaveBeenCalled()
     expect(api.addFileItem).not.toHaveBeenCalled()
+  })
+
+  it('names each row’s type with a word beside a drawn glyph, never a Unicode mark', async () => {
+    const api = makeApi()
+    await seedLibrary('Loose note', 'root')
+    await seedLockedLibrary('Portal password', 'root')
+    const element = renderBar(api)
+
+    click(button(element, 'Send from library'))
+    await waitForRows(element, 2)
+
+    // The two rows differ by a word a user reads and an AT hears, not by a pictograph.
+    expect(sheetRowMark(element, 'Loose note')).toEqual({ word: 'Text', glyph: 'true' })
+    expect(sheetRowMark(element, 'Portal password')).toEqual({ word: 'Locked', glyph: 'true' })
+
+    const sheet = element.querySelector('.library-modal--send')?.textContent ?? ''
+    for (const glyph of RETIRED_GLYPHS) {
+      expect(sheet).not.toContain(glyph)
+    }
   })
 
   it('lists the library’s items and sends one per tap, without closing', async () => {
