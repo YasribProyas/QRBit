@@ -1,9 +1,16 @@
 import type {
   BlockType,
+  EncryptedBlockData,
   FileBlock,
   LibraryFile,
   LibraryItem,
   LibraryLockedItem,
+} from './library'
+import {
+  isLockedIntent,
+  isProtectedBlock,
+  isUnprotectedSecretBlock,
+  lockedTupleOf,
 } from './library'
 import { encryptItem, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from './crypto'
 import { formatByteSize, fileSizeText } from './byteSize'
@@ -32,12 +39,32 @@ import type { SessionItem } from '../store/sessionStore'
  *      can say "this block has no file yet" before the user presses Send. One rule, two
  *      readings; the two cannot disagree because the check is written once.
  *   4. Every number on the wire comes from the bytes themselves: `size` is `blob.size`, and a
- *      locked item's plaintext is measured against D6's cap before it is encrypted.
+ *      stored tuple is measured against D6's cap before it is handed over.
  *
- * The locked branch follows the same discipline and one more: a block the user locked is
- * checked BEFORE the attachment branches, so `isLocked` on an image block can no longer ship
- * its bytes in the clear, and nothing is encrypted under a password nobody set.
+ * The locked branch follows the same discipline and two more:
+ *
+ *   - a block the user locked is matched BEFORE every other branch — heading, key/value, note,
+ *     image and attachment alike — so no type branch can build an item out of the plaintext that
+ *     the tuple was made from. `isLocked` on an image block used to ship its bytes in the clear
+ *     for exactly this reason, and `shortText` did the same with the secret itself;
+ *   - **this module never encrypts.** A locked block travels as the `{ ciphertext, iv, salt }`
+ *      tuple it was stored as (decision D9), and a block with no tuple is REFUSED, not
+ *      encrypted here. Encryption used to happen on the way out, using `block.password` — the
+ *      field that also put the secret's own password into IndexedDB next to the secret. The
+ *      password now belongs to the edit session, never to the record, so the only place an
+ *      authored block can be encrypted is the editor (`encryptBlockPayload` below, called by
+ *      the row's Lock dialog and by Save). A dossier whose locked block was never encrypted
+ *      does not go out; the user is told which block and what to do about it.
  */
+
+/**
+ * AES-GCM's authentication tag, which `encryptItem` appends to the ciphertext.
+ *
+ * D6 caps the PLAINTEXT, so a stored tuple is sendable up to cap plus this tag — the same
+ * bound `hooks/useSession.ts` applies at the frame gate, restated here so a dossier can name
+ * the block that breaks it instead of failing inside the transport.
+ */
+const GCM_TAG_BYTE_LENGTH = 16
 
 /** Why one block cannot go on the wire. Machine-readable; the message is for people. */
 export type DossierSendFailureReason =
@@ -84,33 +111,13 @@ function sendFailure(
   return new DossierSendError(reason, block, `dossier: block ${block.id} ${detail}`)
 }
 
-/** Does this block travel as an encrypted tuple rather than as itself? */
-function isLockedBlock(block: FileBlock): boolean {
-  return block.type === 'locked' || block.isLocked === true
-}
-
 function isAttachmentBlock(block: FileBlock): boolean {
   return block.type === 'image' || block.type === 'fileAttachment'
 }
 
-/**
- * A locked block's stored `{ ciphertext, iv, salt }`, when it has a usable one.
- *
- * Anything that already carries a tuple travels byte-for-byte and is never re-encrypted here
- * (decision D9), so it also never needs a password a second time: the password was the one
- * that made those bytes.
- */
-function storedTuple(block: FileBlock): { ciphertext: Uint8Array; iv: Uint8Array; salt: Uint8Array } | null {
-  const data = block.lockedData
-  if (
-    data !== undefined &&
-    data.ciphertext instanceof Uint8Array &&
-    data.iv instanceof Uint8Array &&
-    data.salt instanceof Uint8Array
-  ) {
-    return { ciphertext: data.ciphertext, iv: data.iv, salt: data.salt }
-  }
-  return null
+/** The inner type a stored tuple declares, mapped to the §6.1 item's vocabulary. */
+function tupleInnerType(block: FileBlock): LibraryLockedItem['innerType'] {
+  return block.lockedData?.innerType === 'fileAttachment' ? 'file' : 'text'
 }
 
 /**
@@ -120,6 +127,9 @@ function storedTuple(block: FileBlock): { ciphertext: Uint8Array; iv: Uint8Array
  * label. Here, no content is simply no content, and `byteLength` is measured from the real
  * bytes (a Blob's `size`, a string's UTF-8 length) so D6 can be applied before anything is
  * read or encrypted.
+ *
+ * Only `encryptBlockPayload` consumes `bytes()`. The send path reads `byteLength` alone, because
+ * it never encrypts and must never hold a locked block's plaintext at all.
  */
 function lockedPlaintext(
   block: FileBlock,
@@ -144,13 +154,86 @@ function lockedPlaintext(
 }
 
 /**
+ * Encrypts an authored block's payload into the tuple it is stored as (PLAN.md §6.2, §11.4).
+ *
+ * This is the ONLY place a dossier block is encrypted, and it is reached from the editor: the
+ * row's Lock dialog and the Save prompt in `FileEditView`. Both hand it a password the user
+ * typed a moment before, so no record ever stores one and no code ever invents one — the defect
+ * this replaces ran `encryptItem` with the record's own stored password — defaulting to a
+ * literal four-letter hint — which locked a secret under a password from the source and then
+ * persisted that password beside the secret.
+ *
+ * `LOCKED_ITEM_MAX_PLAINTEXT_BYTES` (decision D6) and the empty payload are refused here, before
+ * any PBKDF2 work, with a `DossierSendError` a caller can put on screen. The plaintext buffer is
+ * zeroed whichever way the encryption goes; the strings a JS block holds cannot be overwritten,
+ * which is why the persistence boundary (`parseBlock`) refuses to store a plaintext beside a
+ * tuple rather than relying on every caller dropping the field.
+ */
+export async function encryptBlockPayload(
+  block: FileBlock,
+  password: string,
+): Promise<EncryptedBlockData> {
+  if (password === '') {
+    throw sendFailure(
+      'locked-password-missing',
+      block,
+      'cannot be encrypted under an empty password',
+    )
+  }
+
+  const source = lockedPlaintext(block)
+  if (source === null) {
+    throw sendFailure(
+      'locked-content-missing',
+      block,
+      `is locked and has no content or file to encrypt — this ${blockWord(block.type)} block needs something real to protect`,
+    )
+  }
+  if (source.byteLength > LOCKED_ITEM_MAX_PLAINTEXT_BYTES) {
+    throw sendFailure(
+      'locked-too-large',
+      block,
+      `is locked and holds ${formatByteSize(source.byteLength)}, over the ${formatByteSize(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)} a locked item may carry (decision D6) — lock a smaller payload, or send the file unlocked`,
+    )
+  }
+
+  const plaintext = await source.bytes()
+  try {
+    const tuple = await encryptItem(password, plaintext)
+    return { ...tuple, innerType: source.innerType === 'file' ? 'fileAttachment' : 'shortText' }
+  } finally {
+    zeroBytes(plaintext)
+  }
+}
+
+/** Overwrites a plaintext buffer this module no longer needs (PLAN.md §11.4). */
+function zeroBytes(bytes: Uint8Array): void {
+  bytes.fill(0)
+}
+
+/**
  * Why `block` cannot be sent, or `null` when it can. Synchronous and cheap: nothing here
  * encrypts, reads a blob or allocates bytes.
  */
 function blockSendFailure(block: FileBlock): DossierSendError | null {
-  if (isLockedBlock(block)) {
-    if (storedTuple(block) !== null) return null
+  if (isLockedIntent(block)) {
+    const tuple = lockedTupleOf(block)
+    if (tuple !== null) {
+      // D9: the stored tuple is what travels. The only thing that can make it unsendable is
+      // D6's one-frame bound on the ciphertext it turns into.
+      if (tuple.ciphertext.byteLength > LOCKED_ITEM_MAX_PLAINTEXT_BYTES + GCM_TAG_BYTE_LENGTH) {
+        return sendFailure(
+          'locked-too-large',
+          block,
+          `is locked and its ciphertext is ${formatByteSize(tuple.ciphertext.byteLength)}, over the ${formatByteSize(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)} a locked item may carry (decision D6)`,
+        )
+      }
+      return null
+    }
 
+    // No tuple: this block was never encrypted, and this module cannot encrypt it here because
+    // a password is not a field of a stored block. Refuse rather than send the secret as a
+    // plain text item, which is what "it was only ever plaintext" would quietly mean.
     const plaintext = lockedPlaintext(block)
     if (plaintext === null) {
       return sendFailure(
@@ -166,14 +249,11 @@ function blockSendFailure(block: FileBlock): DossierSendError | null {
         `is locked and holds ${formatByteSize(plaintext.byteLength)}, over the ${formatByteSize(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)} a locked item may carry (decision D6) — lock a smaller payload, or send the file unlocked`,
       )
     }
-    if (typeof block.password !== 'string' || block.password === '') {
-      return sendFailure(
-        'locked-password-missing',
-        block,
-        'is locked but has no password, and an item locked under a password nobody chose cannot be opened by anybody who needs it',
-      )
-    }
-    return null
+    return sendFailure(
+      'locked-password-missing',
+      block,
+      'is locked but holds plaintext with no encrypted payload: it was never given a password, and nothing here may choose one for it',
+    )
   }
 
   if (isAttachmentBlock(block) && !(block.blob instanceof Blob)) {
@@ -217,7 +297,7 @@ export function describeSendFailure(cause: unknown): string {
       case 'locked-content-missing':
         return 'A locked block has nothing to encrypt. Give it content or a file, or unlock it, then send again.'
       case 'locked-password-missing':
-        return 'A locked block has no password. Set one with the lock on that block, or unlock it, then send again.'
+        return 'A locked block is not encrypted yet — it still holds plaintext and no password was ever set for it. Use Lock on that block to encrypt it, or unlock it, then send again.'
       case 'locked-too-large':
         return `A locked block is larger than the ${formatByteSize(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)} a locked item can carry (decision D6). Send that file unlocked, or lock a smaller payload.`
     }
@@ -246,15 +326,34 @@ export function getFirstBlockPreview(file: LibraryFile): string {
     const size = fileSizeText(b.fileSize)
     return size === null ? `${word}: ${name}` : `${word}: ${name} (${size})`
   }
-  if (b.type === 'locked' || b.isLocked) return `Encrypted: ${b.label || 'Secret'}`
+  if (isLockedIntent(b)) {
+    // The label is plaintext by design (PLAN.md §9); the payload is never in this line. And a
+    // block that was never encrypted is not called encrypted, whatever its lock flag says.
+    const word = isProtectedBlock(b) ? 'Encrypted' : 'Not encrypted'
+    return `${word}: ${b.label || 'Secret'}`
+  }
   return 'Block content preview'
 }
 
 /**
- * Returns true if the file contains any password-locked entities.
+ * True when the dossier carries at least one block whose payload really is ciphertext.
+ *
+ * This is the question a lock badge answers, so it is answered from the tuple and not from the
+ * `isLocked` flag: a row written before the editor encrypted on save would otherwise go on
+ * wearing a badge over plaintext (PLAN.md §6.2 — the promise is the tuple, not the icon).
  */
 export function hasLockedBlocks(file: LibraryFile): boolean {
-  return file.blocks?.some((b) => b.type === 'locked' || b.isLocked === true) ?? false
+  return file.blocks?.some(isProtectedBlock) ?? false
+}
+
+/**
+ * True when the dossier carries a block that is meant to be secret and is stored as plaintext.
+ *
+ * The warning half of `hasLockedBlocks`: a UI can offer the user the difference between
+ * "encrypted" and "not encrypted yet" without re-deriving the rule.
+ */
+export function hasUnprotectedSecretBlocks(file: LibraryFile): boolean {
+  return file.blocks?.some(isUnprotectedSecretBlock) ?? false
 }
 
 /**
@@ -262,11 +361,12 @@ export function hasLockedBlocks(file: LibraryFile): boolean {
  * the WebRTC DataChannel via `useSession`.
  *
  * It throws `DossierSendError` for the first block that cannot be sent — which, in practice,
- * means an attachment block with no file chosen for it, or a locked block with nothing real to
- * encrypt, no password, or a payload over D6's cap. Nothing is ever substituted for the bytes
- * the user does not have, and because the whole call rejects, a dossier never goes out half
- * built: the caller receives every item or none. `findUnsendableBlocks` is the same rule for a
- * UI that wants to say so before a Send is attempted.
+ * means an attachment block with no file chosen for it, or a locked block that was never
+ * encrypted (no tuple, so nothing here may send it, and nothing here may encrypt it either:
+ * a password is not a stored field), or one whose payload is over D6's cap. Nothing is ever
+ * substituted for the bytes the user does not have, and because the whole call rejects, a
+ * dossier never goes out half built: the caller receives every item or none. `findUnsendableBlocks`
+ * is the same rule for a UI that wants to say so before a Send is attempted.
  */
 export async function fileBlocksToLibraryItems(file: LibraryFile): Promise<LibraryItem[]> {
   const items: LibraryItem[] = []
@@ -280,7 +380,19 @@ export async function fileBlocksToLibraryItems(file: LibraryFile): Promise<Libra
     const failure = blockSendFailure(block)
     if (failure !== null) throw failure
 
-    if (block.type === 'heading') {
+    if (isLockedIntent(block)) {
+      /*
+       * FIRST, before any type branch. `heading`, `shortText` and `richText` each build a text
+       * item out of the block's own plaintext, and the lock dialog sits on every row — so a
+       * key/value field the user encrypted would have gone out as `Label: the-secret` while its
+       * ciphertext sat unused. A block whose payload is a tuple travels as that tuple (decision
+       * D9) and is never rendered as the field it was written in.
+       *
+       * `blockSendFailure` above already refused a locked block with no tuple, so what reaches
+       * this branch is ciphertext.
+       */
+      items.push(lockedItemFromBlock(block, file.folderId, now))
+    } else if (block.type === 'heading') {
       items.push({
         id: block.id,
         folderId: file.folderId,
@@ -310,8 +422,6 @@ export async function fileBlocksToLibraryItems(file: LibraryFile): Promise<Libra
         createdAt: now,
         updatedAt: now,
       })
-    } else if (isLockedBlock(block)) {
-      items.push(await lockedItemFromBlock(block, file.folderId, now))
     } else if (block.type === 'image' || block.type === 'fileAttachment') {
       const blob = requireAttachmentBlob(block)
       const isImage = block.type === 'image'
@@ -354,52 +464,30 @@ function requireAttachmentBlob(block: FileBlock): Blob {
 }
 
 /**
- * One locked block as a §6.1 locked item: ciphertext, and nothing else.
+ * One locked block as a §6.1 locked item: the ciphertext tuple it stores, byte-for-byte.
  *
- * Either the stored tuple travels byte-for-byte (D9 — this module never decrypts and never
- * re-encrypts), or the block's real content is encrypted with the password the user set. The
- * item carries no `blob`, no `content` and no `size` field, so there is no plaintext left on
- * the sendable record to leak, and a locked `image`/`fileAttachment` block can no longer be
- * shipped in the clear by the attachment branch that used to be tested first.
+ * D9 in one sentence: the `{ ciphertext, iv, salt }` tuple is what travels, the password never
+ * does, and this module neither decrypts nor re-encrypts. The item therefore carries no `blob`,
+ * no `content` and no `size` — there is no plaintext on the sendable record to leak — and a
+ * locked `image`/`fileAttachment` block cannot be shipped in the clear by the attachment branch
+ * that used to be tested first.
  *
- * The `blockSendFailure` checks have already run for this block (the loop below applies them
- * per block); the throws here keep that proof local rather than assuming it.
+ * A block with no tuple never reaches here: `blockSendFailure` refuses it, because encrypting it
+ * would need a password and a password is not a field of a stored block. The throw below keeps
+ * that proof local rather than assuming the caller ran the gate.
  */
-async function lockedItemFromBlock(
+function lockedItemFromBlock(
   block: FileBlock,
   folderId: string,
   now: number,
-): Promise<LibraryLockedItem> {
-  let ciphertext: Uint8Array
-  let iv: Uint8Array
-  let salt: Uint8Array
-  let innerType: LibraryLockedItem['innerType']
-
-  const stored = storedTuple(block)
-  if (stored !== null) {
-    ciphertext = stored.ciphertext
-    iv = stored.iv
-    salt = stored.salt
-    innerType = block.lockedData?.innerType === 'fileAttachment' ? 'file' : 'text'
-  } else {
-    const source = lockedPlaintext(block)
-    if (source === null) {
-      throw sendFailure(
-        'locked-content-missing',
-        block,
-        'is locked and has no content or file to encrypt',
-      )
-    }
-    const password = block.password
-    if (password === undefined || password === '') {
-      throw sendFailure('locked-password-missing', block, 'is locked but has no password')
-    }
-
-    const tuple = await encryptItem(password, await source.bytes())
-    ciphertext = tuple.ciphertext
-    iv = tuple.iv
-    salt = tuple.salt
-    innerType = source.innerType
+): LibraryLockedItem {
+  const stored = lockedTupleOf(block)
+  if (stored === null) {
+    throw sendFailure(
+      'locked-password-missing',
+      block,
+      'is locked but holds no encrypted payload, and this module never encrypts on the send path',
+    )
   }
 
   return {
@@ -408,10 +496,10 @@ async function lockedItemFromBlock(
     name: block.label ?? 'Locked Payload',
     label: block.label ?? 'Locked Payload',
     type: 'locked',
-    innerType,
-    ciphertext,
-    iv,
-    salt,
+    innerType: tupleInnerType(block),
+    ciphertext: stored.ciphertext,
+    iv: stored.iv,
+    salt: stored.salt,
     createdAt: now,
     updatedAt: now,
   }
@@ -483,6 +571,9 @@ export function sessionItemsToLibraryFile(
           id: item.id,
           type: 'locked',
           label: item.label,
+          // A reveal the user is looking at, in memory only. `parseBlock` refuses to store a
+          // plaintext beside a tuple, so this field is gone the moment the dossier is saved and
+          // the row has to be unlocked again rather than read off the disk (PLAN.md §6.2).
           content: typeof item.plaintextContent === 'string' ? item.plaintextContent : undefined,
           isLocked: true,
           lockedData: {

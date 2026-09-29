@@ -48,8 +48,6 @@ export interface LibraryState {
 
   /** Reloads folders, items, and files from IndexedDB. Never rejects: a failure shows in `error`. */
   refresh(): Promise<void>
-  /** Seeds default folders & dossiers if library is completely empty. */
-  seedInitialLibrary(): Promise<void>
   createFolder(name: string, parentId: string | null, color?: string): Promise<LibraryFolder>
   renameFolder(id: string, name: string): Promise<void>
   /**
@@ -163,9 +161,6 @@ export const useLibraryStore = create<LibraryState>()((set, get) => {
         set({ loading: false, error: describeLibraryError(cause) })
       }
     },
-
-    seedInitialLibrary: () =>
-      writeThenSync(() => library.seedInitialLibrary()),
 
     createFolder: (name, parentId, color) =>
       writeThenSync(() => library.createFolder(name, parentId, color)),

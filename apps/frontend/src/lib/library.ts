@@ -65,10 +65,24 @@ export type BlockType =
   | 'locked'
   | 'divider'
 
+/**
+ * A block's encrypted payload — exactly the PLAN.md §6.1 / §11.4 tuple, plus the note of
+ * what the plaintext was so a reveal can decode it.
+ *
+ * The byte fields are typed as `Uint8Array` and nothing else (they used to allow `string`,
+ * which every reader then had to guess how to convert): `encryptItem` emits bytes, IDB
+ * structured-clone returns bytes, and `parseBlock` normalises whatever an engine handed back
+ * through the same fixed-width checks a locked *item* gets (`readFixedBytes`). A tuple that
+ * does not satisfy them is not a tuple — see `lockedTupleOf`.
+ */
 export interface EncryptedBlockData {
-  ciphertext: Uint8Array | string
-  iv: Uint8Array | string
-  salt: Uint8Array | string
+  /** AES-256-GCM output: the plaintext plus its 16-byte tag. */
+  ciphertext: Uint8Array
+  /** 12 bytes (PLAN.md §6.1, §11.4). */
+  iv: Uint8Array
+  /** 16 bytes (PLAN.md §6.1, §11.4). */
+  salt: Uint8Array
+  /** What was encrypted: `fileAttachment` for bytes, a text kind otherwise. */
   innerType?: BlockType
 }
 
@@ -88,9 +102,16 @@ export interface FileBlock {
   caption?: string
   blob?: Blob
   mimeType?: string
-  /** Security / locking */
+  /**
+   * The row's lock INTENT — set when the user asks for a protected block, cleared when they
+   * remove the lock. It is not evidence of encryption and must never be read as such: a block
+   * is encrypted if and only if `lockedTupleOf` returns a tuple, which is what
+   * `isProtectedBlock` answers. A row written before this rule existed can legitimately carry
+   * `isLocked: true` with nothing but plaintext in it — that is the unprotected state
+   * `isUnprotectedSecretBlock` names, and the UI shows it as a warning, never as a badge.
+   */
   isLocked?: boolean
-  password?: string
+  /** The encrypted payload. The ONLY protected form a block is stored in. */
   lockedData?: EncryptedBlockData
   /** In-memory state */
   isUnlocked?: boolean
@@ -1207,6 +1228,66 @@ function isBlockType(value: unknown): value is BlockType {
   return typeof value === 'string' && BLOCK_TYPES.some((t) => t === value)
 }
 
+/**
+ * A block's encrypted payload, validated by the same fixed-width rules a locked ITEM's is.
+ *
+ * `parseItem` refuses to store a 1-byte IV or a 5000-byte salt (see the comment on
+ * `readFixedBytes`); a block is held to the same rule, because a tuple that fails it can never
+ * be opened — Web Crypto raises `OperationError` on every attempt — while its presence would
+ * let the row render a lock badge over plaintext. So an unusable `lockedData` is dropped rather
+ * than trusted, and the block reads as what it actually is: unprotected.
+ *
+ * Dropping rather than throwing is deliberate on this path. `parseFile` runs on every read of
+ * every dossier, so a throw here would make one damaged block unloadable and lock the whole
+ * editor out of the dossier; a drop leaves the row editable, honest, and one `Lock` press away
+ * from real ciphertext.
+ */
+function lockedDataOf(value: unknown): EncryptedBlockData | null {
+  if (!isRecord(value)) return null
+
+  let ciphertext: Uint8Array
+  let iv: Uint8Array
+  let salt: Uint8Array
+  try {
+    ciphertext = readBytes(value, 'ciphertext', 'locked block')
+    iv = readFixedBytes(value, 'iv', 'locked block', LOCKED_IV_BYTE_LENGTH)
+    salt = readFixedBytes(value, 'salt', 'locked block', LOCKED_SALT_BYTE_LENGTH)
+  } catch {
+    return null
+  }
+
+  return {
+    ciphertext,
+    iv,
+    salt,
+    // Only when it is one: `{ ciphertext, iv, salt }` is the stored shape (PLAN.md §6.1), so an
+    // unknown or absent `innerType` is left out of the record rather than carried as a key
+    // whose value is `undefined`.
+    ...(isBlockType(value['innerType']) ? { innerType: value['innerType'] } : {}),
+  }
+}
+
+/**
+ * The one reading of a stored (or to-be-stored) block, shared by every read and every write.
+ *
+ * Three rules live here because they are the rules a dossier's protection rests on:
+ *
+ *   - **A password is not a field of a block, in either direction.** `FileBlock` has no
+ *     `password` (PLAN.md §6.2: the key is derived on unlock and stored nowhere), and because
+ *     every write stores what this function returns, a `password` on a row written by an older
+ *     build is dropped the first time that dossier is saved. It is never read into app state,
+ *     so no code can compare against it.
+ *   - **A block that carries a real tuple carries no plaintext.** `content`, `value` and `blob`
+ *     are the payload the tuple was made from; keeping them beside it is plaintext at rest,
+ *     which is the defect this file exists to make impossible. Metadata (`fileName`, `fileSize`,
+ *     `mimeType`, `label`) survives — it is not the secret and the row needs it to say what the
+ *     ciphertext is.
+ *   - **Nothing outside this shape is stored.** An unknown key is not copied, exactly as
+ *     `assertKnownFields` rejects one on an item; blocks keep the lenient read because legacy
+ *     rows must still open, but they are written from the same whitelist either way. Nor is
+ *     `isUnlocked`: a reveal is in-memory state, and storing it would persist "this block is
+ *     open" next to a payload that the rule above just refused to write down.
+ */
 export function parseBlock(value: unknown): FileBlock {
   if (!isRecord(value)) throw new Error('library: a block must be an object')
   const id = requireId(readString(value, 'id', 'block'), 'block')
@@ -1218,9 +1299,10 @@ export function parseBlock(value: unknown): FileBlock {
     type,
   }
 
+  const lockedData = lockedDataOf(value['lockedData'])
+  const encrypted = lockedData !== null
+
   if (typeof value['label'] === 'string') block.label = value['label']
-  if (typeof value['content'] === 'string') block.content = value['content']
-  if (typeof value['value'] === 'string') block.value = value['value']
   if (typeof value['fileName'] === 'string') block.fileName = value['fileName']
   if (typeof value['fileSize'] === 'string' || typeof value['fileSize'] === 'number') block.fileSize = value['fileSize']
   if (typeof value['fileExt'] === 'string') block.fileExt = value['fileExt']
@@ -1231,24 +1313,67 @@ export function parseBlock(value: unknown): FileBlock {
   } else if (type === 'locked') {
     block.isLocked = true
   }
-  if (typeof value['password'] === 'string') block.password = value['password']
-  if (typeof value['isUnlocked'] === 'boolean') block.isUnlocked = value['isUnlocked']
 
-  if (value['blob'] instanceof Blob) {
-    block.blob = value['blob']
+  if (!encrypted) {
+    if (typeof value['content'] === 'string') block.content = value['content']
+    if (typeof value['value'] === 'string') block.value = value['value']
+    if (value['blob'] instanceof Blob) block.blob = value['blob']
   }
 
-  if (isRecord(value['lockedData'])) {
-    const rawLocked = value['lockedData']
-    block.lockedData = {
-      ciphertext: rawLocked['ciphertext'] as Uint8Array | string,
-      iv: rawLocked['iv'] as Uint8Array | string,
-      salt: rawLocked['salt'] as Uint8Array | string,
-      innerType: isBlockType(rawLocked['innerType']) ? rawLocked['innerType'] : undefined,
-    }
-  }
+  if (lockedData !== null) block.lockedData = lockedData
 
   return block
+}
+
+/**
+ * The block's usable `{ ciphertext, iv, salt }`, or `null` when it has none.
+ *
+ * The single answer to "is this block's payload actually encrypted?" for the whole app — the
+ * send path (decision D9: this tuple travels byte-for-byte and is never re-encrypted), the
+ * editor's badge, and the unlock form all read it here so they cannot disagree.
+ */
+export function lockedTupleOf(block: FileBlock): EncryptedBlockData | null {
+  return lockedDataOf(block.lockedData)
+}
+
+/** True only when the payload is really stored as ciphertext — never from the lock flag alone. */
+export function isProtectedBlock(block: FileBlock): boolean {
+  return lockedTupleOf(block) !== null
+}
+
+/** Does this block hold a plaintext payload of any kind (text, a value, or bytes)? */
+function hasPlaintextPayload(block: FileBlock): boolean {
+  if (block.blob instanceof Blob && block.blob.size > 0) return true
+  const text = block.content ?? block.value
+  return typeof text === 'string' && text !== ''
+}
+
+/** Did the user ask for this block to be a protected secret (by type or by the lock flag)? */
+export function isLockedIntent(block: FileBlock): boolean {
+  return block.type === 'locked' || block.isLocked === true
+}
+
+/**
+ * A block the user means to be secret that is stored as plaintext.
+ *
+ * This is the legacy state (rows written while `parseBlock` persisted `password` and plaintext
+ * side by side) and the in-progress state (a secret typed into a new locked block that has not
+ * been encrypted yet). Either way the row must say "not encrypted", wear no lock badge, and
+ * encrypt on save when the user supplies the password — never quietly pretend otherwise.
+ */
+export function isUnprotectedSecretBlock(block: FileBlock): boolean {
+  return isLockedIntent(block) && !isProtectedBlock(block) && hasPlaintextPayload(block)
+}
+
+/**
+ * Every block in `file` that is meant to be secret and is not encrypted.
+ *
+ * The editor's Save path asks about these: it cannot encrypt without a password, and inventing
+ * one is what made the old "Encrypted" badge a lie. So it asks the user, in the foreground, at
+ * the moment they press Save.
+ */
+export function unprotectedSecretBlocks(file: LibraryFile): FileBlock[] {
+  return file.blocks.filter(isUnprotectedSecretBlock)
 }
 
 export function parseFile(value: unknown): LibraryFile {
@@ -1551,201 +1676,5 @@ function sortOrdersOf(ordered: readonly Orderable[]): number[] | null {
  */
 function withRenumberedOrder<T extends Orderable>(ordered: readonly T[]): T[] {
   return ordered.map((row, index) => ({ ...row, sortOrder: (index + 1) * SORT_ORDER_GAP }))
-}
-
-// ---------------------------------------------------------------------------
-// Seed Data (Realistic mock folders and files)
-// ---------------------------------------------------------------------------
-
-export const INITIAL_FOLDERS: LibraryFolder[] = [
-  {
-    id: 'f-1',
-    name: 'Work & Credentials',
-    color: '#1D4ED8',
-    parentId: null,
-    createdAt: 1700000000000,
-    updatedAt: 1700000000000,
-  },
-  {
-    id: 'f-2',
-    name: 'Research Dossiers',
-    color: '#0F766E',
-    parentId: null,
-    createdAt: 1700000001000,
-    updatedAt: 1700000001000,
-  },
-  {
-    id: 'f-3',
-    name: 'Field Deployments',
-    color: '#7C3AED',
-    parentId: null,
-    createdAt: 1700000002000,
-    updatedAt: 1700000002000,
-  },
-]
-
-export const INITIAL_FILES: LibraryFile[] = [
-  {
-    id: 'file-1',
-    folderId: 'f-1',
-    name: 'Uni Credentials & Keys',
-    createdAt: 1700000000000,
-    updatedAt: Date.now() - 12 * 60 * 1000,
-    blocks: [
-      {
-        id: 'b-101',
-        type: 'heading',
-        content: 'CS Lab 402 — Auth Cluster',
-      },
-      {
-        id: 'b-102',
-        type: 'shortText',
-        label: 'Gateway Proxy',
-        value: 'gateway.ece.university.edu:8443',
-      },
-      {
-        id: 'b-103',
-        type: 'locked',
-        label: 'Cluster Root Keyphrase',
-        content: 'sys_x94#kK99!Alpha2',
-        password: 'pass',
-        isLocked: true,
-        isUnlocked: false,
-      },
-      {
-        id: 'b-104',
-        type: 'divider',
-      },
-      {
-        id: 'b-105',
-        type: 'richText',
-        content:
-          'Notes on cluster allocation:\n• Nodes 01–08 reserved for vision pipeline.\n• Daily checkpoint wipe at 04:00 UTC.\n• Mount scratch array via /mnt/scratch/shared.',
-      },
-      {
-        id: 'b-106',
-        type: 'fileAttachment',
-        fileName: 'slurm_cluster_rules.yaml',
-        fileSize: '24.8 KB',
-        fileExt: 'yaml',
-      },
-    ],
-  },
-  {
-    id: 'file-2',
-    folderId: 'f-2',
-    name: 'Robotics Vision Calibration',
-    createdAt: 1700000001000,
-    updatedAt: Date.now() - 60 * 60 * 1000,
-    blocks: [
-      {
-        id: 'b-201',
-        type: 'heading',
-        content: 'LiDAR Extrinsic Calibration Matrices',
-      },
-      {
-        id: 'b-202',
-        type: 'shortText',
-        label: 'Optical Frequency',
-        value: '64Hz @ 120k pts/sec (Velodyne VLP-16)',
-      },
-      {
-        id: 'b-203',
-        type: 'image',
-        fileName: 'sensor_rig_alignment.svg',
-        caption: 'Dual camera baseline offset (120mm)',
-        fileSize: '412 KB',
-      },
-      {
-        id: 'b-204',
-        type: 'locked',
-        label: 'Calibration Rig Access Token',
-        content: 'rig-tok_99182374182937491',
-        password: 'pass',
-        isLocked: true,
-        isUnlocked: false,
-      },
-      {
-        id: 'b-205',
-        type: 'fileAttachment',
-        fileName: 'calibration_weights_v4.bin',
-        fileSize: '14.2 MB',
-        fileExt: 'bin',
-      },
-    ],
-  },
-  {
-    id: 'file-3',
-    folderId: 'f-1',
-    name: 'SSH Bastion Tunnels',
-    createdAt: 1700000002000,
-    updatedAt: Date.now() - 24 * 60 * 60 * 1000,
-    blocks: [
-      {
-        id: 'b-301',
-        type: 'heading',
-        content: 'Internal Datacenter Gateway',
-      },
-      {
-        id: 'b-302',
-        type: 'shortText',
-        label: 'Bastion IPv4',
-        value: '10.240.18.2',
-      },
-      {
-        id: 'b-303',
-        type: 'locked',
-        label: 'Ed25519 Private Key',
-        content: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGf3Q+qF91Q97X28... admin@qrbit',
-        password: 'pass',
-        isLocked: true,
-        isUnlocked: false,
-      },
-    ],
-  },
-  {
-    id: 'file-4',
-    folderId: 'f-3',
-    name: 'Site Survey Telemetry Alpha',
-    createdAt: 1700000003000,
-    updatedAt: Date.now() - 3 * 24 * 60 * 60 * 1000,
-    blocks: [
-      {
-        id: 'b-401',
-        type: 'heading',
-        content: 'Antenna Array Coordinates',
-      },
-      {
-        id: 'b-402',
-        type: 'shortText',
-        label: 'Base Station Lat/Long',
-        value: '37.7749° N, 122.4194° W',
-      },
-      {
-        id: 'b-403',
-        type: 'richText',
-        content:
-          'Signal degradation observed beyond 450m radius when omnidirectional repeater is unpowered.',
-      },
-    ],
-  },
-]
-
-/** Seeds initial folders and files if database is currently empty. */
-export async function seedInitialLibrary(): Promise<void> {
-  const db = await getDatabase()
-  const existingFolders = await db.getAll('folders')
-  const existingFiles = await db.getAll('files')
-
-  if (existingFolders.length === 0 && existingFiles.length === 0) {
-    const tx = db.transaction(['folders', 'files'], 'readwrite')
-    for (const folder of INITIAL_FOLDERS) {
-      await tx.objectStore('folders').put(folder)
-    }
-    for (const file of INITIAL_FILES) {
-      await tx.objectStore('files').put(file)
-    }
-    await tx.done
-  }
 }
 

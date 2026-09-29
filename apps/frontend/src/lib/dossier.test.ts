@@ -13,7 +13,10 @@
  *   - no `Blob` at all is constructed by a refused conversion (proved with a tracking `Blob`,
  *     because "the fabrication is unreachable" is a claim about a constructor, not a string);
  *   - a locked attachment travels as ciphertext of ITS OWN bytes, not as a plaintext image item
- *     and not as the literal `'secret'`;
+ *     and not as the literal `'secret'`; and no locked block of ANY type — heading, key/value,
+ *     note — travels as its own plaintext either;
+ *   - encryption happens in the editor (`encryptBlockPayload`), never on the send path, so a
+ *     block that was never encrypted is refused rather than locked under a guessed password;
  *   - a size on screen or in a preview is a measured number, never `'2.4 MB'`.
  *
  * `fake-indexeddb` stands in for the browser (as in `library.test.ts`), so this file runs in
@@ -27,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   describeSendFailure,
   DossierSendError,
+  encryptBlockPayload,
   fileBlocksToLibraryItems,
   findUnsendableBlocks,
   getFirstBlockPreview,
@@ -271,24 +275,49 @@ describe('the size shown to a person comes from the bytes', () => {
 })
 
 describe('locked blocks — D6, and ciphertext only', () => {
+  /**
+   * A locked block as the editor's draft holds one: a payload, the lock flag, and — once locked —
+   * the tuple the payload was encrypted into.
+   *
+   * It carries NO `password` field, and that is the point. `FileBlock.password` was the defect
+   * this lane removed: the secret and the key that opened it sat in the same IndexedDB record, so
+   * the send path could "encrypt" on the way out with a password the record had already given
+   * away. Encryption now happens in the editor (`encryptBlockPayload`, the row's Lock dialog and
+   * the Save prompt), and the only thing this module will carry is the tuple that came out of it.
+   */
   function lockedBlock(overrides: Partial<FileBlock> = {}): FileBlock {
     return {
       id: 'b-locked',
       type: 'locked',
       label: 'Cluster key',
-      content: 'sys_x94#kK99!Alpha2',
-      password: 'correct horse',
+      content: 'krnl-7742-rotor-alt',
       isLocked: true,
       ...overrides,
     }
   }
 
-  it('encrypts the file a locked attachment holds, and stores nothing but the tuple', async () => {
+  /**
+   * The editor's lock step, run for a test the way `BlockItem` and `FileEditView` run it: encrypt
+   * the block's own payload, put the tuple on `lockedData`, leave the draft's plaintext where it
+   * is (in memory, never on the wire and never in the record).
+   */
+  async function lock(block: FileBlock, password: string): Promise<FileBlock> {
+    const lockedData = await encryptBlockPayload(block, password)
+    return { ...block, isLocked: true, isUnlocked: false, lockedData }
+  }
+
+  it('encrypts the file a locked attachment holds, and sends nothing but the tuple', async () => {
     const payload = bytes(512)
     const blob = new Blob([payload], { type: 'application/octet-stream' })
-    const items = await fileBlocksToLibraryItems(
-      dossier([lockedBlock({ blob, password: 'sentry-4' })]),
-    )
+    const block = await lock(lockedBlock({ content: undefined, blob }), 'sentry-4')
+
+    // The encryption happened in the editor, not here: this is the tuple that gets stored, and
+    // it names the bytes it was made from.
+    if (block.lockedData?.innerType !== 'fileAttachment') {
+      throw new Error('test bug: locking a block that holds a file did not record a file payload')
+    }
+
+    const items = await fileBlocksToLibraryItems(dossier([block]))
 
     const item = items[0]
     if (item?.type !== 'locked') throw new Error('test bug: expected a locked item')
@@ -306,57 +335,181 @@ describe('locked blocks — D6, and ciphertext only', () => {
 
   it('does not send an image block the user locked as a plaintext image item', async () => {
     /*
-     * The branch order was `image`, then `fileAttachment`, then locked — so ticking "Lock this
-     * entity with password" on an image row changed nothing about what left the device: the
-     * bytes went out as an ordinary image item and the tuple went nowhere. A locked block is
-     * now checked first, whichever type it is.
+     * The branch order was `image`, then `fileAttachment`, then locked — so locking an image row
+     * changed nothing about what left the device: the bytes went out as an ordinary image item and
+     * the tuple went nowhere. A locked block is now matched before either attachment branch.
      */
-    const blob = new Blob([bytes(256)], { type: 'image/png' })
-    const items = await fileBlocksToLibraryItems(
-      dossier([{ id: 'b-image', type: 'image', fileName: 'key.png', blob, isLocked: true, password: 'locked-down' }]),
+    const payload = bytes(256)
+    const blob = new Blob([payload], { type: 'image/png' })
+    const block = await lock(
+      { id: 'b-image', type: 'image', fileName: 'key.png', blob, isLocked: true },
+      'locked-down',
     )
 
+    const items = await fileBlocksToLibraryItems(dossier([block]))
+    expect(items).toHaveLength(1)
+
     const item = items[0]
-    if (item?.type !== 'locked') throw new Error('test bug: a locked image must travel as a locked item')
+    if (item?.type !== 'locked') {
+      throw new Error(`test bug: a locked image travelled as a "${item?.type}" item`)
+    }
+    expect(item.type).not.toBe('image')
     expect('blob' in item).toBe(false)
-    expect(await decryptItem('locked-down', item.salt, item.iv, item.ciphertext)).toEqual(bytes(256))
+    expect('size' in item).toBe(false)
+    expect(await decryptItem('locked-down', item.salt, item.iv, item.ciphertext)).toEqual(payload)
+  })
+
+  it('does not send a locked shortText or rich-text block as its own plaintext either', async () => {
+    /*
+     * The same branch-order defect, one type over. `heading`, `shortText` and `richText` were all
+     * matched before the locked branch, and the lock dialog is on every row — so locking a
+     * key/value field and pressing Send used to put `Label: the-secret` on the wire as an ordinary
+     * text item while the ciphertext sat unused. The locked branch has to come first, whatever the
+     * block type is, and the draft's plaintext must not be able to overrule the tuple.
+     */
+    const secret = 'bastion-root-keyphrase'
+    const shortText = await lock(
+      { id: 'b-pair', type: 'shortText', label: 'Bastion key', value: secret, isLocked: true },
+      'pair-pw',
+    )
+    const note = await lock(
+      { id: 'b-note', type: 'richText', content: secret, isLocked: true },
+      'note-pw',
+    )
+    const title = await lock(
+      { id: 'b-head', type: 'heading', content: secret, isLocked: true },
+      'head-pw',
+    )
+
+    const items = await fileBlocksToLibraryItems(dossier([shortText, note, title]))
+    expect(items).toHaveLength(3)
+    expect(items.map((item) => item.type)).toEqual(['locked', 'locked', 'locked'])
+
+    // Nothing that left the device is the plaintext, and each item opens only with its own
+    // password. `JSON.stringify` of the whole payload is the absence assertion: the secret has to
+    // be nowhere in what goes out, not merely absent from the field the branch used to write.
+    const wire = JSON.stringify(items)
+    expect(wire).not.toContain(secret)
+    expect(wire).not.toContain('Bastion key: ')
+    expect(wire).not.toContain('# ')
+    for (const [index, password] of (['pair-pw', 'note-pw', 'head-pw'] as const).entries()) {
+      const item = items[index]
+      if (item === undefined || item.type !== 'locked') throw new Error('test bug: expected a locked item')
+      const decrypted = await decryptItem(password, item.salt, item.iv, item.ciphertext)
+      expect(new TextDecoder().decode(decrypted)).toBe(secret)
+    }
   })
 
   it('refuses a locked payload over D6 cap, before encrypting anything', async () => {
     const oversized = new Blob([bytes(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 1)], {
       type: 'application/octet-stream',
     })
+    const block = lockedBlock({ content: undefined, blob: oversized })
 
-    const error = await fileBlocksToLibraryItems(
-      dossier([lockedBlock({ content: undefined, blob: oversized })]),
-    ).catch((cause: unknown) => cause)
+    /*
+     * Two gates, both reached, and the size one first. `fileBlocksToLibraryItems` cannot encrypt
+     * at all now (a block holds no password), so an oversized payload with no tuple is refused for
+     * being too big rather than for being unencrypted — the measurement beats the missing-key
+     * complaint, which is the order the editor's own message depends on.
+     */
+    const error = await fileBlocksToLibraryItems(dossier([block])).catch((cause: unknown) => cause)
 
     expect(error).toBeInstanceOf(DossierSendError)
     expect((error as DossierSendError).reason).toBe('locked-too-large')
     expect(describeSendFailure(error)).toContain('3.0 MiB')
 
     // The same refusal is available before a Send is attempted, without any crypto.
-    expect(findUnsendableBlocks(dossier([lockedBlock({ content: undefined, blob: oversized })]))).toHaveLength(1)
+    expect(findUnsendableBlocks(dossier([block]))).toHaveLength(1)
+
+    // And the editor's encrypt step refuses it too, before a key is derived: D6 is one number
+    // enforced on both sides of the tuple, not a check the UI hopes the caller ran.
+    const refused = await encryptBlockPayload(block, 'sentry-4').catch((cause: unknown) => cause)
+    expect(refused).toBeInstanceOf(DossierSendError)
+    expect((refused as DossierSendError).reason).toBe('locked-too-large')
   })
 
   it('refuses to encrypt nothing, instead of shipping the literal "secret"', async () => {
-    const error = await fileBlocksToLibraryItems(
-      dossier([lockedBlock({ content: undefined, value: undefined })]),
-    ).catch((cause: unknown) => cause)
+    const empty = lockedBlock({ content: undefined, value: undefined })
 
+    const error = await fileBlocksToLibraryItems(dossier([empty])).catch((cause: unknown) => cause)
     expect(error).toBeInstanceOf(DossierSendError)
     expect((error as DossierSendError).reason).toBe('locked-content-missing')
+
+    // Same reason from the encrypt side: there is nothing there, so no ciphertext is made and no
+    // block that looks protected exists afterwards.
+    const refused = await encryptBlockPayload(empty, 'sentry-4').catch((cause: unknown) => cause)
+    expect(refused).toBeInstanceOf(DossierSendError)
+    expect((refused as DossierSendError).reason).toBe('locked-content-missing')
   })
 
-  it('refuses to lock under a password nobody set', async () => {
-    // The old code encrypted with `block.password || 'pass'`: the item leaves the device locked
-    // under a password from the source, which the receiver could guess and the sender never chose.
-    const error = await fileBlocksToLibraryItems(
-      dossier([lockedBlock({ password: undefined })]),
-    ).catch((cause: unknown) => cause)
+  it('refuses a locked block that was never encrypted, and will not choose a password for it', async () => {
+    /*
+     * The old code encrypted with `block.password || 'pass'` on the send path: the item left the
+     * device locked under a password from the source, which the receiver could guess and the
+     * sender never chose. With no `password` field on a block there is nothing to default and
+     * nothing to read, so a locked block holding plaintext is simply unsendable — and an empty
+     * password is refused by the encrypt step before PBKDF2 runs at all.
+     */
+    const neverEncrypted = lockedBlock()
+    expect(neverEncrypted.lockedData).toBeUndefined()
 
+    const error = await fileBlocksToLibraryItems(
+      dossier([neverEncrypted]),
+    ).catch((cause: unknown) => cause)
     expect(error).toBeInstanceOf(DossierSendError)
     expect((error as DossierSendError).reason).toBe('locked-password-missing')
+    expect(describeSendFailure(error)).toContain('not encrypted yet')
+
+    // No item was produced, so nothing went out "encrypted" under a password nobody set.
+    expect(findUnsendableBlocks(dossier([neverEncrypted]))).toHaveLength(1)
+
+    const blank = await encryptBlockPayload(neverEncrypted, '').catch((cause: unknown) => cause)
+    expect(blank).toBeInstanceOf(DossierSendError)
+    expect((blank as DossierSendError).reason).toBe('locked-password-missing')
+  })
+
+  it('decides the three locked refusals in one fixed order', () => {
+    /*
+     * Pinned because the message the user reads is chosen from this order, and because a reorder
+     * would turn "your payload is over the cap" into "go set a password" for a block that can
+     * never be encrypted at any length. No tuple: content first, then size, then the fact that
+     * nothing encrypted it. A real tuple: only the frame bound can refuse it.
+     */
+    const reasonOf = (block: FileBlock): string | undefined =>
+      findUnsendableBlocks(dossier([block]))[0]?.reason
+
+    expect(reasonOf(lockedBlock({ content: undefined, value: undefined }))).toBe(
+      'locked-content-missing',
+    )
+    expect(
+      reasonOf(
+        lockedBlock({
+          content: undefined,
+          blob: new Blob([bytes(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 1)]),
+        }),
+      ),
+    ).toBe('locked-too-large')
+    expect(reasonOf(lockedBlock())).toBe('locked-password-missing')
+    expect(
+      reasonOf(
+        lockedBlock({
+          content: undefined,
+          lockedData: { ciphertext: bytes(64), iv: bytes(12), salt: bytes(16) },
+        }),
+      ),
+    ).toBeUndefined()
+    expect(
+      reasonOf(
+        lockedBlock({
+          content: undefined,
+          lockedData: {
+            ciphertext: bytes(LOCKED_ITEM_MAX_PLAINTEXT_BYTES + 17),
+            iv: bytes(12),
+            salt: bytes(16),
+          },
+        }),
+      ),
+    ).toBe('locked-too-large')
   })
 
   it('sends a stored tuple byte-for-byte and never re-encrypts it (D9)', async () => {
@@ -366,8 +519,9 @@ describe('locked blocks — D6, and ciphertext only', () => {
     const items = await fileBlocksToLibraryItems(
       dossier([
         lockedBlock({
-          content: undefined,
-          password: undefined,
+          // Plaintext still sitting in the draft beside a real tuple: the tuple travels, this
+          // does not, and there is no password here with which to re-encrypt anything.
+          content: 'draft-plaintext-that-must-not-travel',
           lockedData: { ciphertext, iv, salt, innerType: 'fileAttachment' },
         }),
       ]),
@@ -379,6 +533,8 @@ describe('locked blocks — D6, and ciphertext only', () => {
     expect(item.iv).toBe(iv)
     expect(item.salt).toBe(salt)
     expect(item.innerType).toBe('file')
+    expect('content' in item).toBe(false)
+    expect(JSON.stringify(items)).not.toContain('draft-plaintext-that-must-not-travel')
   })
 })
 

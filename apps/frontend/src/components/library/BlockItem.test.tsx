@@ -37,10 +37,10 @@ import type { ReactNode } from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { BlockItem } from './BlockItem'
-import { decryptItem } from '../../lib/crypto'
+import { decryptItem, encryptItem } from '../../lib/crypto'
 import { useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
 import type { FileBlock } from '../../lib/library'
@@ -107,6 +107,7 @@ interface HarnessProps {
   onUpdate?(id: string, changes: Partial<FileBlock>): void
   onMoveUp?(index: number): void
   onMoveDown?(index: number): void
+  onUnlockCredential?(id: string, plaintextContent: string): void
 }
 
 function Harness(props: HarnessProps): ReactNode {
@@ -138,6 +139,7 @@ function Harness(props: HarnessProps): ReactNode {
           }}
           onMoveUp={props.onMoveUp}
           onMoveDown={props.onMoveDown}
+          onUnlockCredential={props.onUnlockCredential}
           reorderHandleProps={getHandleProps(index)}
           isReorderDragging={drag?.from === index}
           reorderOffset={drag !== null && drag.from === index ? drag.offset : 0}
@@ -159,14 +161,16 @@ function mount(props: HarnessProps): void {
   })
 }
 
-afterEach(() => {
+function unmountNow(): void {
   act(() => {
     root?.unmount()
   })
   root = null
   container?.remove()
   container = null
-})
+}
+
+afterEach(unmountNow)
 
 function element(): HTMLDivElement {
   if (container === null) throw new Error('test bug: nothing is mounted')
@@ -667,26 +671,63 @@ describe('BlockItem — an attachment block holds a file or it holds nothing', (
     expect(decrypted).toEqual(new Uint8Array([12, 34, 56, 78]))
   })
 
-  it('will not let a locked attachment be swapped out from under its own ciphertext', () => {
-    // The row shows one payload while the tuple holds another is the same defect in a hat.
+  it('will not let a locked attachment be swapped out from under its own ciphertext', async () => {
+    /*
+     * The row shows one payload while the tuple holds another is the same defect in a hat, so the
+     * chooser disappears once the bytes are encrypted.
+     *
+     * The fixture is the real flow, not a hand-planted flag: the guard reads the CIPHERTEXT, so a
+     * block that only carries `isLocked` (the shape every locked row was before this lane, and the
+     * shape a legacy record still has) must keep its file chooser — otherwise there would be no
+     * way to choose the bytes that need encrypting, and the warning state would be a dead end.
+     */
+    const onUpdate = vi.fn()
+    const original = new File([new Uint8Array(3)], 'locked.png', { type: 'image/png' })
+    mount({
+      blocks: [{ id: 'b-img', type: 'image', fileName: 'locked.png', blob: original }],
+      onUpdate,
+    })
+
+    // Before it is encrypted the row is an ordinary image row: it can still replace its own file.
+    expect(attachmentInput()).toBeInstanceOf(HTMLInputElement)
+    expect(element().querySelector('[data-attachment-locked]')).toBeNull()
+
+    openLockModal()
+    typeInto(passwordField(), 'sentry-4')
+    await submitLock(onUpdate)
+
+    // After it, the bytes underneath the ciphertext are frozen.
+    expect(element().querySelector('input[type="file"]')).toBeNull()
+    expect(element().querySelector('[data-attachment-locked]')?.textContent).toContain(
+      'Remove the lock',
+    )
+    expect(screenText()).toContain('locked.png')
+    // …because the row is now genuinely protected, which is the only state that earns the badge.
+    expect(element().querySelector('[data-block-protected]')).not.toBeNull()
+    expect(element().querySelector('[data-block-unprotected]')).toBeNull()
+  })
+
+  it('keeps the file chooser on a block that is flagged locked but holds no ciphertext', () => {
+    // The legacy shape: `isLocked: true`, plaintext bytes, no tuple. The row must say it is not
+    // encrypted AND still let the user replace the file, because choosing bytes is the first step
+    // to encrypting them. A guard on the flag instead of the ciphertext would lock both out.
     mount({
       blocks: [
         {
           id: 'b-img',
           type: 'image',
-          fileName: 'locked.png',
-          blob: new File([new Uint8Array(3)], 'locked.png', { type: 'image/png' }),
+          fileName: 'unprotected.png',
+          blob: new File([new Uint8Array(3)], 'unprotected.png', { type: 'image/png' }),
           isLocked: true,
-          password: 'sentry-4',
         },
       ],
     })
 
-    expect(element().querySelector('[data-attachment-locked]')?.textContent).toContain(
-      'Remove the lock',
-    )
-    expect(element().querySelector('input[type="file"]')).toBe(null)
-    expect(screenText()).toContain('locked.png')
+    expect(attachmentInput()).toBeInstanceOf(HTMLInputElement)
+    expect(element().querySelector('[data-attachment-locked]')).toBeNull()
+    expect(element().querySelector('[data-block-unprotected]')).not.toBeNull()
+    expect(element().querySelector('[data-block-protected]')).toBeNull()
+    expect(screenText()).toContain('Not encrypted')
   })
 
   it('replaces a chosen file, and the new bytes are what the row shows', () => {
@@ -758,3 +799,210 @@ describe('BlockItem — an attachment block holds a file or it holds nothing', (
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Unlocking: the password is the only door, and `pass` is not a key
+//
+// The shipped row checked `const expectedPassword = block.password || 'pass'` and then
+// `if (passwordInput === expectedPassword || passwordInput === 'pass')`, so every locked block in
+// the app opened to the four letters p-a-s-s — and what it "revealed" was `block.content`, the
+// plaintext IndexedDB had been holding all along, or the string `'sys_x94#kK99!Alpha2'` when the
+// block held nothing. There is one way in now: `decryptItem` on the block's own `{ciphertext, iv,
+// salt}`. These tests are written as absences, because a test that only asks whether the row
+// RENDERED a lock is the test that let the bug ship: after a refused unlock the secret must be
+// nowhere on the screen, and the refusal must look identical whatever caused it.
+//
+// One tuple is derived for the whole block (`beforeAll`): PBKDF2 is at 600,000 iterations
+// (PLAN.md §19 decision 9), so a fixture per test would spend the suite's time budget on key
+// derivation instead of on the assertion, and each test below still pays one real derivation for
+// its own attempt.
+// ---------------------------------------------------------------------------
+
+const GATEWAY_SECRET = 'krnl-7742-rotor-alt-seed'
+const GATEWAY_PASSWORD = 'correct-horse-not-stored'
+
+let gatewayBlock: FileBlock
+
+beforeAll(async () => {
+  const tuple = await encryptItem(GATEWAY_PASSWORD, new TextEncoder().encode(GATEWAY_SECRET))
+  gatewayBlock = {
+    id: 'b-lock',
+    type: 'locked',
+    label: 'Cluster keyphrase',
+    isLocked: true,
+    lockedData: { ...tuple, innerType: 'shortText' },
+  }
+})
+
+/** A fresh copy of the encrypted fixture, so a test cannot leak state into the next one. */
+function protectedGatewayBlock(): FileBlock {
+  return structuredClone(gatewayBlock)
+}
+
+/**
+ * Mounts `block`, opens its unlock form, types `password`, submits, and waits for one of the two
+ * outcomes the row is allowed to produce.
+ *
+ * The wait is one `act` per tick rather than one `act` around the loop: the re-render that paints
+ * the refusal comes from a continuation of the Web Crypto promise, and a single long-lived `act`
+ * scope can end before it, which is how a working component looked like a hanging test.
+ */
+async function unlockWith(
+  block: FileBlock,
+  password: string,
+  onUnlockCredential?: (id: string, plaintextContent: string) => void,
+): Promise<ReturnType<typeof vi.fn>> {
+  const onUpdate = vi.fn()
+  mount({ blocks: [block], onUpdate, onUnlockCredential })
+
+  click(buttonByLabel('Unlock'))
+  typeInto(passwordField(), password)
+
+  const form = element().querySelector('form')
+  if (form === null) throw new Error('test bug: the unlock form never opened')
+  act(() => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  })
+
+  const settled = (): boolean =>
+    onUpdate.mock.calls.length > 0 || element().querySelector('[data-unlock-error]') !== null
+  for (let attempt = 0; attempt < 600 && !settled(); attempt += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10)
+      })
+    })
+  }
+  if (!settled()) throw new Error('test bug: the unlock neither revealed nor refused')
+
+  return onUpdate
+}
+
+describe('BlockItem — unlocking really decrypts', () => {
+  it('opens to the exact plaintext that went in, and only to the password that made it', async () => {
+    const credential = vi.fn()
+    const onUpdate = await unlockWith(protectedGatewayBlock(), GATEWAY_PASSWORD, credential)
+
+    expect(element().querySelector('[data-unlock-error]')).toBeNull()
+    expect(element().querySelector('[data-revealed]')?.textContent).toBe(GATEWAY_SECRET)
+    expect(onUpdate).toHaveBeenCalledWith('b-lock', {
+      isUnlocked: true,
+      content: GATEWAY_SECRET,
+    })
+    // The editor is handed the credential only because the bytes decrypted — and the badge the
+    // row wears is earned by the ciphertext, not by a flag.
+    expect(credential).toHaveBeenCalledWith('b-lock', GATEWAY_SECRET)
+    expect(element().querySelector('[data-block-protected]')).not.toBeNull()
+    expect(element().querySelector('[data-block-unprotected]')).toBeNull()
+  })
+
+  it('is not opened by the literal "pass", and leaves no trace of the secret on screen', async () => {
+    const credential = vi.fn()
+    const onUpdate = await unlockWith(protectedGatewayBlock(), 'pass', credential)
+
+    // The exact input that opened every locked block in the shipped build.
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(credential).not.toHaveBeenCalled()
+    expect(element().querySelector('[data-revealed]')).toBeNull()
+    const error = element().querySelector('[data-unlock-error]')
+    expect(error?.getAttribute('role')).toBe('alert')
+    expect(error?.textContent).toContain('Incorrect password')
+
+    // Absence in both directions: no reveal of the real payload, and no fabricated one either.
+    expect(screenText()).not.toContain(GATEWAY_SECRET)
+    expect(screenText()).not.toContain('sys_x94')
+  })
+
+  it('refuses a wrong password and a tampered ciphertext in the same words', async () => {
+    /*
+     * `lib/library.ts` insists that both unlock paths report a failed GCM check as a wrong
+     * password, because "you typed it wrong" and "those bytes are not what they were" are two
+     * different things for whoever is at the keyboard to learn. One message, whatever the cause.
+     */
+    const tampered = protectedGatewayBlock()
+    await unlockWith(tampered, 'not-the-password')
+    const wrongPassword = element().querySelector('[data-unlock-error]')?.textContent
+    expect(wrongPassword).toContain('Incorrect password')
+
+    unmountNow()
+
+    const data = tampered.lockedData
+    if (data === undefined) throw new Error('test bug: the fixture lost its tuple')
+    const corruptedBytes = data.ciphertext.slice()
+    const last = corruptedBytes.length - 1
+    corruptedBytes[last] = (corruptedBytes[last] ?? 0) ^ 0x01
+
+    const onUpdate = await unlockWith(
+      { ...tampered, lockedData: { ...data, ciphertext: corruptedBytes } },
+      GATEWAY_PASSWORD,
+    )
+
+    // The right password over one flipped byte: refused, in the sentence the wrong password got.
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(element().querySelector('[data-unlock-error]')?.textContent).toBe(wrongPassword)
+    expect(element().querySelector('[data-revealed]')).toBeNull()
+    expect(screenText()).not.toContain(GATEWAY_SECRET)
+  })
+
+  it('shows no invented secret, no blurred fake and no password hint beside ciphertext', () => {
+    // The static state, so no derivation is needed: these are the strings the old build printed
+    // over every locked block, whatever that block actually held.
+    mount({ blocks: [protectedGatewayBlock()] })
+
+    for (const invented of [
+      'sys_x94#kK99!Alpha2',
+      'sys_x94#kK99!Alpha2_protected_vault',
+      'Passphrase:',
+      '••••••••',
+      '(set)',
+      'hint: pass',
+      GATEWAY_SECRET,
+    ]) {
+      expect(screenText()).not.toContain(invented)
+    }
+    expect(element().querySelector('[data-ciphertext-state]')).not.toBeNull()
+    expect(element().querySelector('[data-unlock-error]')).toBeNull()
+  })
+
+  it('shows a plaintext locked block as NOT encrypted, with no badge and no unlock to fake', () => {
+    // The legacy row: a lock flag, a plaintext secret, no ciphertext at all. The row used to put a
+    // "Locked Payload" pill on it, a blurred `sys_x94#kK99!Alpha2_protected_vault` under the pill
+    // and a `pass` hint under that — three claims, none of them true.
+    mount({
+      blocks: [
+        {
+          id: 'b-legacy',
+          type: 'locked',
+          label: 'Cluster keyphrase',
+          content: GATEWAY_SECRET,
+          isLocked: true,
+        },
+      ],
+    })
+
+    expect(element().querySelector('[data-block-unprotected]')).not.toBeNull()
+    expect(element().querySelector('[data-block-protected]')).toBeNull()
+    expect(element().querySelector('[data-unprotected-badge]')?.textContent).toContain(
+      'Not encrypted',
+    )
+    expect(element().querySelector('[data-unprotected-note]')?.textContent).toContain(
+      'stored as plaintext',
+    )
+
+    // No badge, no invented secret, and no Unlock affordance with which to pretend to decrypt.
+    expect(buttonByLabelOrAbsent('Unlock')).toBeNull()
+    expect(buttonByLabelOrAbsent('Locked Payload')).toBeNull()
+    expect(element().querySelector('[data-revealed]')).toBeNull()
+    for (const invented of ['sys_x94', 'Passphrase:', 'hint: pass', '••••••••']) {
+      expect(screenText()).not.toContain(invented)
+    }
+  })
+})
+
+function buttonByLabelOrAbsent(label: string): HTMLButtonElement | null {
+  return (
+    Array.from(element().querySelectorAll('button')).find(
+      (candidate) => (candidate.textContent ?? '').trim() === label,
+    ) ?? null
+  )
+}

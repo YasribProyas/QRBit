@@ -18,6 +18,8 @@ import 'fake-indexeddb/auto'
 
 import { beforeEach, describe, expect, it } from 'vitest'
 
+import * as libraryModule from './library'
+
 import {
   closeLibraryDatabase,
   createFile,
@@ -32,8 +34,12 @@ import {
   getItem,
   getItemsInFolder,
   isItemCorrupt,
+  isProtectedBlock,
+  isUnprotectedSecretBlock,
+  lockedTupleOf,
   moveFile,
   moveItem,
+  parseBlock,
   parseFile,
   renameFolder,
   reorderFile,
@@ -43,8 +49,8 @@ import {
   saveFolder,
   saveFromSession,
   saveItem,
-  seedInitialLibrary,
   siblingFolders,
+  unprotectedSecretBlocks,
   updateFile,
   updateItem,
   type FileBlock,
@@ -56,6 +62,7 @@ import {
   type LibraryLockedItem,
   type LibraryTextItem,
 } from './library'
+import { decryptItem, encryptItem } from './crypto'
 import { moveIndex, SORT_ORDER_GAP } from './reorder'
 import type {
   FileItem,
@@ -1252,7 +1259,6 @@ describe('files and blocks (dossier system)', () => {
         label: 'Secret',
         content: 'mypass',
         isLocked: true,
-        password: 'pass',
       },
     ]
 
@@ -1325,18 +1331,19 @@ describe('files and blocks (dossier system)', () => {
     expect((await getFiles())).toHaveLength(0)
   })
 
-  it('seeds initial folders and files when library is empty', async () => {
-    expect((await getFolders())).toHaveLength(0)
-    expect((await getFiles())).toHaveLength(0)
-
-    await seedInitialLibrary()
-
-    const folders = await getFolders()
-    const files = await getFiles()
-
-    expect(folders.length).toBeGreaterThanOrEqual(3)
-    expect(files.length).toBeGreaterThanOrEqual(4)
-    expect(files.some((f) => f.name === 'Uni Credentials & Keys')).toBe(true)
+  it('has no mock seeder at all: the library starts empty', async () => {
+    /*
+     * Deleted in this lane, and asserted by absence (the D15 rule) rather than by a name nobody
+     * imports: `INITIAL_FOLDERS`/`INITIAL_FILES` were the only thing that ever made the folder id
+     * `'f-1'` real, their locked rows carried `password: 'pass'` beside the plaintext secret they
+     * claimed to protect, and their attachment blocks named files that have no bytes — unsendable
+     * fiction since Lane S3. The library is what the user writes into it, from zero.
+     */
+    expect('seedInitialLibrary' in libraryModule).toBe(false)
+    expect('INITIAL_FILES' in libraryModule).toBe(false)
+    expect('INITIAL_FOLDERS' in libraryModule).toBe(false)
+    expect(await getFolders()).toHaveLength(0)
+    expect(await getFiles()).toHaveLength(0)
   })
 })
 
@@ -1368,6 +1375,252 @@ async function saveDossier(overrides: Partial<LibraryFile>): Promise<LibraryFile
 async function idsIn(folderId: string): Promise<string[]> {
   return (await getFilesInFolder(folderId)).map((file) => file.id)
 }
+
+// ---------------------------------------------------------------------------
+// A locked dossier block at rest (PLAN.md §6.2, §11.4; decisions D6 and D9)
+//
+// These are absence assertions, deliberately. The defect this lane fixed shipped past 900 green
+// tests because every test asked whether the editor RENDERED a lock — never whether IndexedDB
+// held the secret in plain text, or the password that was supposed to protect it. So each case
+// below reads the raw record back out of the store with a second connection and asks what is NOT
+// in it.
+// ---------------------------------------------------------------------------
+
+/** The stored `files` row exactly as a second tab would read it: unparsed, unnormalised. */
+async function rawFileRow(fileId: string): Promise<Record<string, unknown>> {
+  return withRawDatabase((db) =>
+    idbRequest<Record<string, unknown>>(
+      db.transaction('files', 'readonly').objectStore('files').get(fileId),
+    ),
+  )
+}
+
+/**
+ * Writes a `files` row behind the API's back, the way an older build of this app did.
+ *
+ * `getFiles()` comes first because the schema is the app's, not the test's: `beforeEach` only
+ * DELETES the database and `withRawDatabase` opens it with no version and no `upgrade`, so a raw
+ * write that is a test's first database contact lands in an empty v1 and the transaction dies on
+ * `No objectStore named files`. The other raw-write tests in this file never notice, because each
+ * of them calls `saveItem`/`createFolder` first and that is what runs the v2 upgrade that creates
+ * `files`. Reading through the API is the same schema creation without hand-copying the version
+ * number and the store list into a test, where it could drift from the product quietly.
+ */
+async function putRawFileRow(row: Record<string, unknown>): Promise<void> {
+  await getFiles()
+  await withRawDatabase((db) =>
+    idbRequest(db.transaction('files', 'readwrite').objectStore('files').put(row)),
+  )
+}
+
+const GATEWAY_SECRET = 'krnl-7742-rotor-alt-seed'
+const GATEWAY_PASSWORD = 'correct-horse-not-stored'
+
+/** A block the editor has encrypted: a real tuple, plus plaintext left over in the draft. */
+async function encryptedBlock(plaintext: string): Promise<FileBlock> {
+  const tuple = await encryptItem(GATEWAY_PASSWORD, new TextEncoder().encode(plaintext))
+  return {
+    id: 'b-locked',
+    type: 'locked',
+    label: 'Gateway keyphrase',
+    isLocked: true,
+    lockedData: { ...tuple, innerType: 'shortText' },
+    // The draft does hold the plaintext the tuple was made from — that is what the user typed,
+    // and it lives in memory. What is not allowed is for it to reach the record.
+    content: plaintext,
+  }
+}
+
+describe('a locked block at rest (PLAN.md §6.2)', () => {
+  it('writes the tuple alone: the secret appears nowhere in the stored row', async () => {
+    const folder = await createFolder('Vault', null)
+    const block = await encryptedBlock(GATEWAY_SECRET)
+    const file = await createFile('Keys', folder.id, [block])
+
+    const raw = await rawFileRow(file.id)
+    const stored = raw['blocks'] as Record<string, unknown>[]
+    const storedBlock = stored[0]
+    if (storedBlock === undefined) throw new Error('test bug: the stored row has no block')
+
+    // The whole record, stringified, must not contain the secret or the password it is locked
+    // under. This is the assertion the old suite never made, and the old code would have passed
+    // every test that did exist.
+    const asText = JSON.stringify(raw)
+    expect(asText).not.toContain(GATEWAY_SECRET)
+    expect(asText).not.toContain(GATEWAY_PASSWORD)
+    expect(asText).not.toContain('content')
+    expect(asText).not.toContain('password')
+
+    // The key set of the protected block is exactly the block plus its tuple.
+    expect(Object.keys(storedBlock).sort()).toEqual([
+      'id',
+      'isLocked',
+      'label',
+      'lockedData',
+      'type',
+    ])
+    expect(Object.keys(storedBlock.lockedData as Record<string, unknown>).sort()).toEqual([
+      'ciphertext',
+      'innerType',
+      'iv',
+      'salt',
+    ])
+
+    // And what is stored really opens with the password, back to the exact bytes typed.
+    const readBack = await getFile(file.id)
+    const tuple = readBack === undefined ? null : lockedTupleOf(readBack.blocks[0] ?? block)
+    if (tuple === null) throw new Error('test bug: the stored block lost its tuple')
+    const decrypted = await decryptItem(GATEWAY_PASSWORD, tuple.salt, tuple.iv, tuple.ciphertext)
+    expect(new TextDecoder().decode(decrypted)).toBe(GATEWAY_SECRET)
+  })
+
+  it('strips a plaintext beside a tuple on every write path, not only on saveFile', async () => {
+    // `updateFile` merges a patch over the stored row and re-parses it; a rename must not be able
+    // to smuggle the draft's plaintext back in beside the ciphertext it was encrypted from.
+    const folder = await createFolder('Vault 2', null)
+    const block = await encryptedBlock(GATEWAY_SECRET)
+    const file = await createFile('Renamed', folder.id, [block])
+
+    await updateFile(file.id, {
+      name: 'Renamed twice',
+      blocks: [{ ...block, content: GATEWAY_SECRET, value: GATEWAY_SECRET }],
+    })
+
+    const asText = JSON.stringify(await rawFileRow(file.id))
+    expect(asText).not.toContain(GATEWAY_SECRET)
+    expect(asText).not.toContain('"content"')
+    expect(asText).not.toContain('"value"')
+
+    const readBack = await getFile(file.id)
+    expect(readBack?.blocks[0]?.content).toBeUndefined()
+    expect(readBack === undefined ? null : lockedTupleOf(readBack.blocks[0] ?? block)).not.toBeNull()
+  })
+
+  it('never reads a stored password into app state, and erases one on the next write', async () => {
+    // The legacy row: plaintext secret, plaintext password, no ciphertext at all. This is exactly
+    // what `parseBlock` used to persist, and what the "Encrypted" badge then claimed to protect.
+    const legacyRow = {
+      id: 'legacy-1',
+      folderId: ROOT_FOLDER_ID,
+      name: 'Legacy dossier',
+      createdAt: NOW,
+      updatedAt: NOW,
+      blocks: [
+        {
+          id: 'b-legacy',
+          type: 'locked',
+          label: 'Cluster root',
+          content: GATEWAY_SECRET,
+          password: GATEWAY_PASSWORD,
+          isLocked: true,
+          isUnlocked: false,
+        },
+      ],
+    }
+    await putRawFileRow(legacyRow)
+
+    const file = await getFile('legacy-1')
+    if (file === undefined) throw new Error('test bug: the legacy row could not be read')
+    const block = file.blocks[0]
+    if (block === undefined) throw new Error('test bug: the legacy row has no block')
+
+    // `password` is not a field of a block any more, in either direction.
+    expect('password' in block).toBe(false)
+    expect(Object.keys(block).sort()).toEqual([
+      'content',
+      'id',
+      'isLocked',
+      'label',
+      'type',
+    ])
+
+    // And it is described as what it is: plaintext that was never encrypted.
+    expect(isProtectedBlock(block)).toBe(false)
+    expect(lockedTupleOf(block)).toBeNull()
+    expect(isUnprotectedSecretBlock(block)).toBe(true)
+    expect(unprotectedSecretBlocks(file).map((row) => row.id)).toEqual(['b-legacy'])
+
+    // An unrelated write — a rename, no blocks in the patch — takes the password out of the
+    // record too, because the row is written from a whitelist of known fields.
+    await updateFile('legacy-1', { name: 'Legacy dossier, touched' })
+    const after = JSON.stringify(await rawFileRow('legacy-1'))
+    expect(after).not.toContain(GATEWAY_PASSWORD)
+    expect(after).not.toContain('"password"')
+    // …without silently encrypting anything: it is still the plaintext the user has to decide
+    // about, and still named as unprotected (no background migration).
+    expect(after).toContain(GATEWAY_SECRET)
+    expect(isUnprotectedSecretBlock((await getFile('legacy-1'))?.blocks[0] ?? block)).toBe(true)
+  })
+
+  it('treats a tuple with the wrong iv width as no tuple at all', async () => {
+    // `encryptItem` emits a 12-byte iv and a 16-byte salt. A 1-byte iv is bytes that can never
+    // decrypt — Web Crypto raises OperationError on every try — so wearing a lock badge over it
+    // would be the same lie as plaintext with a password beside it.
+    const block = parseBlock({
+      id: 'b-junk',
+      type: 'locked',
+      label: 'Half a tuple',
+      content: GATEWAY_SECRET,
+      isLocked: true,
+      lockedData: {
+        ciphertext: bytes(32),
+        iv: bytes(1),
+        salt: bytes(16),
+        innerType: 'shortText',
+      },
+    })
+
+    expect(lockedTupleOf(block)).toBeNull()
+    expect(block.lockedData).toBeUndefined()
+    expect(isProtectedBlock(block)).toBe(false)
+    expect(isUnprotectedSecretBlock(block)).toBe(true)
+    // The plaintext it fell back to is kept: dropping it would destroy the user's data to fix a
+    // cosmetic claim about it.
+    expect(block.content).toBe(GATEWAY_SECRET)
+  })
+
+  it('names exactly the blocks a save must encrypt before it may write', async () => {
+    const tuple = await encryptItem(GATEWAY_PASSWORD, new TextEncoder().encode(GATEWAY_SECRET))
+    const file = parseFile({
+      id: 'policy-1',
+      folderId: ROOT_FOLDER_ID,
+      name: 'Policy',
+      createdAt: NOW,
+      updatedAt: NOW,
+      blocks: [
+        // Protected: a tuple, so nothing to do.
+        { id: 'ok', type: 'locked', isLocked: true, lockedData: { ...tuple, innerType: 'shortText' } },
+        // Meant to be secret, holds plaintext: must be encrypted.
+        { id: 'needs-password', type: 'locked', content: GATEWAY_SECRET, isLocked: true },
+        // Meant to be secret and empty: nothing to encrypt yet, so nothing to prompt for.
+        { id: 'empty', type: 'locked', isLocked: true },
+        // A plain field the user never claimed to protect.
+        { id: 'plain', type: 'shortText', label: 'Host', value: '10.0.0.1' },
+        // A non-secret block someone flagged locked: same rule, it needs a password.
+        { id: 'flagged', type: 'richText', content: GATEWAY_SECRET, isLocked: true },
+        { id: 'divider', type: 'divider' },
+      ],
+    })
+
+    expect(unprotectedSecretBlocks(file).map((block) => block.id)).toEqual([
+      'needs-password',
+      'flagged',
+    ])
+  })
+
+  it('does not persist which block is sitting open', async () => {
+    // `isUnlocked` is reveal state, not library state: persisting it would claim an open block
+    // next to plaintext the layer has just refused to write down.
+    const folder = await createFolder('Vault 3', null)
+    const block = await encryptedBlock(GATEWAY_SECRET)
+    const file = await createFile('Reveal', folder.id, [{ ...block, isUnlocked: true }])
+
+    const raw = await rawFileRow(file.id)
+    const stored = (raw['blocks'] as Record<string, unknown>[])[0]
+    if (stored === undefined) throw new Error('test bug: no stored block')
+    expect('isUnlocked' in stored).toBe(false)
+  })
+})
 
 describe('file ordering (sortOrder, ORCHESTRATION D16)', () => {
   it('reads files by sortOrder ascending', async () => {
@@ -1579,7 +1832,7 @@ describe('file ordering (sortOrder, ORCHESTRATION D16)', () => {
     const folder = await createFolder('Blocks', null)
     const other = await createFolder('Blocks other', null)
     const blocks: FileBlock[] = [
-      { id: 'b-1', type: 'locked', label: 'Key', content: 'secret', isLocked: true, password: 'pass' },
+      { id: 'b-1', type: 'locked', label: 'Key', content: 'secret', isLocked: true },
       { id: 'b-2', type: 'shortText', label: 'Host', value: '10.0.0.1' },
       { id: 'b-3', type: 'divider' },
     ]

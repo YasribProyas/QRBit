@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   GripVertical,
   Lock,
@@ -14,11 +15,19 @@ import {
   Clock,
   Loader2,
   Shield,
+  ShieldOff,
   Tag,
 } from 'lucide-react'
 import { IconX } from '@tabler/icons-react'
 import type { FileBlock } from '../../lib/library'
-import { decryptItem, encryptItem, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from '../../lib/crypto'
+import {
+  isLockedIntent,
+  isProtectedBlock,
+  isUnprotectedSecretBlock,
+  lockedTupleOf,
+} from '../../lib/library'
+import { decryptItem, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from '../../lib/crypto'
+import { describeSendFailure, DossierSendError, encryptBlockPayload } from '../../lib/dossier'
 import { formatByteSize, fileSizeText } from '../../lib/byteSize'
 import { AttachmentPicker, LIBRARY_ATTACHMENT_MAX_BYTES } from './AttachmentPicker'
 import type { AttachmentSelection } from './AttachmentPicker'
@@ -29,7 +38,13 @@ export interface BlockItemProps {
   index: number
   totalBlocks: number
   mode?: 'edit' | 'sender' | 'receiver'
-  transferStatus?: 'pending' | 'in_progress' | 'sent'
+  /**
+   * What the wire says about this row's item. Left unset, the row renders **no** pill: a
+   * transfer status is a claim about frames that left the device, and a row that cannot back it
+   * up should not make one. It used to default to `'sent'`, which put "Delivered" on every row
+   * the caller did not think about.
+   */
+  transferStatus?: 'pending' | 'in_progress' | 'sent' | 'error'
   transferProgress?: number
   onUpdate?: (id: string, changes: Partial<FileBlock>) => void
   onDelete?: (id: string) => void
@@ -59,8 +74,8 @@ export function BlockItem({
   index,
   totalBlocks,
   mode = 'edit',
-  transferStatus = 'sent',
-  transferProgress = 100,
+  transferStatus,
+  transferProgress = 0,
   onUpdate,
   onDelete,
   onDuplicate,
@@ -82,10 +97,49 @@ export function BlockItem({
   const [isEncrypting, setIsEncrypting] = useState(false)
   /** Why a lock was refused, in words: an oversized or empty payload cannot be encrypted. */
   const [lockError, setLockError] = useState<string | null>(null)
+  /**
+   * The password asked for when the user chooses to REMOVE a lock. Removing one throws the
+   * ciphertext away, and a protected block deliberately keeps no plaintext (that is the whole
+   * point), so the payload has to be decrypted before the key it is locked under is dropped.
+   * See `revealBlock`.
+   */
+  const [removeLockPassword, setRemoveLockPassword] = useState('')
+  const [removeLockError, setRemoveLockError] = useState(false)
 
   // Every edit-mode row is a measured reorder item, grip or no grip: the hook counts those
   // markers to index a drag, so the set of them has to be the whole list.
   const isReorderRow = mode === 'edit'
+
+  /*
+   * The three states a lockable row can be in, decided by what is STORED rather than by the
+   * flag the user last pressed — that distinction is this row's whole security story. A block
+   * whose payload is a `{ ciphertext, iv, salt }` tuple is encrypted (`isProtected`) and gets the
+   * lock badge, the Unlock button and no editable plaintext field. A block the user marked as a
+   * secret that still holds plaintext is the WARNING state (`isUnprotected`): no badge, no lock
+   * icon, no invented secret, and an explicit prompt to encrypt it. A marked block with nothing
+   * in it is `isEmptyLocked` — an empty protected field, which is neither of those and is said
+   * as plainly as it can be.
+   */
+  const isProtected = isProtectedBlock(block)
+  const isUnprotected = isUnprotectedSecretBlock(block)
+  const isEmptyLocked = isLockedIntent(block) && !isProtected && !isUnprotected
+  /** Does this row show the lock area at all? */
+  const showsLockArea = isLockedIntent(block)
+  /** While a block is encrypted its plaintext field is not editable: nothing may drift from the ciphertext. */
+  const canEditPayload = mode === 'edit' && !isProtected
+  /** The only plaintext this row may paint in the reveal slot: what a successful `decryptItem` put back. */
+  const revealedPlaintext = block.value ?? block.content
+  /** How the unprotected note names this block, in the words the row already uses for it. */
+  const blockWord =
+    block.type === 'shortText'
+      ? 'field'
+      : block.type === 'image'
+        ? 'image'
+        : block.type === 'fileAttachment'
+          ? 'attachment'
+          : block.type === 'richText'
+            ? 'note'
+            : 'block'
 
   /** The grabbed row is painted at the pointer, above its neighbours, and nothing else moves. */
   const dragStyle = isReorderDragging
@@ -103,54 +157,107 @@ export function BlockItem({
       </button>
     ) : null
 
-  const handleUnlockSubmit = async (e?: React.FormEvent) => {
+  /** The field this block type keeps its text payload in, so a reveal lands where the row reads. */
+  const textIsValue = block.type === 'shortText'
+
+  /**
+   * Opens this block with a password: decrypts the stored tuple and puts the plaintext where the
+   * row can show it (PLAN.md §11.4).
+   *
+   * The only door in the app for a locked dossier block. It returns false — with the caller's
+   * error state set, and the field cleared, exactly as `UnlockModal` does for a session item —
+   * for every way this can fail, so a wrong password, a tampered ciphertext, a malformed tuple
+   * and **no tuple at all** are indistinguishable on screen. `lib/library.ts` reports a
+   * malformed tuple as a wrong password for the same reason (see the comment above
+   * `readFixedBytes`); a row that said "there is nothing encrypted here" instead would hand an
+   * attacker the one thing the lock is supposed to keep.
+   *
+   * `discardTuple` is the Remove-Lock case. A protected block stores no plaintext — that is the
+   * guarantee — so dropping the ciphertext without decrypting it first would destroy the user's
+   * payload with it. Removal therefore goes through the same decrypt, and only a successful one
+   * takes the tuple off the block.
+   *
+   * The decrypted buffer is wiped as soon as it has been turned into what the row shows
+   * (PLAN.md §11.4: plaintext zeroed after use). The string or Blob that replaces it lives in
+   * the draft, in memory, and `parseBlock` refuses to persist it beside a tuple.
+   */
+  const revealBlock = async (password: string, discardTuple: boolean): Promise<boolean> => {
+    const tuple = lockedTupleOf(block)
+    if (tuple === null) {
+      reportUnlockFailure(discardTuple)
+      return false
+    }
+
+    let decrypted: Uint8Array
+    try {
+      decrypted = await decryptItem(password, tuple.salt, tuple.iv, tuple.ciphertext)
+    } catch {
+      reportUnlockFailure(discardTuple)
+      return false
+    }
+
+    const isFile =
+      tuple.innerType === 'fileAttachment' ||
+      block.type === 'image' ||
+      block.type === 'fileAttachment'
+
+    let revealed: Partial<FileBlock>
+    try {
+      revealed = isFile
+        ? // A locked attachment's plaintext is bytes, not text: decoding it as UTF-8 would put
+          // mojibake on the screen and call that the secret. `Blob` copies the buffer, so the
+          // decrypted bytes can be wiped straight after (same shape as `LibraryItemRow`'s
+          // reveal), and the row's own attachment area renders and downloads what it holds.
+          // The copy into an `ArrayBuffer`-backed view is the DOM types' requirement, not a
+          // defensive clone: `decryptItem` can hand back a view over anything.
+          { blob: new Blob([new Uint8Array(decrypted)], { type: block.mimeType ?? '' }) }
+        : textIsValue
+          ? { value: new TextDecoder().decode(decrypted) }
+          : { content: new TextDecoder().decode(decrypted) }
+    } finally {
+      decrypted.fill(0)
+    }
+
+    onUpdate?.(block.id, {
+      ...revealed,
+      isUnlocked: true,
+      ...(discardTuple ? { isLocked: false, lockedData: undefined } : {}),
+    })
+
+    if (!discardTuple && revealed.content !== undefined) {
+      onUnlockCredential?.(block.id, revealed.content)
+    }
+
+    if (discardTuple) {
+      setRemoveLockPassword('')
+      setShowLockConfigModal(false)
+    } else {
+      setPasswordInput('')
+      setShowUnlockModal(false)
+    }
+    return true
+  }
+
+  /** One failure message for every reason an unlock can fail. See `revealBlock`. */
+  function reportUnlockFailure(throughRemoval: boolean): void {
+    if (throughRemoval) {
+      setRemoveLockError(true)
+      setRemoveLockPassword('')
+      return
+    }
+    setUnlockError(true)
+    setPasswordInput('')
+  }
+
+  const handleUnlockSubmit = async (e?: React.FormEvent): Promise<void> => {
     e?.preventDefault()
     setIsDecrypting(true)
     setUnlockError(false)
-
-    try {
-      if (block.lockedData) {
-        const { ciphertext, iv, salt } = block.lockedData
-        const rawCipher =
-          typeof ciphertext === 'string'
-            ? new TextEncoder().encode(ciphertext)
-            : ciphertext
-        const rawIv =
-          typeof iv === 'string' ? new TextEncoder().encode(iv) : iv
-        const rawSalt =
-          typeof salt === 'string' ? new TextEncoder().encode(salt) : salt
-
-        const decrypted = await decryptItem(passwordInput, rawSalt, rawIv, rawCipher)
-        const plainText = new TextDecoder().decode(decrypted)
-
-        onUpdate?.(block.id, { isUnlocked: true, content: plainText })
-        onUnlockCredential?.(block.id, plainText)
-        setIsDecrypting(false)
-        setShowUnlockModal(false)
-        setPasswordInput('')
-        return
-      }
-
-      // Check against stored password or mock default
-      const expectedPassword = block.password || 'pass'
-      if (passwordInput === expectedPassword || passwordInput === 'pass') {
-        const secret = block.content || 'sys_x94#kK99!Alpha2'
-        onUpdate?.(block.id, { isUnlocked: true })
-        onUnlockCredential?.(block.id, secret)
-        setIsDecrypting(false)
-        setShowUnlockModal(false)
-        setPasswordInput('')
-      } else {
-        setIsDecrypting(false)
-        setUnlockError(true)
-      }
-    } catch {
-      setIsDecrypting(false)
-      setUnlockError(true)
-    }
+    await revealBlock(passwordInput, false)
+    setIsDecrypting(false)
   }
 
-  const handleSetLockPassword = async (e: React.FormEvent) => {
+  const handleSetLockPassword = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!newLockPassword.trim()) return
 
@@ -158,71 +265,55 @@ export function BlockItem({
     setLockError(null)
     try {
       /*
-       * What locking a block locks: its file bytes when it has them, otherwise its text. The
-       * old code encrypted `content || value || ''` whatever the block held, so locking an
-       * attachment produced an empty ciphertext that looked locked while the real file sat on
-       * the block — and `fileBlocksToLibraryItems` then shipped those bytes unencrypted, on the
-       * theory that an `image` block is an image block. Both are wrong: the file is the
-       * payload, so the file is what gets encrypted, and D6's cap is checked before that.
+       * The row does not encrypt anything itself: it collects the password and calls the ONE
+       * encryption path for authored blocks (`lib/dossier.ts` `encryptBlockPayload`), the same
+       * one the editor's Save prompt uses. What that encrypts is the block's real payload — its
+       * file bytes when it has them, otherwise its text — measured against D6's cap before any
+       * PBKDF2 work, and its plaintext buffer is zeroed on the way out.
+       *
+       * No password is written onto the block, in this patch or in any other: `FileBlock` has no
+       * field for one, because a record holding the secret and the key that opens it is not
+       * encrypted at all (PLAN.md §6.2).
+       *
+       * The announced patch replaces the tuple and clears `isUnlocked`: a block that has just
+       * been re-locked is not open, and a previous plaintext reveal must not stay on screen next
+       * to ciphertext that no longer matches it.
        */
-      const blob = block.blob
-      const plaintext =
-        blob instanceof Blob
-          ? new Uint8Array(await blob.arrayBuffer())
-          : new TextEncoder().encode(block.content ?? block.value ?? '')
-
-      if (plaintext.byteLength === 0) {
-        setLockError(
-          blob instanceof Blob
-            ? 'That file is empty, so there is nothing to encrypt.'
-            : 'This block has no content to encrypt. Write something or choose a file first.',
-        )
-        return
-      }
-      if (plaintext.byteLength > LOCKED_ITEM_MAX_PLAINTEXT_BYTES) {
-        setLockError(
-          `A locked item carries at most ${formatByteSize(LOCKED_ITEM_MAX_PLAINTEXT_BYTES)} (decision D6), and this payload is ${formatByteSize(plaintext.byteLength)}. Send it as a plain attachment instead.`,
-        )
-        return
-      }
-
-      const enc = await encryptItem(
-        newLockPassword,
-        plaintext,
-      )
-
+      const lockedData = await encryptBlockPayload(block, newLockPassword)
       onUpdate?.(block.id, {
         isLocked: true,
-        password: newLockPassword,
-        lockedData: {
-          ciphertext: enc.ciphertext,
-          iv: enc.iv,
-          salt: enc.salt,
-          innerType: blob instanceof Blob ? 'fileAttachment' : undefined,
-        },
+        lockedData,
         isUnlocked: false,
       })
 
       setShowLockConfigModal(false)
       setNewLockPassword('')
+    } catch (cause: unknown) {
+      setLockError(describeLockFailure(cause))
     } finally {
       setIsEncrypting(false)
     }
   }
 
-  const handleRemoveLock = () => {
-    onUpdate?.(block.id, {
-      isLocked: false,
-      password: undefined,
-      lockedData: undefined,
-      isUnlocked: true,
-    })
-    setShowLockConfigModal(false)
+  const handleRemoveLock = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (lockedTupleOf(block) === null) {
+      // Nothing is encrypted, so there is nothing to open first: just drop the lock flag.
+      onUpdate?.(block.id, { isLocked: false, lockedData: undefined })
+      setShowLockConfigModal(false)
+      return
+    }
+
+    setIsDecrypting(true)
+    setRemoveLockError(false)
+    await revealBlock(removeLockPassword, true)
+    setIsDecrypting(false)
   }
 
   // Render Transfer Status Pill for session screens
-  const renderStatusPill = () => {
+  const renderStatusPill = (): ReactNode => {
     if (mode !== 'sender' && mode !== 'receiver') return null
+    if (transferStatus === undefined) return null
 
     if (transferStatus === 'pending') {
       return (
@@ -247,6 +338,18 @@ export function BlockItem({
             <span>{Math.round(transferProgress)}%</span>
           </span>
         </div>
+      )
+    }
+
+    if (transferStatus === 'error') {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-red-50 text-red-700 border border-red-200"
+          data-transfer-error="true"
+        >
+          <Clock className="w-3 h-3 text-red-500" />
+          <span>Not delivered</span>
+        </span>
       )
     }
 
@@ -327,11 +430,15 @@ export function BlockItem({
   return (
     <div
       className={`group relative bg-white rounded-lg border transition-all ${
-        block.isLocked
+        isProtected
           ? 'border-[#C2410C]/40 bg-orange-50/15'
-          : 'border-[#D1D9E4]'
+          : isUnprotected
+            ? 'border-red-300 bg-red-50/25'
+            : 'border-[#D1D9E4]'
       } hover:border-[#94A3B8] shadow-2xs ${isReorderDragging ? 'shadow-md' : ''}`}
       data-reorder-item={isReorderRow ? '' : undefined}
+      data-block-protected={isProtected ? 'true' : undefined}
+      data-block-unprotected={isUnprotected ? 'true' : undefined}
       style={dragStyle}
     >
       {/* Header bar of block */}
@@ -342,11 +449,25 @@ export function BlockItem({
             {block.type === 'shortText' ? 'Short Text' : block.type}
           </span>
 
-          {/* Locked status pill */}
-          {block.isLocked && (
+          {/*
+            The badge is derived from the ciphertext, never from `isLocked`: a lock icon over a
+            plaintext payload is the exact claim this row is not allowed to make. An unprotected
+            secret says so instead.
+          */}
+          {isProtected && (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-[#C2410C]">
               <Lock className="w-2.5 h-2.5" />
-              <span>Locked Payload</span>
+              <span>Encrypted</span>
+            </span>
+          )}
+
+          {isUnprotected && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700"
+              data-unprotected-badge="true"
+            >
+              <ShieldOff className="w-2.5 h-2.5" />
+              <span>Not encrypted</span>
             </span>
           )}
 
@@ -367,15 +488,32 @@ export function BlockItem({
               {/* Lock / Unlock Toggle Button */}
               <button
                 type="button"
-                onClick={() => setShowLockConfigModal(true)}
+                onClick={() => {
+                  setLockError(null)
+                  setShowLockConfigModal(true)
+                }}
                 className={`p-1 rounded tactile-btn cursor-pointer ${
-                  block.isLocked
+                  isProtected
                     ? 'text-[#C2410C] hover:bg-orange-50'
-                    : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                    : isUnprotected
+                      ? 'text-red-600 hover:bg-red-50'
+                      : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
                 }`}
-                title={block.isLocked ? 'Manage password lock' : 'Lock this entity with password'}
+                title={
+                  isProtected
+                    ? 'Manage encrypted block'
+                    : isUnprotected
+                      ? 'Encrypt this block with a password'
+                      : 'Lock this entity with password'
+                }
               >
-                {block.isLocked ? <Lock className="w-3.5 h-3.5" /> : <Shield className="w-3.5 h-3.5" />}
+                {isProtected ? (
+                  <Lock className="w-3.5 h-3.5" />
+                ) : isUnprotected ? (
+                  <ShieldOff className="w-3.5 h-3.5" />
+                ) : (
+                  <Shield className="w-3.5 h-3.5" />
+                )}
               </button>
 
               <button
@@ -438,7 +576,7 @@ export function BlockItem({
         {/* HEADING BLOCK */}
         {block.type === 'heading' && (
           <div>
-            {mode === 'edit' ? (
+            {canEditPayload ? (
               <input
                 type="text"
                 value={block.content || ''}
@@ -469,13 +607,25 @@ export function BlockItem({
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-medium text-[#5B6B82] w-12 shrink-0">Value:</span>
-                  <input
-                    type="text"
-                    value={block.value || ''}
-                    onChange={(e) => onUpdate?.(block.id, { value: e.target.value })}
-                    placeholder="Single-line value..."
-                    className="flex-1 font-mono text-xs text-[#0F172A] bg-white px-2 py-1 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
-                  />
+                  {/*
+                    No editable value while the block is encrypted: the tuple is a ciphertext of
+                    the bytes that were on the block when it was locked, so a field the user could
+                    type into beside it would put one payload on screen and another on the wire.
+                    The value appears below, after a real unlock.
+                  */}
+                  {canEditPayload ? (
+                    <input
+                      type="text"
+                      value={block.value || ''}
+                      onChange={(e) => onUpdate?.(block.id, { value: e.target.value })}
+                      placeholder="Single-line value..."
+                      className="flex-1 font-mono text-xs text-[#0F172A] bg-white px-2 py-1 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8]"
+                    />
+                  ) : (
+                    <span className="flex-1 font-mono text-xs text-[#5B6B82]">
+                      Encrypted value — unlock to reveal it
+                    </span>
+                  )}
                 </div>
               </>
             ) : (
@@ -492,7 +642,7 @@ export function BlockItem({
         {/* RICH TEXT BLOCK */}
         {block.type === 'richText' && (
           <div>
-            {mode === 'edit' ? (
+            {canEditPayload ? (
               <textarea
                 rows={3}
                 value={block.content || ''}
@@ -578,16 +728,22 @@ export function BlockItem({
               </div>
 
               {mode !== 'edit' ? (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => alert(`Saved ${block.fileName} to local sandbox.`)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-[#D1D9E4] rounded hover:bg-slate-100 tactile-btn cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Save</span>
-                  </button>
-                </div>
+                /*
+                 * A real save, or none at all. This button used to run
+                 * `alert(`Saved ${block.fileName} to local sandbox.`)` — it saved nothing, and there
+                 * is no sandbox: the library writes dossiers to IndexedDB, and this row is showing
+                 * a file that arrived over a data channel and lives in memory. It is now an
+                 * ordinary download anchor over the block's own Blob, whose object URL is revoked
+                 * when the row unmounts, and it disappears entirely when the block has no bytes
+                 * (a "Save" for a file that does not exist was the same lie in a smaller hat).
+                 */
+                attachmentBlob instanceof Blob ? (
+                  <AttachmentDownload blob={attachmentBlob} name={block.fileName ?? 'download'} />
+                ) : (
+                  <span className="text-[11px] text-[#5B6B82]" data-attachment-no-bytes="true">
+                    No bytes to save
+                  </span>
+                )
               ) : null}
             </div>
 
@@ -598,61 +754,132 @@ export function BlockItem({
         )}
 
         {/* LOCKED BLOCK OR LOCKED ENTITY CONTENT */}
-        {(block.type === 'locked' || block.isLocked) && (
+        {showsLockArea && (
           <div className="space-y-2 pt-1">
             <div className="flex items-center justify-between">
-              <span className="text-[12px] font-semibold text-[#C2410C] flex items-center gap-1.5">
-                <KeyRound className="w-3.5 h-3.5" />
-                <span>{block.label || 'Protected Secret'}</span>
+              <span
+                className={`text-[12px] font-semibold flex items-center gap-1.5 ${
+                  isProtected ? 'text-[#C2410C]' : 'text-red-700'
+                }`}
+              >
+                {isProtected ? (
+                  <KeyRound className="w-3.5 h-3.5" />
+                ) : (
+                  <ShieldOff className="w-3.5 h-3.5" />
+                )}
+                <span>{block.label || (isProtected ? 'Encrypted payload' : 'Secret field')}</span>
               </span>
 
-              {mode === 'edit' && (
-                <span className="text-[11px] text-slate-500 font-mono">
-                  Passphrase: {block.password ? '••••••••' : '(set)'}
-                </span>
-              )}
+              {/*
+                No "Passphrase: •••••••• / (set)" readout, and no `(hint: pass)` anywhere in this
+                row. A dossier stores no password (PLAN.md §6.2), so the only honest thing that
+                could be shown here was a field that is always empty — and the pair of labels it
+                used (`(set)` when unset, dots when set) was inverted as well. The state it was
+                trying to show is now shown by the badge in the header, which is derived from the
+                ciphertext instead of from a field that no longer exists.
+              */}
+              {mode === 'edit' && !isProtected ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLockError(null)
+                    setShowLockConfigModal(true)
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-white bg-[#C2410C] hover:bg-[#9A3412] rounded tactile-btn cursor-pointer"
+                >
+                  <Shield className="w-3 h-3" />
+                  <span>Encrypt</span>
+                </button>
+              ) : null}
             </div>
 
-            {/* Credential Content (Hidden behind blur or revealed) */}
-            <div className="relative rounded-md border border-[#D1D9E4] bg-slate-900 text-slate-100 p-3 overflow-hidden font-mono text-[13px]">
-              {block.isUnlocked ? (
-                <div
-                  className="flex items-center justify-between transition-all duration-200"
-                  style={{
-                    filter: isDecrypting ? 'blur(2px)' : 'none',
-                  }}
-                >
-                  <span className="text-emerald-400 select-all">{block.content}</span>
-                  <span className="text-[11px] text-slate-400 px-1.5 py-0.5 bg-slate-800 rounded">
-                    Unlocked
-                  </span>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <div className="filter blur-sm select-none opacity-60">
-                    sys_x94#kK99!Alpha2_protected_vault
+            {isProtected ? (
+              /*
+                An encrypted row shows ciphertext or nothing. There used to be a blurred
+                demo vault string from the deleted mock seeder, painted over every locked block
+                whatever it held, so the dark box always
+                looked like a hidden secret. What is shown now is the shape of what is actually
+                stored, and the plaintext only ever after a real decryption.
+              */
+              <div className="relative rounded-md border border-[#D1D9E4] bg-slate-900 text-slate-100 p-3 overflow-hidden font-mono text-[13px]">
+                {block.isUnlocked ? (
+                  <div className="flex items-center justify-between gap-2 transition-all duration-200">
+                    <span className="text-emerald-400 select-all break-all" data-revealed="true">
+                      {revealedPlaintext ??
+                        'The decrypted file is back on the block — see the preview above.'}
+                    </span>
+                    <span className="text-[11px] text-slate-400 px-1.5 py-0.5 bg-slate-800 rounded shrink-0">
+                      Unlocked
+                    </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowUnlockModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-semibold rounded shadow-xs tactile-btn cursor-pointer"
-                  >
-                    <Unlock className="w-3.5 h-3.5" />
-                    <span>Unlock</span>
-                  </button>
-                </div>
-              )}
-            </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400" data-ciphertext-state="true">
+                      Encrypted with PBKDF2 + AES-256-GCM. No plaintext is stored for this block.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUnlockError(false)
+                        setShowUnlockModal(true)
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-semibold rounded shadow-xs tactile-btn cursor-pointer shrink-0"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      <span>Unlock</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /*
+                The honest unprotected state — a locked block that carries plaintext and no tuple,
+                which is every locked row written before the editor encrypted on save. It is said
+                in the plainest terms available because the alternative is the bug: a lock badge
+                over a secret sitting in IndexedDB as text.
+              */
+              <div
+                className="rounded-md border border-red-200 bg-red-50 p-3 space-y-2"
+                data-unprotected-note="true"
+              >
+                <p className="text-[11px] text-red-700">
+                  {isEmptyLocked
+                    ? 'Nothing has been written into this block yet, so there is nothing to encrypt.'
+                    : `Not encrypted: this ${blockWord} is stored as plaintext in the library on this device.`}
+                </p>
+                {mode === 'edit' && block.type === 'locked' ? (
+                  /*
+                    The secret field a `locked` block needs in order to exist at all: every other
+                    type has its own editor above, and the old row had none for this one, which is
+                    why the deleted mock seeder pre-filled a made-up secret here. What is typed in
+                    this box is what `encryptBlockPayload` encrypts, and it is stored as plaintext
+                    only until the user does.
+                  */
+                  <textarea
+                    rows={2}
+                    value={block.content ?? ''}
+                    onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
+                    placeholder="Write the secret to protect..."
+                    aria-label="Secret to encrypt"
+                    className="w-full text-xs font-mono text-[#0F172A] bg-white p-2 rounded border border-[#D1D9E4] focus:outline-none focus:border-[#1D4ED8] resize-y"
+                  />
+                ) : null}
+                <p className="text-[11px] text-[#5B6B82]">
+                  Encrypt it with a password you choose, or clear the lock to keep it as an
+                  ordinary unprotected field.
+                </p>
+              </div>
+            )}
 
             {/* Inline unlock form modal */}
-            {showUnlockModal && !block.isUnlocked && (
+            {showUnlockModal && isProtected && !block.isUnlocked && (
               <form
                 onSubmit={handleUnlockSubmit}
                 className="modal-enter p-3 bg-white border border-[#C2410C] rounded-md shadow-md mt-2 flex flex-col gap-2"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-800">
-                    Enter Decryption Key for "{block.label || 'Protected Secret'}"
+                    Enter Decryption Key for "{block.label || 'Encrypted payload'}"
                   </span>
                   <button
                     type="button"
@@ -667,7 +894,8 @@ export function BlockItem({
                   <input
                     type="password"
                     autoFocus
-                    placeholder="Enter password (hint: pass)"
+                    placeholder="Password for this block"
+                    aria-label="Password for this block"
                     value={passwordInput}
                     onChange={(e) => {
                       setPasswordInput(e.target.value)
@@ -685,8 +913,16 @@ export function BlockItem({
                     {isDecrypting ? 'Decrypting...' : 'Decrypt'}
                   </button>
                 </div>
+                {/*
+                  One message for every failure. `revealBlock` reports a wrong password, a
+                  tampered ciphertext and an unusable tuple identically, the way both other unlock
+                  paths in the app do (`LibraryItemRow` and `hooks/useSession`), so nothing on
+                  screen distinguishes "you typed it wrong" from "there is nothing here to open".
+                */}
                 {unlockError && (
-                  <p className="text-[11px] text-red-600">Incorrect password. Please try again.</p>
+                  <p className="text-[11px] text-red-600" role="alert" data-unlock-error="true">
+                    Incorrect password. Please try again.
+                  </p>
                 )}
               </form>
             )}
@@ -704,15 +940,15 @@ export function BlockItem({
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="font-display font-bold text-sm text-[#0F172A] mb-1">
-                {block.isLocked ? 'Entity Encryption Settings' : 'Lock Entity with Password'}
+                {isProtected ? 'Encrypted block' : 'Encrypt this block with a password'}
               </h3>
               <p className="text-xs text-[#5B6B82] mb-3">
-                {block.isLocked
-                  ? 'This entity is currently protected with AES-256-GCM.'
-                  : 'Protect this entity with Web Crypto PBKDF2 + AES-256-GCM. Each entity can have a distinct password.'}
+                {isProtected
+                  ? 'The payload of this block is stored as AES-256-GCM ciphertext, and nothing else: no plaintext and no password are kept for it.'
+                  : 'This encrypts the block\u2019s payload with Web Crypto PBKDF2-SHA256 (600,000 iterations) + AES-256-GCM. Only the ciphertext is stored. Each block can have its own password, and there is no recovery for one that is lost.'}
               </p>
 
-              {!block.isLocked ? (
+              {!isProtected ? (
                 <form onSubmit={handleSetLockPassword} className="space-y-3">
                   <div>
                     <label className="text-[11px] font-semibold text-slate-700 block mb-1">
@@ -747,38 +983,113 @@ export function BlockItem({
                       disabled={isEncrypting}
                       className="px-3.5 py-1.5 bg-[#C2410C] hover:bg-[#9A3412] text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
                     >
-                      {isEncrypting ? 'Encrypting...' : 'Lock Entity'}
+                      {isEncrypting ? 'Encrypting...' : 'Encrypt block'}
                     </button>
                   </div>
                 </form>
               ) : (
-                <div className="space-y-3">
+                /*
+                 * Removing a lock throws the ciphertext away, and a protected block keeps no
+                 * plaintext by design, so removal first proves the password opens it and puts the
+                 * payload back on the block. It used to be a one-click button that destroyed the
+                 * secret with the lock — a data-loss bug wearing a security label. A wrong
+                 * password here reports exactly as it does in the Unlock form above, and nothing
+                 * changes on the block.
+                 */
+                <form onSubmit={handleRemoveLock} className="space-y-3">
                   <p className="text-xs text-slate-600 bg-orange-50 p-2.5 rounded border border-orange-200">
-                    Locked entities require entering this entity's password to reveal.
+                    To reveal this block, use Unlock. To stop encrypting it, open it here first:
+                    the password has to be right, or the payload would be discarded with the lock.
                   </p>
+                  <input
+                    type="password"
+                    autoFocus
+                    required
+                    placeholder="Password for this block"
+                    aria-label="Password to remove the lock"
+                    value={removeLockPassword}
+                    onChange={(e) => {
+                      setRemoveLockPassword(e.target.value)
+                      setRemoveLockError(false)
+                    }}
+                    className={`w-full text-xs px-2.5 py-1.5 rounded border ${
+                      removeLockError ? 'border-red-500 bg-red-50' : 'border-[#D1D9E4]'
+                    } focus:outline-none focus:border-[#1D4ED8]`}
+                  />
+                  {removeLockError ? (
+                    <p className="text-[11px] text-red-600" role="alert" data-unlock-error="true">
+                      Incorrect password. Please try again.
+                    </p>
+                  ) : null}
                   <div className="flex justify-between items-center pt-2">
                     <button
                       type="button"
-                      onClick={handleRemoveLock}
-                      className="text-xs text-red-600 hover:underline tactile-btn cursor-pointer"
+                      onClick={() => setShowLockConfigModal(false)}
+                      className="px-3.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg tactile-btn cursor-pointer"
                     >
-                      Remove Lock
+                      Keep it encrypted
                     </button>
                     <button
-                      type="button"
-                      onClick={() => setShowLockConfigModal(false)}
-                      className="px-3.5 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
+                      type="submit"
+                      disabled={isDecrypting}
+                      className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg tactile-btn cursor-pointer"
                     >
-                      Done
+                      {isDecrypting ? 'Opening...' : 'Decrypt and remove lock'}
                     </button>
                   </div>
-                </div>
+                </form>
               )}
             </div>
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * Why an attempt to encrypt a block failed, in the words that fit a lock dialog.
+ *
+ * `describeSendFailure` already turns `DossierSendError` into a sentence, but its sentences end
+ * in "then send again", which is not what just went wrong here: this is the editor, nothing is
+ * being sent, and the fix is to write something into the block or choose a smaller file.
+ */
+function describeLockFailure(cause: unknown): string {
+  if (cause instanceof DossierSendError) {
+    switch (cause.reason) {
+      case 'locked-content-missing':
+        return 'This block has nothing to encrypt. Write the secret in, or choose a file for it, then lock it again.'
+      case 'locked-password-missing':
+        return 'A password is needed to encrypt this block. Type one, then lock it again.'
+      default:
+        return describeSendFailure(cause)
+    }
+  }
+  return describeSendFailure(cause)
+}
+
+/**
+ * A real save: the block's own bytes, handed to the browser as a download.
+ *
+ * The object URL is created when this anchor mounts and revoked when it unmounts (see
+ * `useObjectURL`), so a row that goes away, a block whose file is replaced, and a session screen
+ * that closes all release the reference. Nothing here claims a file was written anywhere: the
+ * anchor is the mechanism, and the browser's own download UI is the confirmation.
+ */
+function AttachmentDownload({ blob, name }: { blob: Blob; name: string }) {
+  const url = useObjectUrl(blob)
+  if (url === null) return null
+
+  return (
+    <a
+      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-[#D1D9E4] rounded hover:bg-slate-100 tactile-btn"
+      href={url}
+      download={name}
+      data-attachment-download="true"
+    >
+      <Download className="w-3.5 h-3.5" aria-hidden="true" />
+      <span>Save file</span>
+    </a>
   )
 }
 
@@ -813,7 +1124,15 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
    * later. `fileBlocksToLibraryItems` sends the stored tuple byte-for-byte (D9), which is only
    * safe because nothing can silently rewrite these bytes underneath it.
    */
-  if (block.isLocked === true) {
+  /*
+   * A locked block's ciphertext was made from the bytes that were on the block when the lock was
+   * set (see `encryptBlockPayload`). Choosing or removing a file after that would leave the row
+   * showing one payload and `fileBlocksToLibraryItems` sending the other one — the same species
+   * of defect as a fabricated blob, so it is refused here rather than detected later. The guard
+   * is the CIPHERTEXT, not the lock flag: a block that is marked locked but holds no tuple is
+   * exactly the row that still needs a file choosing, so that it can be encrypted at all.
+   */
+  if (isProtectedBlock(block)) {
     return (
       <p className="text-[11px] text-[#5B6B82]" data-attachment-locked="true">
         This block is locked. Remove the lock to choose a different {word}.

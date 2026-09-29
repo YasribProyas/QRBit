@@ -17,8 +17,8 @@ import {
   useSession,
 } from '../hooks/useSession'
 import { useLibraryStore } from '../store/libraryStore'
-import type { FileBlock, LibraryFile } from '../lib/library'
-import { fileBlocksToLibraryItems } from '../lib/dossier'
+import type { FileBlock, LibraryFile, LibraryItem } from '../lib/library'
+import { describeSendFailure, fileBlocksToLibraryItems } from '../lib/dossier'
 
 /**
  * The blocks a brand-new dossier starts with, so the first thing a user sees in the
@@ -73,6 +73,12 @@ export function Home() {
   const [editingFile, setEditingFile] = useState<LibraryFile | null>(null)
   /** The dossier handed to a session by the editor's Send. */
   const [selectedFileForTransfer, setSelectedFileForTransfer] = useState<LibraryFile | null>(null)
+  /**
+   * Why the last Send put nothing on the channel, in words. Home owns it because Home owns the
+   * conversion that refused, and a rejection with no catcher is an unhandled rejection — a page
+   * that dies quietly instead of telling the user their dossier did not go out.
+   */
+  const [sendFailure, setSendFailure] = useState<string | null>(null)
 
   // Home mounts the host session directly so the QR is visible and joinable immediately.
   const session = useSession({ code: null })
@@ -116,9 +122,28 @@ export function Home() {
     updateFile(file.id, file).catch(() => undefined)
   }
 
-  const handleSendFileDirectly = async (file: LibraryFile): Promise<void> => {
+  /**
+   * Converts a dossier and puts it on the channel, reporting every refusal here.
+   *
+   * Returns whether anything was queued. `lib/dossier.ts` refuses a block it cannot send — an
+   * attachment with no file behind it, a locked block that was never encrypted — and the refusal
+   * used to be rethrown at the editor, which caught it only because its own wiring happens to
+   * await this call. A page-level `await` with no `catch` is an unhandled rejection, and
+   * "unreachable by construction" is not a guarantee: this is the call that converts user data
+   * into wire frames, so it handles its own failure and names it on screen.
+   */
+  const handleSendFileDirectly = async (file: LibraryFile): Promise<boolean> => {
     setSelectedFileForTransfer(file)
-    const convertedItems = await fileBlocksToLibraryItems(file)
+
+    let convertedItems: LibraryItem[]
+    try {
+      convertedItems = await fileBlocksToLibraryItems(file)
+    } catch (cause: unknown) {
+      setSendFailure(describeSendFailure(cause))
+      return false
+    }
+
+    setSendFailure(null)
     if (session.phase === 'active') {
       for (const item of convertedItems) {
         session.sendLibraryItem(item)
@@ -126,6 +151,7 @@ export function Home() {
     } else {
       queueLibrarySends(convertedItems)
     }
+    return true
   }
 
   /**
@@ -159,16 +185,28 @@ export function Home() {
   // 2. FILE EDIT VIEW (Full Dossier Editor)
   if (editingFile) {
     return (
-      <FileEditView
-        file={editingFile}
-        onBack={() => setEditingFile(null)}
-        onSaveFile={handleSaveFile}
-        onSendFile={async (fileToSend) => {
-          await handleSendFileDirectly(fileToSend)
-          setScanning(true)
-        }}
-        folders={folders}
-      />
+      <>
+        {sendFailure !== null ? (
+          <p
+            className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700"
+            role="alert"
+            data-send-failure="true"
+          >
+            {sendFailure}
+          </p>
+        ) : null}
+        <FileEditView
+          file={editingFile}
+          onBack={() => setEditingFile(null)}
+          onSaveFile={handleSaveFile}
+          onSendFile={async (fileToSend) => {
+            // Only open the scanner once the dossier is actually on its way: a refused Send must
+            // not walk the user away from the editor that just told them what to fix.
+            if (await handleSendFileDirectly(fileToSend)) setScanning(true)
+          }}
+          folders={folders}
+        />
+      </>
     )
   }
 
