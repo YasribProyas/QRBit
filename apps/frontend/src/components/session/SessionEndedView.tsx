@@ -6,6 +6,7 @@ import {
   Library,
 } from 'lucide-react'
 import type { UseSessionResult } from '../../hooks/useSession'
+import { ROOT_FOLDER_ID } from '../../lib/library'
 import type { LibraryFolder, LibraryFile } from '../../lib/library'
 import { FolderPickerModal, type FolderPickerChoice } from '../library/FolderPickerModal'
 import { sessionItemsToLibraryFile } from '../../lib/dossier'
@@ -33,7 +34,7 @@ export function SessionEndedView({
 
   const handleSelectFolder = (folderChoice: FolderPickerChoice) => {
     setHasSavedWholeFile(true)
-    const targetFolderId = folderChoice.folderId || folders[0]?.id || 'f-1'
+    const targetFolderId = folderChoice.folderId || folders[0]?.id || ROOT_FOLDER_ID
     const file = sessionItemsToLibraryFile('Transferred Dossier', targetFolderId, completeItems)
     onSaveFileToLibrary(file)
   }

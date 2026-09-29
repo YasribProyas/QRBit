@@ -7,6 +7,7 @@ import { SessionBoard, isSenderRole } from './SessionBoard'
 import { SaveToLibraryModal } from '../library/SaveToLibraryModal'
 import { FolderPickerModal } from '../library/FolderPickerModal'
 import { sessionItemsToLibraryFile } from '../../lib/dossier'
+import { ROOT_FOLDER_ID } from '../../lib/library'
 import { ITEM_TYPE_ICONS } from '../library/LibraryItemRow'
 import { APP_URL } from '../../config'
 import type { SaveableSessionItem } from '../library/SaveToLibraryModal'
@@ -309,7 +310,7 @@ export function SessionEnded({ api }: { api: UseSessionResult }) {
           folders={folders}
           fileName="Incoming Dossier"
           onSelectFolder={async (choice) => {
-            let targetFolderId = choice.folderId || folders[0]?.id || 'f-1'
+            let targetFolderId = choice.folderId || folders[0]?.id || ROOT_FOLDER_ID
             if (choice.isNew && choice.folderName) {
               const newFolder = await createFolder(choice.folderName, null)
               targetFolderId = newFolder.id

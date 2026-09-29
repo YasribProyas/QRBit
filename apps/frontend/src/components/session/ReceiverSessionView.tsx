@@ -11,6 +11,7 @@ import {
   Smartphone,
 } from 'lucide-react'
 import type { UseSessionResult } from '../../hooks/useSession'
+import { ROOT_FOLDER_ID } from '../../lib/library'
 import type { LibraryFolder, FileBlock, LibraryFile } from '../../lib/library'
 import { BlockItem } from '../library/BlockItem'
 import { FolderPickerModal, type FolderPickerChoice } from '../library/FolderPickerModal'
@@ -40,14 +41,14 @@ export function ReceiverSessionView({
   // Convert received session items into display FileBlocks
   const arrivedFile = sessionItemsToLibraryFile(
     'Incoming Transferred Dossier',
-    folders[0]?.id || 'f-1',
+    folders[0]?.id || ROOT_FOLDER_ID,
     receivedItems,
   )
   const arrivedBlocks: FileBlock[] = arrivedFile.blocks
 
   const handleSelectFolder = (folderChoice: FolderPickerChoice) => {
     setHasSaved(true)
-    const targetFolderId = folderChoice.folderId || folders[0]?.id || 'f-1'
+    const targetFolderId = folderChoice.folderId || folders[0]?.id || ROOT_FOLDER_ID
     const completeItems = receivedItems.filter((i) => i.status === 'complete')
     const finalFile = sessionItemsToLibraryFile(
       'Incoming Transferred Dossier',
