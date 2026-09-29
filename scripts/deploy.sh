@@ -62,13 +62,26 @@ if [ "$FRONTEND" -eq 1 ]; then
 
   echo "==> verify the served page is the build we just made"
   LOCAL="$(grep -oE 'assets/[a-zA-Z0-9._-]+\.(js|css)' apps/frontend/dist/index.html | sort -u)"
-  LIVE="$(curl -s --max-time 45 "$APP_URL/" | grep -oE 'assets/[a-zA-Z0-9._-]+\.(js|css)' | sort -u)"
+  # A Workers static-assets deploy propagates for a minute or two, and the edge may serve the
+  # previous index.html during that window. Re-check with a bounded wait instead of declaring
+  # failure on the first read -- but keep failing loudly if it never converges, because a real
+  # no-op deploy (the stale `--filter` case) must not be papered over by retrying until green.
+  LIVE=""
+  for attempt in 1 2 3 4 5 6; do
+    LIVE="$(curl -s --max-time 45 "$APP_URL/" | grep -oE 'assets/[a-zA-Z0-9._-]+\.(js|css)' | sort -u)"
+    [ "$LOCAL" = "$LIVE" ] && break
+    echo "    attempt $attempt: still serving the previous bundle; waiting for propagation..."
+    sleep 15
+  done
   echo "$LOCAL" | sed 's/^/    local  /'
   echo "$LIVE"  | sed 's/^/    served /'
   if [ -n "$LIVE" ] && [ "$LOCAL" = "$LIVE" ]; then
     echo "    ==> MATCH: new bundle is live"
   else
-    echo "    ==> MISMATCH: the deploy did not land (or the edge is serving a cached page)." >&2
+    echo "    ==> MISMATCH after 6 reads: the deploy did not land." >&2
+    echo "        If the local list is the OLD build, the build never ran (check for" >&2
+    echo "        'No projects matched the filters'). If it is genuinely new, the edge is" >&2
+    echo "        still serving a cached shell -- check cf-cache-status on the response." >&2
     exit 1
   fi
 
