@@ -1165,7 +1165,9 @@ describe('LibraryPanel — the folder menu', () => {
     renderPanel()
     const section = folderSection('Vault')
     await openMenu(section)
-    click(menuItem('Delete folder and contents'))
+    // The entry states the cascade before the dialog does: one nested folder, two dossiers
+    // (one of them in the nested folder), one loose item.
+    click(menuItem('Delete folder and its 1 folder, 2 dossiers, 1 item'))
 
     const prompt = dialogText()
     expect(prompt.title).toContain('Vault')
@@ -1199,7 +1201,7 @@ describe('LibraryPanel — the folder menu', () => {
     renderPanel()
     const section = folderSection('Vault')
     await openMenu(section)
-    click(menuItem('Delete folder and contents'))
+    click(menuItem('Delete folder and its 1 dossier'))
     await clickAndSettle(dialogButton('Cancel'))
 
     expect(calls.deleteFolder).toEqual([])
@@ -1239,6 +1241,275 @@ describe('LibraryPanel — the folder menu', () => {
     click(toggle)
     expect(sectionNamed('Vault').files).toEqual(['API keys'])
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  })
+})
+
+/**
+ * The structure the panel has to state with its geometry (DESIGN.md's Row spec, and the
+ * design-system pass's findings about this screen).
+ *
+ * Behaviour is pinned everywhere else in this file; these tests pin what a sighted user reads,
+ * because that is the part a later edit can break without breaking a store call: which control
+ * leads a row, how deep a contained row sits, what a count says, and where the control that
+ * makes a dossier lives. Each assertion names the mechanism, not a pixel value, except where
+ * the pixel value *is* the mechanism (DESIGN.md's 44px row and 10px row padding).
+ *
+ * jsdom lays nothing out, so the geometry is read back from the inline styles the component
+ * writes — which is also the only form the deployed CSP allows (React sets styles through the
+ * CSSOM). `getComputedStyle` here reports the initial value for `color` (`rgb(0, 0, 0)`) for
+ * every element, because jsdom does not substitute Mantine's `var()` chain, so a colour-versus-
+ * background assertion in this file would compare two numbers no browser ever painted. The
+ * contrast guarantee for these labels is pinned in `src/themeBridge.test.tsx` ("a quiet control
+ * is readable in the light scheme"), which resolves the token chain itself.
+ */
+describe('LibraryPanel — container and contained', () => {
+  /** Vault holding two dossiers, Notes holding one, and one dossier in Root. */
+  async function seedTwoFolders(): Promise<LibraryFolder> {
+    const vault = await seedFolder('Vault')
+    const notes = await seedFolder('Notes')
+    await seedFile('API keys', vault.id, 1000)
+    await seedFile('Recovery tokens', vault.id, 2000)
+    await seedFile('Shopping list', notes.id, 1000)
+    await seedFile('Loose end', ROOT_FOLDER_ID, 1000)
+    await orderFolders(null, vault.id, notes.id)
+    await loadLibrary()
+    return vault
+  }
+
+  function headerRow(section: HTMLElement): HTMLElement {
+    const row = section.querySelector<HTMLElement>('.library-panel__folder-row')
+    if (row === null) throw new Error('test bug: this section has no header row')
+    return row
+  }
+
+  /** The position of one control in the header row, or -1 when the row does not carry one. */
+  function headerPosition(section: HTMLElement, className: string): number {
+    return [...headerRow(section).children].findIndex((child) => child.classList.contains(className))
+  }
+
+  /** The dossier rows of one section, in the order it lists them. */
+  function containedRows(section: HTMLElement): HTMLElement[] {
+    return [...section.querySelectorAll<HTMLElement>('.library-panel__file')]
+  }
+
+  it('leads a container row with the chevron, then the grip, then the label', async () => {
+    await seedTwoFolders()
+
+    renderPanel()
+
+    const vault = folderSection('Vault')
+    // Chevron first, then the drag handle, then the name: collapse is the more common press, and
+    // the disclosure is the only mark that says *this row has contents*.
+    expect(headerPosition(vault, 'library-panel__folder-toggle')).toBeGreaterThanOrEqual(0)
+    expect(headerPosition(vault, 'library-panel__folder-toggle')).toBeLessThan(
+      headerPosition(vault, 'library-panel__folder-grip'),
+    )
+    expect(headerPosition(vault, 'library-panel__folder-grip')).toBeLessThan(
+      headerPosition(vault, 'library-panel__folder-name'),
+    )
+    // The two controls that create and command the folder are at the right end, the plus before
+    // the menu, and the count between the label and them.
+    expect(headerPosition(vault, 'library-panel__folder-name')).toBeLessThan(
+      headerPosition(vault, 'library-panel__new-file'),
+    )
+    expect(headerPosition(vault, 'library-panel__new-file')).toBeLessThan(
+      headerPosition(vault, 'library-panel__folder-menu-toggle'),
+    )
+  })
+
+  it('makes Root a sibling of the folders by giving it the same row anatomy', async () => {
+    await seedTwoFolders()
+
+    renderPanel()
+
+    const root = folderSection('Root')
+    const vault = folderSection('Vault')
+    // Root opens and closes like a folder, starts at the same edge and carries the same count —
+    // which is the difference between "a bucket" and "another dossier row".
+    expect(headerPosition(root, 'library-panel__folder-toggle')).toBe(
+      headerPosition(vault, 'library-panel__folder-toggle'),
+    )
+    expect(headerRow(root).style.paddingInline).toBe(headerRow(vault).style.paddingInline)
+    expect(headerRow(root).style.minHeight).toBe(headerRow(vault).style.minHeight)
+    // It has no grip, because the store cannot honour one index across the folders its rows come
+    // from — and the column is reserved rather than dropped, so the labels still line up.
+    expect(headerPosition(root, 'library-panel__folder-grip')).toBe(-1)
+    expect(headerPosition(root, 'library-panel__folder-rail')).toBe(
+      headerPosition(vault, 'library-panel__folder-grip'),
+    )
+    expect(headerPosition(root, 'library-panel__new-file')).toBeGreaterThan(0)
+    // No menu: the library layer has no Root to rename or delete.
+    expect(headerPosition(root, 'library-panel__folder-menu-toggle')).toBe(-1)
+  })
+
+  it('indents every contained row deeper than the container that owns it', async () => {
+    await seedTwoFolders()
+
+    renderPanel()
+
+    const vault = folderSection('Vault')
+    const apiKeys = fileRow('API keys')
+    // Container: the Panel's own row padding. Contained: that padding plus one spacing step,
+    // expressed in the token rather than a number, so it moves with the scheme's scale.
+    expect(headerRow(vault).style.paddingInline).toBe('10px')
+    expect(apiKeys.style.paddingInlineStart).toContain('10px')
+    expect(apiKeys.style.paddingInlineStart).toContain('var(--qrbit-space-xxl)')
+    expect(apiKeys.style.paddingInlineEnd).toBe('10px')
+    // A dossier never carries a disclosure chevron: no chevron means no contents.
+    expect(apiKeys.querySelector('.library-panel__folder-toggle')).toBe(null)
+    // Root's rows sit in the same contained column as a folder's, and keep the reserved grip
+    // column even though they have no grip.
+    const looseEnd = fileRow('Loose end')
+    expect(looseEnd.style.paddingInlineStart).toBe(apiKeys.style.paddingInlineStart)
+    expect(looseEnd.querySelector('.library-panel__grip')).toBe(null)
+    expect(looseEnd.querySelector('.library-panel__file-rail')).not.toBe(null)
+  })
+
+  it('draws each row as a flat 44px line with one division, and no box around the list', async () => {
+    await seedTwoFolders()
+
+    renderPanel()
+
+    const vault = folderSection('Vault')
+    // DESIGN.md's list-row: 44px minimum and one 1px division. The division is a border on the
+    // row itself, so it runs edge to edge and no second surface appears inside the Panel.
+    expect(headerRow(vault).style.minHeight).toBe('44px')
+    expect(fileRow('API keys').style.minHeight).toBe('44px')
+    expect(fileRow('API keys').style.borderTop).toContain('var(--qrbit-border)')
+    // A section is its header row plus the rows it owns: no padded wrapper, no description line,
+    // no `+ New file` row. That padding and those lines were the vertical voids.
+    expect(
+      [...vault.children].map((child) =>
+        [...child.classList].find((name) => name.startsWith('library-panel__')) ?? child.tagName,
+      ),
+    ).toEqual(['library-panel__folder-row', 'library-panel__files'])
+    expect(panel().querySelector('.library-panel__folder-hint')).toBe(null)
+    const firstPlus = panel().querySelector<HTMLElement>('.library-panel__new-file')
+    if (firstPlus === null) throw new Error('test bug: the panel has no plus control')
+    expect(firstPlus.closest('.library-panel__folder-row')).not.toBe(null)
+  })
+
+  it('collapses to one row and says so in the count', async () => {
+    await seedTwoFolders()
+
+    renderPanel()
+    const toggle = requireButton(
+      folderSection('Vault').querySelector('.library-panel__folder-toggle'),
+      'collapse toggle',
+    )
+
+    click(toggle)
+
+    // A collapsed folder is its header alone — the count is the whole statement of what is in it.
+    expect(folderSection('Vault').children).toHaveLength(1)
+    expect(
+      folderSection('Vault').querySelector('.library-panel__folder-count')?.textContent,
+    ).toBe('2 dossiers')
+
+    click(toggle)
+    expect(containedRows(folderSection('Vault'))).toHaveLength(2)
+  })
+
+  it('counts dossiers with their noun, on every container, including an empty one', async () => {
+    await seedTwoFolders()
+    await seedFolder('Quiet')
+    await loadLibrary()
+
+    renderPanel()
+
+    expect(
+      folderSection('Vault').querySelector('.library-panel__folder-count')?.textContent,
+    ).toBe('2 dossiers')
+    expect(
+      folderSection('Notes').querySelector('.library-panel__folder-count')?.textContent,
+    ).toBe('1 dossier')
+    expect(
+      folderSection('Root').querySelector('.library-panel__folder-count')?.textContent,
+    ).toBe('1 dossier')
+    expect(
+      folderSection('Quiet').querySelector('.library-panel__folder-count')?.textContent,
+    ).toBe('0 dossiers')
+    // A bare figure with no noun is what the panel used to print.
+    expect(
+      folderSection('Vault').querySelector('.library-panel__folder-count')?.textContent,
+    ).not.toBe('2')
+  })
+
+  it('asks for a new file in the folder whose header plus was pressed, without collapsing it', async () => {
+    const vault = await seedTwoFolders()
+
+    const askedFor: string[] = []
+    renderPanel({
+      onCreateFile: (folderId) => {
+        askedFor.push(folderId)
+      },
+    })
+
+    const section = folderSection('Vault')
+    const plus = requireButton(section.querySelector('.library-panel__new-file'), 'header plus')
+    expect(plus.getAttribute('aria-label')).toBe('New file in Vault')
+
+    click(plus)
+
+    expect(askedFor).toEqual([vault.id])
+    // The press made a dossier; it did not fold the folder away. `stopPropagation` on the plus is
+    // what keeps it out of the row's collapse controls (the chevron and the label), and the row is
+    // verified here rather than assumed.
+    expect(requireButton(section.querySelector('.library-panel__folder-toggle'), 'toggle').getAttribute('aria-expanded')).toBe('true')
+    expect(sectionNamed('Vault').files).toEqual(['API keys', 'Recovery tokens'])
+  })
+
+  it('states the cascade in the delete entry of a folder that has one', async () => {
+    const vault = await seedFolder('Vault')
+    const inside = await seedFolder('Old vault', vault.id)
+    await seedFile('API keys', vault.id, 1000)
+    await seedFile('Cold storage', inside.id, 1500)
+    await loadLibrary()
+
+    renderPanel()
+    await openMenu(folderSection('Vault'))
+
+    // The same arithmetic the confirmation quotes, in the entry that opens it.
+    expect(menuItem('Delete folder and its 1 folder, 2 dossiers').textContent).toBe(
+      'Delete folder and its 1 folder, 2 dossiers',
+    )
+  })
+
+  it('says what a delete of an empty folder costs, which is one folder', async () => {
+    await seedFolder('Quiet')
+    await loadLibrary()
+
+    renderPanel()
+    await openMenu(folderSection('Quiet'))
+
+    expect(menuItem('Delete empty folder').textContent).toBe('Delete empty folder')
+  })
+
+  it('keeps the names in the DOM and out of the panel’s own colour decisions', async () => {
+    await seedTwoFolders()
+
+    renderPanel()
+
+    const folderLabel = folderSection('Vault').querySelector<HTMLElement>(
+      '.library-panel__folder-name',
+    )
+    const dossierLabel = fileRow('API keys').querySelector<HTMLElement>(
+      '.library-panel__file-name',
+    )
+    // The text is there, whatever colour it is painted in.
+    expect(folderLabel?.textContent?.trim()).toBe('Vault')
+    expect(dossierLabel?.textContent?.trim()).toBe('API keys')
+    // And the panel writes no colour of its own for it: the name comes from the theme's slots,
+    // so the invisible-in-light-mode defect has one owner (`theme.ts`, whose bridge test is
+    // named above) rather than being papered over row by row. Mantine's own CSS custom
+    // properties (`--button-color`, resolved from the theme's slots) are not a claim this file
+    // makes, so only the label elements and the row geometry are read here.
+    expect(folderLabel?.style.color).toBe('')
+    expect(dossierLabel?.style.color).toBe('')
+    expect(dossierLabel?.getAttribute('style')).toBe(null)
+    // The row itself only sets geometry and the division.
+    expect(fileRow('API keys').style.color).toBe('')
+    expect(fileRow('API keys').getAttribute('style')).toContain('border-top')
   })
 })
 

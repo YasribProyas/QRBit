@@ -16,6 +16,31 @@
  * from `--qrbit-*` tokens or from the theme's semantic slots, so both schemes come from one
  * set of declarations and nothing here knows which scheme it is in.
  *
+ * **Container versus contained** (what a folder section has to say without ambiguity, and the
+ * reason the panel used to read as "folders under files"). A sighted user tells the two kinds
+ * of row apart by three things, all of them structural, and none of them a colour:
+ *
+ * 1. **Indent.** A container row starts at the Panel's own edge (`ROW_PADDING_X`, 10px). Every
+ *    row it contains starts one spacing step deeper — `CONTAINED_INSET_X`, 32px deeper — so the
+ *    contained rows' left edges form a column that is visibly inside the container's column.
+ *    The step is sized so the contained *label* column also lands right of the container's, on
+ *    the ladder the rows actually use (10px padding + a 34px chevron + 8px + a 34px grip + 8px +
+ *    the label button's 4px = 98px for a folder; 42px + a 34px grip + 8px + 4px + a 16px dossier
+ *    icon + 4px = 108px for a dossier): a row that is owned cannot start further left than the
+ *    row that owns it. That arithmetic is exactly what read backwards before: the container
+ *    carried a chevron *and* a grip while a dossier carried only a grip, and with the old 4px
+ *    gaps and 20px of list padding a folder's label started about 8px right of the dossiers it
+ *    held — so every folder looked like one more file, filed under the files above it.
+ * 2. **Label.** Only a container has a disclosure chevron, and it comes first (before the
+ *    grip): no chevron means no contents. A container's label wears the Title role (15/600);
+ *    a dossier's name wears Body (14/400) over its preview line. Weight and shape carry the
+ *    difference, per DESIGN.md's "The Weight Before Colour Rule".
+ * 3. **Count.** A container states what it holds — "8 dossiers" — in the row itself, and the
+ *    number is the count of the rows printed under it. A dossier never carries a count.
+ *
+ * Collapsing a container removes exactly the rows under it, which is the behaviour that proves
+ * the structure, and a collapsed container shows only its own row: no empty box, no hint line.
+ *
  * **State ownership.** The panel reads and writes `store/libraryStore` directly: the store
  * is the UI's only route to IndexedDB, and it re-reads the database after every write, so
  * the list on screen is the list that was just stored. That is what makes a drag, a rename
@@ -39,12 +64,13 @@
  * It is UI state only, and nothing here writes to `localStorage`, IndexedDB or the
  * Cache API (AGENTS.md).
  *
- * Every delete is confirmed first, and the folder prompt states the cascade in numbers —
- * folders, dossiers and loose items, nested included — counted by `lib/folders.ts`'s
- * `describeDelete`, the same arithmetic `deleteFolder` runs (PLAN.md §6.3, "a folder tree
- * dies whole"). The panel keeps no second copy of that math: the library never leaves the
- * device, so there is no other copy to restore, and a confirmation that quotes numbers has to
- * promise the true ones.
+ * Every delete is confirmed first, and the cascade is stated twice in the same numbers: in the
+ * folder's own menu entry ("Delete folder and its 2 dossiers", which is why the entry is not a
+ * bare "Delete folder") and in the prompt that follows, naming folders, dossiers and loose items,
+ * nested included. Both come from `lib/folders.ts` — `folderDeleteImpact` and `describeDelete`,
+ * the same arithmetic `deleteFolder` runs (PLAN.md §6.3, "a folder tree dies whole"). The panel
+ * keeps no second copy of that math: the library never leaves the device, so there is no other
+ * copy to restore, and a confirmation that quotes numbers has to promise the true ones.
  */
 
 import { useCallback, useRef, useState } from 'react'
@@ -57,7 +83,6 @@ import {
   Group,
   Loader,
   Menu,
-  Stack,
   Text,
   TextInput,
   Title,
@@ -69,7 +94,6 @@ import {
   IconChevronRight,
   IconDotsVertical,
   IconFileText,
-  IconFolder,
   IconGripVertical,
   IconLock,
   IconPencil,
@@ -85,8 +109,8 @@ import { NewFolderModal } from './NewFolderModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
 import { getFirstBlockPreview, hasLockedBlocks } from '../../lib/dossier'
-import { describeDelete } from '../../lib/folders'
-import type { PendingDelete } from '../../lib/folders'
+import { describeDelete, folderDeleteImpact } from '../../lib/folders'
+import type { DeleteImpact, PendingDelete } from '../../lib/folders'
 import { ROOT_FOLDER_ID, siblingFolders } from '../../lib/library'
 import type { LibraryFile, LibraryFolder } from '../../lib/library'
 import { DEFAULT_ITEM_HEIGHT } from '../../lib/reorder'
@@ -119,10 +143,74 @@ interface PanelActions {
   reorderFolder(folder: LibraryFolder, targetIndex: number): void
   renameFolder(folder: LibraryFolder, name: string): void
   askDeleteFolder(folder: LibraryFolder): void
+  /**
+   * The folder menu's destructive entry, worded with the cascade it is about to run.
+   * `lib/folders.ts` owns that arithmetic (it is the same count `deleteFolder` acts on), so
+   * the menu cannot promise a smaller death than the store will carry out.
+   */
+  folderDeleteLabel(folder: LibraryFolder): string
 }
 
 /** The single 1px division between rows. `--qrbit-border` divides; it is not a box. */
 const ROW_DIVISION: CSSProperties = { borderTop: '1px solid var(--qrbit-border)' }
+
+/*
+ * Row geometry, all of it DESIGN.md's list-row: 44px minimum height, 16px icons, one 1px
+ * division, `space-sm` gaps inside the row, and 10px of side padding so the rows run edge to
+ * edge and the hairlines meet the Panel's border instead of stopping short of it.
+ *
+ * There is no extra padding above or below a folder's list and no description line inside a
+ * section: a section is its header row plus the rows it owns, and a collapsed section is one
+ * row. The vertical voids those added were the panel's main defect.
+ */
+const ROW_MIN_HEIGHT = 44
+
+/** Every icon in a row is 16px (DESIGN.md's icon ladder: 16–20px, one stroke weight). */
+const ROW_ICON_SIZE = 16
+
+/** DESIGN.md's list-row padding. */
+const ROW_PADDING_X = '10px'
+
+/**
+ * The leading inset of a contained row: the Panel's own row padding plus one
+ * `--qrbit-space-xxl` step (32px) of ownership.
+ *
+ * 32 rather than 8 or 12 because a container row carries two leading controls (the disclosure
+ * chevron and the grip) and a dossier row carries one, so the indent has to pay for the extra
+ * control before it starts being an indent at all — see the module comment for the columns.
+ */
+const CONTAINED_INSET_X = `calc(${ROW_PADDING_X} + var(--qrbit-space-xxl))`
+
+/**
+ * The box an `ActionIcon size="lg"` occupies: the nearest step to DESIGN.md's 32px icon-only
+ * control (the ladder is 28/34/44 — `theme.ts` records why the exact value is not reachable
+ * from a theme slot), and the size every row control uses. A reserved control column is
+ * measured in it, so the columns line up whether or not a control is standing in them.
+ */
+const ROW_ICON_BOX = 'calc(2.125rem * var(--mantine-scale))'
+
+/** A container row: the Panel's edge, `space-sm` between its controls, 44px of pressable height. */
+const CONTAINER_ROW: CSSProperties = {
+  minHeight: ROW_MIN_HEIGHT,
+  paddingInline: ROW_PADDING_X,
+  gap: 'var(--qrbit-space-sm)',
+}
+
+/** A contained row: same height and same division, one step deeper in. */
+const CONTAINED_ROW: CSSProperties = {
+  minHeight: ROW_MIN_HEIGHT,
+  paddingInlineStart: CONTAINED_INSET_X,
+  paddingInlineEnd: ROW_PADDING_X,
+  gap: 'var(--qrbit-space-sm)',
+}
+
+/** The line printed under an empty folder: a row's worth of text, in the contained column. */
+const EMPTY_ROW: CSSProperties = {
+  ...ROW_DIVISION,
+  paddingInlineStart: CONTAINED_INSET_X,
+  paddingInlineEnd: ROW_PADDING_X,
+  paddingBlock: 'var(--qrbit-space-sm)',
+}
 
 /** The Panel itself: Raised, 1px Border, radius lg, no shadow at rest. */
 const PANEL_STYLE: CSSProperties = {
@@ -136,13 +224,39 @@ const PANEL_STYLE: CSSProperties = {
  *
  * Mantine stretches and ellipsises a button label, which is right for one line and wrong for
  * a name over a preview, so the label keeps its own wrapping and alignment. Fill, hover,
- * radius and the focus ring stay the theme's.
+ * radius and the focus ring stay the theme's. The row's height comes from the `li` it sits in,
+ * so the button only has to keep its own minimum.
  */
 const ROW_BUTTON_STYLES = {
-  root: { minWidth: 0, height: 'auto', minHeight: 44 },
+  root: { minWidth: 0, height: 'auto', minHeight: ROW_MIN_HEIGHT },
   inner: { alignItems: 'center', width: '100%' },
   label: { minWidth: 0, textAlign: 'left', whiteSpace: 'normal' },
 } as const
+
+/**
+ * The row's count and the menu's destructive entry both read this way: a number with its noun,
+ * because a bare "8" says nothing about what is being counted (DESIGN.md: a badge, or a count,
+ * carries a word as well as a figure).
+ *
+ * The *arithmetic* behind the folder delete is `lib/folders.ts`'s — `folderDeleteImpact`, the
+ * same count `deleteFolder` destroys — so the menu cannot promise a smaller death than the
+ * store carries out. Only the wording is local here: the row counts the dossiers it lists, the
+ * menu names the whole cascade, nested folders and loose items included.
+ */
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+/** `"Delete folder and its 1 folder, 2 dossiers"` — the cascade in the length of a menu entry. */
+function cascadeLabel(impact: DeleteImpact): string {
+  const parts: string[] = []
+  const nested = impact.folders - 1
+  if (nested > 0) parts.push(plural(nested, 'folder'))
+  if (impact.files > 0) parts.push(plural(impact.files, 'dossier'))
+  if (impact.items > 0) parts.push(plural(impact.items, 'item'))
+  if (parts.length === 0) return 'Delete empty folder'
+  return `Delete folder and its ${parts.join(', ')}`
+}
 
 // ---------------------------------------------------------------------------
 // The panel
@@ -207,6 +321,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
     askDeleteFolder: (folder) => {
       setPendingDelete({ kind: 'folder', id: folder.id })
     },
+    folderDeleteLabel: (folder) => cascadeLabel(folderDeleteImpact(folders, files, items, folder.id)),
   }
 
   /** The list the folder sections are stacked in, for `measureFolderPitch` to read. */
@@ -390,6 +505,14 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
               }}
               handleProps={null}
               dragOffset={null}
+              // Root is the bucket, so its empty line has to be true about the whole library:
+              // with no folders at all, "every dossier is inside a folder you can see" would be
+              // a statement about nothing.
+              emptyHint={
+                folders.length === 0
+                  ? 'Nothing here yet — the plus on this row starts a dossier that is not in a folder.'
+                  : 'Nothing here — every dossier is inside a folder you can see.'
+              }
             />
 
             {listedFolders.map((folder, index) => (
@@ -404,16 +527,19 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
                 }}
                 handleProps={getFolderHandleProps(index)}
                 dragOffset={folderDrag !== null && folderDrag.from === index ? folderDrag.offset : null}
+                emptyHint={`No dossiers in ${folder.name} yet.`}
               />
             ))}
 
             {folders.length === 0 ? (
               // `.empty` is the stylesheet's dashed empty state, which is token values and
               // radius sm — this is the one place in the panel that asks for it, because it is
-              // the one place with nothing inside it at all.
+              // the one place with nothing inside it at all. It names the two controls that
+              // exist: the header's `New folder` button, and the plus at the right of the Root
+              // row (there is no "New file" row inside a section any more).
               <p className="library-panel__empty-folders empty m-0">
-                Your library has no folders yet. Use “New folder” to make one, or “New file” in
-                Root to start a dossier that is not in a folder.
+                Your library has no folders yet. Use “New folder” to make one, or the plus on the
+                Root row to start a dossier that is not in a folder.
               </p>
             ) : null}
           </div>
@@ -510,6 +636,8 @@ interface FolderSectionProps {
   handleProps: ReorderHandleProps | null
   /** Pixels to translate by while this folder is the section being dragged, else `null`. */
   dragOffset: number | null
+  /** The line printed when the section holds nothing. The panel owns the wording, because only the panel knows whether the library has any folders at all. */
+  emptyHint: string
   /** The first section draws no division above itself: it is already against the Panel edge. */
   first?: boolean
 }
@@ -522,6 +650,7 @@ function FolderSection({
   onToggleCollapsed,
   handleProps,
   dragOffset,
+  emptyHint,
   first = false,
 }: FolderSectionProps) {
   const name = folder?.name ?? 'Root'
@@ -552,18 +681,20 @@ function FolderSection({
       data-reorder-item={handleProps === null ? undefined : ''}
       style={rowStyle(first, dragOffset)}
     >
-      <div className="library-panel__folder-row flex min-h-[44px] min-w-0 items-center gap-[4px] px-[10px]">
-        {handleProps === null ? null : (
-          <ReorderGrip
-            handleProps={handleProps}
-            className="library-panel__folder-grip"
-            // The hook's own label gives a position in the list; with two drag lists on one
-            // screen, the folder the grip belongs to is the part worth hearing.
-            label={`Reorder folder ${name}`}
-            dragging={dragOffset !== null}
-          />
-        )}
+      <div className="library-panel__folder-row flex min-w-0 items-center" style={CONTAINER_ROW}>
+        {/*
+          The container row, in its order: chevron, grip, label, count, plus, menu.
 
+          The chevron leads because it is the mark that says *this row has contents*, and it is
+          the only mark of that kind in the panel — no contained row has one — and it comes
+          before the grip because collapsing is the more common press. Where a real control is
+          absent (Root has no grip: its dossiers are ordered in several different folders, so one
+          index would be a lie) the column is still reserved, empty and `aria-hidden`, so every
+          container's label starts in the same column and Root reads as a sibling folder rather
+          than as another dossier. The old `IconFolder` on the label is gone: the chevron and the
+          "8 dossiers" count say what the glyph said, and each icon in this cluster costs the
+          label a control's width out of a 320px panel.
+        */}
         <ActionIcon
           variant="subtle"
           size="lg"
@@ -573,11 +704,24 @@ function FolderSection({
           onClick={onToggleCollapsed}
         >
           {collapsed ? (
-            <IconChevronRight size={16} aria-hidden="true" />
+            <IconChevronRight size={ROW_ICON_SIZE} aria-hidden="true" />
           ) : (
-            <IconChevronDown size={16} aria-hidden="true" />
+            <IconChevronDown size={ROW_ICON_SIZE} aria-hidden="true" />
           )}
         </ActionIcon>
+
+        {handleProps === null ? (
+          <GripSlot className="library-panel__folder-rail" />
+        ) : (
+          <ReorderGrip
+            handleProps={handleProps}
+            className="library-panel__folder-grip"
+            // The hook's own label gives a position in the list; with two drag lists on one
+            // screen, the folder the grip belongs to is the part worth hearing.
+            label={`Reorder folder ${name}`}
+            dragging={dragOffset !== null}
+          />
+        )}
 
         {renaming ? (
           <RenameField
@@ -596,22 +740,45 @@ function FolderSection({
         ) : (
           <Button
             // The name does what the chevron does, on a bigger target. `aria-expanded` stays
-            // on the chevron, which is the control that owns the state.
+            // on the chevron, which is the control that owns the state. The container's label
+            // wears the Title role (see the span): heavier than what it contains, by weight and
+            // not by hue.
             className="library-panel__folder-name min-w-0 flex-1"
             variant="subtle"
             size="xs"
             justify="flex-start"
             px="xs"
-            leftSection={<IconFolder size={16} aria-hidden="true" />}
+            // Root's explanation used to be a line of its own inside the section, which is the
+            // void the owner pointed at. The sentence is still there, on the control it
+            // describes, and the empty state says it out loud when it is the truth.
+            title={folder === null ? 'Dossiers that are not in a folder listed here.' : undefined}
             onClick={onToggleCollapsed}
           >
-            <span className="truncate">{name}</span>
+            <span className="library-panel__folder-label qrbit-text-title truncate">{name}</span>
           </Button>
         )}
 
         <Text className="library-panel__folder-count qrbit-text-label shrink-0" c="dimmed">
-          {files.length}
+          {plural(files.length, 'dossier')}
         </Text>
+
+        <ActionIcon
+          variant="subtle"
+          size="lg"
+          className="library-panel__new-file shrink-0"
+          aria-label={`New file in ${name}`}
+          onClick={(event) => {
+            // The row owns no click handler of its own — the chevron and the label are the two
+            // controls that collapse a folder, and this plus sits in the same row after them — so
+            // nothing here is swallowing this click today. It stops anyway, because the row it
+            // lives in is the thing that would be collapsed: making a dossier must never fold the
+            // folder it is being made in. `container and contained` in the test file pins it.
+            event.stopPropagation()
+            actions.createFile(folderId)
+          }}
+        >
+          <IconPlus size={ROW_ICON_SIZE} aria-hidden="true" />
+        </ActionIcon>
 
         {folder === null ? null : (
           <RowMenu
@@ -620,19 +787,21 @@ function FolderSection({
             items={[
               {
                 label: 'New file in this folder',
-                icon: <IconPlus size={16} aria-hidden="true" />,
+                icon: <IconPlus size={ROW_ICON_SIZE} aria-hidden="true" />,
                 onSelect: () => {
                   actions.createFile(folderId)
                 },
               },
               {
                 label: 'Rename folder',
-                icon: <IconPencil size={16} aria-hidden="true" />,
+                icon: <IconPencil size={ROW_ICON_SIZE} aria-hidden="true" />,
                 onSelect: startRename,
               },
               {
-                label: 'Delete folder and contents',
-                icon: <IconTrash size={16} aria-hidden="true" />,
+                // The cascade in the entry itself, counted by `lib/folders.ts`: the confirmation
+                // is not the first place the user learns what else dies with the folder.
+                label: actions.folderDeleteLabel(folder),
+                icon: <IconTrash size={ROW_ICON_SIZE} aria-hidden="true" />,
                 danger: true,
                 divider: true,
                 onSelect: () => {
@@ -644,38 +813,18 @@ function FolderSection({
         )}
       </div>
 
-      {folder === null ? (
-        // The bucket needs a line of its own: it is reachable precisely because dossiers can
-        // live where this one-level panel does not list them.
-        <Text
-          className="library-panel__folder-hint qrbit-text-body-secondary"
-          px="md"
-          pb="xs"
-          fz={13}
-        >
-          {collapsed ? `${files.length} dossier${files.length === 1 ? '' : 's'} hidden — ` : ''}
-          Dossiers that are not in a folder listed here.
-        </Text>
-      ) : null}
-
+      {/*
+        A collapsed section is its header row and nothing else: the count in that row is the
+        whole statement of what is inside, so there is nothing left to pad out.
+      */}
       {collapsed ? null : (
-        <div className="px-[10px] pb-[12px] pt-[4px]">
-          {/*
-            Root is a bucket across several folders, so its rows are listed but not reordered:
-            one index cannot describe several `sortOrder` runs.
-          */}
-          <FileList
-            files={files}
-            folderId={folderId}
-            actions={actions}
-            reorderable={folder !== null}
-            emptyHint={
-              folder === null
-                ? 'Nothing here — every dossier is inside a folder you can see.'
-                : `No dossiers in ${name} yet.`
-            }
-          />
-        </div>
+        <FileList
+          files={files}
+          folderId={folderId}
+          actions={actions}
+          reorderable={folder !== null}
+          emptyHint={emptyHint}
+        />
       )}
     </section>
   )
@@ -806,6 +955,26 @@ function ReorderGrip({
   )
 }
 
+/**
+ * The reserved control column, drawn where a grip would otherwise stand.
+ *
+ * The Root bucket has no folder reorder, and its dossiers have no order the store could honour
+ * (one index cannot describe several `sortOrder` runs), so those rows carry no grip. The column
+ * is still measured out, which is what keeps every container's label in one column and every
+ * contained row in the column below it: the indent then reads as the panel's structure rather
+ * than as drift. It holds nothing and is `aria-hidden` — a gutter is not a control, and a
+ * disabled grip would be a lie about what the pointer can do.
+ */
+function GripSlot({ className }: { className: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`${className} shrink-0`}
+      style={{ inlineSize: ROW_ICON_BOX }}
+    />
+  )
+}
+
 /** One entry of a row menu. */
 interface RowMenuItem {
   label: string
@@ -825,6 +994,11 @@ interface RowMenuItem {
  * `<button role="menuitem">` with the role pasted onto it. Mantine's `Menu` owns the open
  * state, the `menu`/`menuitem` roles, the Escape and click-outside close, and the focus ring;
  * a row only says what its actions are.
+ *
+ * What this file owns is the *content* of an entry — an icon and a word each, and Fault Red on
+ * the destructive ones. The dropdown's own surface, border and hover fill are Mantine slots
+ * resolved in `theme.ts`, not values a row may set, so a menu that reads grey-on-grey is fixed
+ * there (see the note on `Menu.Dropdown` below).
  */
 function RowMenu({ label, items, className }: { label: string; items: RowMenuItem[]; className: string }) {
   return (
@@ -836,6 +1010,12 @@ function RowMenu({ label, items, className }: { label: string; items: RowMenuIte
       </Menu.Target>
 
       <Menu.Dropdown>
+        {/*
+          The surface, border and hover of this dropdown come from Mantine's own scheme rules
+          (`--mantine-color-dark-6`, `-dark-4`, `gray-1`), which the theme's slot bridge does
+          not redirect: `--popover-border-color`, `--menu-item-hover` and `--menu-divider-color`
+          are the override points, and they belong to the design-system lane.
+        */}
         {items.map((item) => (
           <FragmentRow key={item.label} divider={item.divider === true}>
             <Menu.Item
@@ -887,47 +1067,43 @@ interface FileListProps {
   emptyHint: string
 }
 
+/**
+ * The rows a container owns, and the line that says there are none.
+ *
+ * This used to be a padded box holding a `+ New file` button over the list. Both of the things
+ * that made it a box are gone: the creating control now sits at the right of the folder's own
+ * header row (next to the menu that offers the same action in words), and an empty folder is one
+ * line of text in the contained column rather than a card of its own. What is left is the list,
+ * at the same 44px pitch as the row above it.
+ *
+ * The `+ New file` control still belongs to the section it creates into (D16 requirement 3), so
+ * the dossier lands in the folder the user is looking at rather than whichever one the page
+ * remembered — it simply lives in the section's header row now, beside the menu that offers the
+ * same action in words, instead of costing the list a row of its own.
+ */
 function FileList({ files, folderId, actions, reorderable, emptyHint }: FileListProps) {
-  return (
-    <Stack gap="xs">
-      {/*
-        `+ New file` sits at the TOP of the list it creates into (D16 requirement 3), so
-        the dossier lands in the folder the user is looking at rather than whichever one
-        the page happened to remember.
-      */}
-      <Button
-        className="library-panel__new-file"
-        variant="subtle"
-        size="xs"
-        w="fit-content"
-        leftSection={<IconPlus size={16} aria-hidden="true" />}
-        onClick={() => {
-          actions.createFile(folderId)
-        }}
-      >
-        New file
-      </Button>
+  if (files.length === 0) {
+    return (
+      <p className="library-panel__empty-folder qrbit-text-body-secondary m-0" style={EMPTY_ROW}>
+        {emptyHint}
+      </p>
+    )
+  }
 
-      {files.length === 0 ? (
-        <p className="library-panel__empty-folder qrbit-text-body-secondary m-0 px-[10px] py-[8px]">
-          {emptyHint}
-        </p>
-      ) : reorderable ? (
-        <ReorderableFileList files={files} folderId={folderId} actions={actions} />
-      ) : (
-        <ul className="library-panel__files m-0 flex list-none flex-col p-0">
-          {files.map((file) => (
-            <FileRow
-              key={file.id}
-              file={file}
-              actions={actions}
-              handleProps={null}
-              dragOffset={null}
-            />
-          ))}
-        </ul>
-      )}
-    </Stack>
+  return reorderable ? (
+    <ReorderableFileList files={files} folderId={folderId} actions={actions} />
+  ) : (
+    <ul className="library-panel__files m-0 flex list-none flex-col p-0">
+      {files.map((file) => (
+        <FileRow
+          key={file.id}
+          file={file}
+          actions={actions}
+          handleProps={null}
+          dragOffset={null}
+        />
+      ))}
+    </ul>
   )
 }
 
@@ -1009,12 +1185,16 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
 
   return (
     <li
-      className="library-panel__file flex min-h-[44px] min-w-0 items-center gap-[4px] px-[10px]"
+      className="library-panel__file flex min-w-0 items-center"
       // The marker `useReorderDrag` measures to find a row's pitch (see its module comment).
       data-reorder-item={handleProps === null ? undefined : ''}
-      style={rowStyle(false, dragOffset)}
+      // A contained row: the same 44px pitch and the same single division as its container, one
+      // step deeper in, and no chevron — which is the difference the user reads.
+      style={{ ...CONTAINED_ROW, ...rowStyle(false, dragOffset) }}
     >
-      {handleProps === null ? null : (
+      {handleProps === null ? (
+        <GripSlot className="library-panel__file-rail" />
+      ) : (
         <ReorderGrip
           handleProps={handleProps}
           className="library-panel__grip"
@@ -1046,7 +1226,7 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
           justify="flex-start"
           px="xs"
           styles={ROW_BUTTON_STYLES}
-          leftSection={<IconFileText size={16} aria-hidden="true" />}
+          leftSection={<IconFileText size={ROW_ICON_SIZE} aria-hidden="true" />}
           aria-label={`Open ${file.name}`}
           onClick={() => {
             actions.openFile(file)
@@ -1054,7 +1234,8 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
         >
           <span className="block min-w-0">
             <span className="flex items-center gap-[8px]">
-              <span className="library-panel__file-name truncate">{file.name}</span>
+              {/* The contained label: the Body role, lighter than the container above it. */}
+              <span className="library-panel__file-name qrbit-text-body truncate">{file.name}</span>
               {encrypted ? (
                 <Badge
                   className="library-panel__encrypted-badge"
