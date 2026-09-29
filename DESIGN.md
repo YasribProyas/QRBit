@@ -332,6 +332,15 @@ Label role, helper text at Body Secondary, error text in Fault Red with a real m
 The 8-character session code field uses the Data role and 48px targets on mobile, because it
 is typed on a phone.
 
+**The 16px focus floor.** Anything a user types into computes `font-size: 16px`, regardless of
+which role its *text* would otherwise use: below 16px, iOS Safari zooms the entire page the
+moment the field takes focus, and this product's primary device is a phone. The type roles
+govern reading; this governs touch, and the two are not in conflict — a 16px input with the
+Body role's weight and line-height still reads as Body. The mechanical detector flags `16px`
+as off-ramp; that flag is the intended exception, not a finding to fix. Set it at the
+declaration that applies (class selectors beat a document-wide element rule on specificity,
+not on cascade layers), and remember an unlayered class rule outranks a `@layer base` rule.
+
 ### Panels and Rows
 **Panel**: Raised, 1px Border, radius lg, padding lg, no shadow at rest.
 **Row** (library dossier, folder header): flat, 44px min height, one 1px division between
