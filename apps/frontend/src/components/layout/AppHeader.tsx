@@ -29,6 +29,7 @@ import { IconLogout, IconSettings } from '@tabler/icons-react'
 import type { ReactElement } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { StatusTone, UseSessionResult } from '../../hooks/useSession'
+import { ThemeToggle } from '../common/ThemeToggle'
 
 /**
  * The hue a session status is allowed to wear: green means connected, amber means the
@@ -147,6 +148,8 @@ export function AppHeader({
               </Button>
             </Tooltip>
           ) : null}
+
+          <ThemeToggle />
 
           {/*
             DESIGN.md: a route with no entry point is a route that does not exist. The control

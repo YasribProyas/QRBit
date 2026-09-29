@@ -22,6 +22,9 @@ coverage/
 
 # runtime / tooling state
 .pi/subagents/
+.agent/
+.impeccable/live/
+apps/*/.impeccable/live/
 
 # os / editor
 .DS_Store

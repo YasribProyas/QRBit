@@ -336,8 +336,28 @@ body {
   animation: radarPing 2.2s var(--ease-out) infinite;
 }
 
+/* Host beacon liveness pulse on the pairing status dot */
+@keyframes beaconPing {
+  0% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--qrbit-signal) 45%, transparent);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.animate-beacon-ping {
+  animation: beaconPing 2.4s var(--ease-out) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-radar-ping,
+  .animate-beacon-ping,
   .animate-scan-sweep {
     animation: none;
   }
@@ -684,6 +704,27 @@ button {
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: 0.18em;
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-sm);
+  padding: 0.25rem 0.75rem;
+  display: inline-block;
+  color: var(--qrbit-ink);
+  transition: border-color 150ms var(--ease-out), box-shadow 150ms var(--ease-out);
+}
+.code:hover {
+  border-color: var(--qrbit-border-strong);
+}
+
+.home__fab {
+  transition: transform 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
+}
+.home__fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px -2px rgba(29, 78, 216, 0.45);
+}
+.home__fab:active {
+  transform: translateY(0) scale(0.96);
 }
 
 .button {
@@ -742,12 +783,18 @@ button {
 }
 
 .empty {
+  background: var(--qrbit-sunken);
   border: 1px dashed var(--qrbit-border-strong);
-  border-radius: var(--qrbit-radius-sm);
-  padding: var(--qrbit-space-lg);
+  border-radius: var(--qrbit-radius-md);
+  padding: calc(var(--qrbit-space-lg) * 1.25) var(--qrbit-space-lg);
   text-align: center;
-  color: var(--qrbit-ink-muted);
+  color: var(--qrbit-ink-secondary);
   font-size: 0.875rem;
+  line-height: 1.5;
+  transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+.empty:hover {
+  border-color: var(--qrbit-ink-muted);
 }
 
 .stack {
@@ -794,10 +841,14 @@ button {
   flex-direction: column;
   gap: calc(var(--qrbit-space-lg) * 1.25);
   text-align: center;
+  box-shadow: var(--qrbit-shadow-sheet);
+  animation: modalEnter 180ms var(--ease-out) forwards;
 }
 
 .safety-phrase__instruction {
   font-size: 1.0625rem;
+  color: var(--qrbit-ink);
+  line-height: 1.4;
 }
 
 .safety-phrase__words {
@@ -817,15 +868,22 @@ button {
  */
 .safety-phrase__word {
   font-family: var(--qrbit-font-mono);
-  font-size: clamp(1.625rem, 11vw, 3rem);
+  font-size: clamp(1.4rem, 8vw, 2.25rem);
   font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: 0.06em;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   background: var(--qrbit-sunken);
+  color: var(--qrbit-ink);
   border: 1px solid var(--qrbit-border);
   border-radius: var(--qrbit-radius-sm);
-  padding: 0.35rem 0.85rem;
+  padding: 0.45rem 1rem;
+  box-shadow: 0 1px 2px rgba(11, 18, 32, 0.04);
+  transition: border-color 150ms var(--ease-out), transform 150ms var(--ease-out);
+}
+.safety-phrase__word:hover {
+  border-color: var(--qrbit-border-strong);
+  transform: translateY(-1px);
 }
 
 .safety-phrase__status {
@@ -1649,6 +1707,11 @@ button {
   border: 1px solid var(--qrbit-border);
   border-radius: var(--qrbit-radius-sm);
   padding: 0.25rem 0.5rem;
+  transition: border-color 140ms var(--ease-out), background-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
+}
+
+.library-item:hover {
+  border-color: var(--qrbit-border-strong);
 }
 
 .library-item[data-selected="true"] {

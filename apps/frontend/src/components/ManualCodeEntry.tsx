@@ -137,7 +137,7 @@ function ManualCodeEntryForm({ onSubmit }: ManualCodeEntryProps) {
         />
         <Button
           type="submit"
-          className="manual-code__submit"
+          className="manual-code__submit tactile-btn"
           // Matches the field's 48px target; DESIGN.md's primary fill and pressed colour.
           size="md"
           color="signal"

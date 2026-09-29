@@ -107,6 +107,7 @@ import { Link } from 'react-router-dom'
 
 import { TacticalQRCode } from './TacticalQRCode'
 import { ManualCodeEntry } from './ManualCodeEntry'
+import { ThemeToggle } from './common/ThemeToggle'
 import { WithMantine } from './common/WithMantine'
 
 export interface HomeViewProps {
@@ -186,6 +187,7 @@ function reticle(corner: 'top' | 'bottom', side: 'left' | 'right'): CSSPropertie
     height: 'var(--qrbit-space-md)',
     borderStyle: 'solid',
     borderColor: 'var(--qrbit-signal)',
+    boxShadow: '0 0 5px color-mix(in srgb, var(--qrbit-signal) 35%, transparent)',
     [width]: 2,
     [height]: 2,
   }
@@ -321,17 +323,20 @@ export function HomeView({
             </Text>
           </Group>
 
-          <Link className="home__settings" to="/settings" style={{ textDecoration: 'none' }}>
-            <Button
-              className={THUMB_TARGET}
-              variant="subtle"
-              color="gray"
-              size="sm"
-              leftSection={<IconSettings size={16} aria-hidden="true" />}
-            >
-              Settings
-            </Button>
-          </Link>
+          <Group gap="xs" wrap="nowrap" align="center">
+            <ThemeToggle />
+            <Link className="home__settings" to="/settings" style={{ textDecoration: 'none' }}>
+              <Button
+                className={THUMB_TARGET}
+                variant="subtle"
+                color="gray"
+                size="sm"
+                leftSection={<IconSettings size={16} aria-hidden="true" />}
+              >
+                Settings
+              </Button>
+            </Link>
+          </Group>
         </header>
 
         {/*
@@ -436,7 +441,7 @@ export function HomeView({
                     >
                       <span
                         aria-hidden="true"
-                        className="home__status-dot size-2 flex-none rounded-full"
+                        className="home__status-dot animate-beacon-ping size-2 flex-none rounded-full"
                         style={{
                           background: 'var(--qrbit-signal)',
                           // The dot never moves; the sentence gives way. `flex-none` is a utility
@@ -504,7 +509,7 @@ export function HomeView({
         */}
         <div className="home__fab-band" style={FAB_BAND_STYLE}>
           <ActionIcon
-            className="home__scan home__fab"
+            className="home__scan home__fab tactile-btn"
             color="signal"
             variant="filled"
             size="xl"

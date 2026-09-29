@@ -97,6 +97,8 @@ const WELL_STYLE = {
   background: 'var(--qrbit-signal-subtle)',
   borderRadius: 'var(--qrbit-radius-md)',
   padding: 'var(--qrbit-space-md)',
+  border: '1px solid var(--qrbit-border)',
+  boxShadow: 'inset 0 1px 3px rgba(11, 18, 32, 0.05)',
 } as const
 
 /**
@@ -387,7 +389,7 @@ export function TacticalQRCode({
                   // DESIGN.md's icon-only row: quiet fill, Ink Secondary glyph. 44px
                   // (`size="xl"`) because this is a thumb target on the phone held over the
                   // other device, which outranks the table's 32px box.
-                  className="tactical-qr__copy"
+                  className="tactical-qr__copy tactile-btn"
                   variant="subtle"
                   size="xl"
                   flex="none"
@@ -406,7 +408,7 @@ export function TacticalQRCode({
 
               {interactive && onRegenerate ? (
                 <ActionIcon
-                  className="tactical-qr__regenerate"
+                  className="tactical-qr__regenerate tactile-btn"
                   variant="subtle"
                   size="xl"
                   flex="none"

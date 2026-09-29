@@ -113,7 +113,7 @@ function SafetyPhraseOverlayInner({
         <div className="safety-phrase__actions">
           {/* DESIGN.md's dialog order: the quiet action first, the primary last. */}
           <Button
-            className="safety-phrase__abort"
+            className="safety-phrase__abort tactile-btn"
             variant="default"
             size="sm"
             fullWidth
@@ -125,7 +125,7 @@ function SafetyPhraseOverlayInner({
           </Button>
           {sender ? (
             <Button
-              className="safety-phrase__confirm"
+              className="safety-phrase__confirm tactile-btn"
               color="signal"
               size="sm"
               fullWidth
