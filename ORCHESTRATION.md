@@ -338,3 +338,60 @@ documentation, not a test.
 Harness note that shaped the three updated tests: `waitFor` returns on its first synchronous
 true check, so asserting state written by a continuation after a fake socket's `fireOpen()`
 races a microtask that has not run. Wait on the state itself.
+
+## D16 — the desktop-native pass (owner UI request, post-launch)
+
+Owner's list: two-panel desktop home, folder add/rename/delete, delete files, drag-reorderable
+blocks *and* library rows, a Save button, Settings reachable, `Scan & Send` relocated.
+Surveying first turned up the root cause behind roughly half the list, and it is worth stating
+as a rule:
+
+**D16.0 — a redesign that stops rendering a component does not delete its behaviour, it hides
+it.** `LibraryBrowser` already took `onCreateFolder / onRenameFolder / onDeleteFolder /
+onRenameItem / onMoveItem / onDeleteItem`, and `pages/Home.tsx` rendered it inside
+`<div className="sr-only">` commented *"Hidden test harness container ensuring 100% backward
+test compatibility"*. So every "there's no way to delete a file" report was a feature running
+invisibly beside a green test suite. Two lessons: before building a control, grep for one that
+already exists — the store had `deleteFile`, `moveFile` and `renameFolder` for ages — and never
+solve a test-compatibility problem by mounting UI nobody can see. A clipped-to-zero interactive
+subtree is still focusable, so the hack traded a visible bug for an accessibility defect and a
+duplicated component tree, and passed tests either way.
+
+**D16.1 — explicit save replaces per-keystroke autosave.** Every keystroke called `updateFile`,
+so a Save button would have been theatre. `FileEditView` now holds a draft, `Save` persists it
+and is disabled while clean, and Back-while-dirty confirms. Stated cost: a crash or tab close
+mid-edit can lose a draft that previously could not. That is the honest price of a real Save
+button, and the confirm dialog is what keeps it acceptable.
+
+**D16.2 — drag is pointer-events, not HTML5 DnD.** `BlockItem` rendered a `GripVertical` under a
+"Drag handle or arrows to reorder" hint while the repo contained *zero* drag code (no
+`draggable`, `onDragStart`, `onDrop`, `dataTransfer`, no library). HTML5 DnD never fires on
+touch, so it cannot serve a UI meant to be desktop native *and* mobile native; one pointer path
+covers mouse, pen and touch, and is testable in jsdom by driving real events.
+
+**D16.3 — every drag has a keyboard twin, and both write through one reducer.** The grip is a
+`<button>` with ArrowUp/Down/Home/End, and the arrow buttons are literally `applyMove(i, i±1)`.
+Two reorder implementations drift into two orderings; one funnel cannot.
+
+**D16.4 — the hidden mount was deleted, not restyled.** `LibraryBrowser`'s unit tests target the
+component and still run; the page stopped shipping an invisible duplicate library.
+
+**Ordering needed a data layer, not a component.** `LibraryFile` had only `createdAt/updatedAt`,
+so a drag could not survive a reload. `sortOrder` is gap-based (`SORT_ORDER_GAP = 1000`) so a
+typical reorder writes one record; `nextSortOrder` returns `REENUMBER_REQUIRED` when the gap
+collapses and renumbering stays inside that sibling run; reads tie-break `sortOrder → createdAt
+→ id` so order never jitters. Two traps this closed: `moveFile` used to let a moved file
+teleport to the top of its destination folder, and the editor's save must *omit* `sortOrder` or
+saving an open dossier silently reverts a drag the user just made in the panel beside it.
+
+**Integration bug worth remembering:** four sites on the *receive* path still filed incoming
+dossiers at `folders[0]?.id || 'f-1'`, an id that only existed because `seedInitialLibrary` used
+to run. A phantom folder id outlived its seeder by several phases — any `|| '<literal id>'`
+fallback is a bug waiting for the data that made it valid to disappear.
+
+**Process lesson — a lane timeout is usually a verification-loop timeout.** Lane A hit its
+30-minute wall clock and reported nothing, yet had finished: four files written, typecheck
+clean, 968 tests green. It burned the budget re-running a suite that grows every phase. Fix:
+scope a lane's verification to *its own* test files, run the full gate once in the parent, raise
+the ceiling. Lanes B and C got that instruction and landed inside budget with zero cross-lane
+drift at integration.

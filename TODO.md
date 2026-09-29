@@ -67,3 +67,27 @@ left as stale checkboxes; the git log is the record.
       keeping 5349 *and* adding `443?transport=tcp`. Now moot for the shipped path: the ICE
       list comes from Cloudflare's own credential response (D11), so the hardcoded array is
       only the STUN-era fallback.
+
+## Left by the desktop-native pass (D16)
+
+- [ ] **`LibraryBrowser` is now orphaned production code.** Nothing renders it; only
+      `LibraryBrowser.test.tsx` imports it, so its tests stay green while no user can reach the
+      component. Decide: delete it (and `NewItemBar`/`FolderNode`/`LibraryItemRow` if they go
+      too), or fold the legacy `LibraryItem` browse UI into `LibraryPanel`. Vite tree-shakes it
+      out of the bundle, so this is a maintenance-shipping question, not a performance one.
+- [ ] **`seedInitialLibrary` is unreachable but still exported** (store + `lib/library.ts`), and
+      it is the only thing that ever made the literal id `'f-1'` real. D16 fixed four receive-path
+      sites that assumed it. Deleting the seeder would make any future `'f-1'` fallback fail loudly
+      instead of writing to a phantom folder.
+- [ ] **`HomeView.selectedCount` is vestigial.** The shell still renders `Scan & Send (N)`, but
+      `pages/Home.tsx` no longer passes it after D16.4 removed the multi-select plumbing, so N is
+      always absent. Either give `LibraryPanel` checkboxes that report a selection, or drop the
+      prop — right now the badge promises a capability the UI has no way to exercise.
+- [ ] **Cross-folder drag was deferred deliberately.** A dossier can be dragged to reorder within
+      its folder, and moved between folders via the row menu (`Move to…`) or the editor's picker.
+      Dropping a row onto a folder header needs shared drag context across two `useReorderDrag`
+      instances; it is a real gain in feel but should not be attempted without a pointer-event test
+      that proves it works on touch, not just mouse.
+- [ ] **Two icon libraries ship.** `@tabler/icons-react` and `lucide-react` (added by a parallel
+      design pass, 10 files). Lanes were told to use tabler in new code and not to mass-migrate.
+      A one-commit sweep to tabler would drop a dependency and ~a bundle's worth of duplicates.
