@@ -1,13 +1,57 @@
-import { Badge, Box, Burger, Button, Group, Text, Tooltip } from '@mantine/core'
-import { IconCamera, IconKeyboard, IconSettings, IconX } from '@tabler/icons-react'
+/**
+ * The app chrome's one header line (DESIGN.md, "Navigation").
+ *
+ * Wordmark left, what the session is doing and the way out of it right — nothing else. It is
+ * one line at every breakpoint, 44px of thumb target on a phone and 36px above it, flat with
+ * no shadow because it does not float: DESIGN.md's "The Floating Only Rule" reserves a shadow
+ * for something above the page, and this bar scrolls with the page it belongs to.
+ *
+ * Three things were deliberately not carried over from the previous revision of this file:
+ *
+ *   - the `Scan` and `Code` buttons. Nothing in the app passes handlers for them any more:
+ *     the scanner and the typed-code fallback live in the pairing panel, next to the code
+ *     they act on (ORCHESTRATION D16 behaviour change 1). A header button that applies to no
+ *     panel is also a button that no screen renders when nothing passes its handler.
+ *   - the `P2P v2.4` chip. There is no version 2.4 anywhere in the product; it was 10px mono
+ *     decoration — below the 12px floor and contrary to "The Mono Means Data Rule".
+ *   - the `Air-gapped structured transfer` line. It claimed a property the app does not have
+ *     (pairing runs through the signaling worker, so the two devices are not air-gapped), and
+ *     the promise this product actually makes — "No login. No cloud. No trace." — is spelled
+ *     out on `/settings` rather than approximated by a 10px subtitle.
+ *
+ * Every colour here is a token or a semantic slot, so both schemes are the same markup: the
+ * status dot takes the hue that matches the tone it reports, and the chip behind it is the
+ * Sunken surface, which steps with the scheme.
+ */
+
+import { Burger, Button, Group, Text, Tooltip } from '@mantine/core'
+import { IconLogout, IconSettings } from '@tabler/icons-react'
+import type { ReactElement } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import type { UseSessionResult } from '../../hooks/useSession'
+import type { StatusTone, UseSessionResult } from '../../hooks/useSession'
+
+/**
+ * The hue a session status is allowed to wear: green means connected, amber means the
+ * transport dropped and the user should look, red means it failed. `idle` is neutral ink
+ * because "Connecting…" is a wait rather than a warning (see `describeSessionStatus`).
+ */
+const TONE_DOT: Record<StatusTone, string> = {
+  ok: 'var(--qrbit-success)',
+  warn: 'var(--qrbit-warning)',
+  error: 'var(--qrbit-danger)',
+  idle: 'var(--qrbit-ink-muted)',
+}
+
+/**
+ * 44px on a phone, the table's 36px above it. Same treatment and same reason as
+ * `THUMB_TARGET` in `pages/Settings.tsx`: Mantine has no 44px step and no per-breakpoint
+ * `size`, and the `!` is what lets a layered utility beat Mantine's unlayered rule.
+ */
+const THUMB_TARGET = 'max-md:min-h-11!'
 
 export interface AppHeaderProps {
+  /** The live session, when this screen has one. Without it the header is brand and Settings. */
   session?: UseSessionResult
-  onOpenScanner?: () => void
-  onOpenManualCode?: () => void
-  onOpenSettings?: () => void
   vaultOpened?: boolean
   onToggleVault?: () => void
   mobileOnlyBurger?: boolean
@@ -15,117 +59,85 @@ export interface AppHeaderProps {
 
 export function AppHeader({
   session,
-  onOpenScanner,
-  onOpenManualCode,
-  onOpenSettings,
   vaultOpened = false,
   onToggleVault,
   mobileOnlyBurger = true,
 }: AppHeaderProps) {
   const navigate = useNavigate()
-  const statusTone = session?.status.tone ?? 'idle'
-  const toneColorMap: Record<string, string> = {
-    ok: 'emerald',
-    warn: 'yellow',
-    error: 'red',
-    idle: 'gray',
-  }
-  const badgeColor = toneColorMap[statusTone] ?? 'gray'
-  const isSessionActiveOrConnecting =
-    session && (session.phase === 'connecting' || session.phase === 'pairing' || session.phase === 'active')
+  const tone: StatusTone = session?.status.tone ?? 'idle'
+  /**
+   * Exit shows while a session is being built or carried, because that is the window in
+   * which leaving costs something. `ended` and `failed` have nothing left to leave.
+   */
+  const hasSessionToLeave =
+    session !== undefined &&
+    (session.phase === 'connecting' || session.phase === 'pairing' || session.phase === 'active')
 
   return (
-    <header className="page__header" style={{ width: '100%', marginBottom: '0.5rem' }}>
-      <Group justify="space-between" align="center" w="100%" wrap="nowrap">
-        {/* Left: Brand & Mobile Burger */}
-        <Group gap="xs" align="center" wrap="nowrap">
+    <header className="app-header" style={{ width: '100%' }}>
+      <Group justify="space-between" gap="md" wrap="nowrap" align="center">
+        {/* Left: the way home, and the library drawer when this screen has one. */}
+        <Group gap="sm" wrap="nowrap" align="center">
           {onToggleVault ? (
             <Burger
               opened={vaultOpened}
               onClick={onToggleVault}
               hiddenFrom={mobileOnlyBurger ? 'md' : undefined}
               size="sm"
-              aria-label="Toggle Vault drawer"
+              aria-label="Open the local library"
             />
           ) : null}
 
-          <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}>
-            <Group gap={10} align="center" wrap="nowrap">
-              <img
-                src="/favicon.svg"
-                alt="QRBit"
-                width={32}
-                height={32}
-                style={{ borderRadius: 8, display: 'block', flexShrink: 0 }}
-              />
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <h1 className="page__title" style={{ margin: 0, lineHeight: 1.15, fontSize: '1.25rem' }}>
-                    QRBit
-                  </h1>
-                  <span style={{ fontSize: '10px', fontFamily: 'monospace', padding: '1px 6px', background: 'rgba(29, 78, 216, 0.1)', color: '#1D4ED8', border: '1px solid rgba(29, 78, 216, 0.25)', borderRadius: '4px', fontWeight: 600 }}>
-                    P2P v2.4
-                  </span>
-                </div>
-                <Text size="xs" c="dimmed" style={{ lineHeight: 1.2, letterSpacing: '0.01em', marginTop: '2px' }}>
-                  Air-gapped structured transfer
-                </Text>
-              </div>
+          {/*
+            The wordmark carries the display role and is the whole link. It is not a heading:
+            on `/settings` the page's own `<h1>` is "Settings", and the brand must not become
+            a second h1 in the same document.
+          */}
+          <Link
+            to="/"
+            className="app-header__brand"
+            style={{ textDecoration: 'none', color: 'inherit' }}
+            aria-label="QRBit — home"
+          >
+            <Group gap="sm" wrap="nowrap" align="center">
+              <img src="/favicon.svg" alt="" width={28} height={28} style={{ display: 'block' }} />
+              <Text
+                className="qrbit-text-display"
+                component="span"
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                QRBit
+              </Text>
             </Group>
           </Link>
         </Group>
 
-        {/* Center: Live Session Status Pill */}
-        {session ? (
-          <Group gap="xs" align="center" wrap="nowrap" visibleFrom="xs">
-            <Badge
-              variant="dot"
-              color={badgeColor}
-              size="md"
-              radius="xl"
-              styles={{
-                root: {
-                  textTransform: 'none',
-                  fontWeight: 550,
-                  letterSpacing: '0.01em',
-                  background: 'rgba(0, 0, 0, 0.03)',
-                  border: '1px solid rgba(0, 0, 0, 0.08)',
-                },
-              }}
-            >
-              {session.status.label}
-            </Badge>
-            {session.role ? (
-              <Badge
-                variant="outline"
-                color="gray"
-                size="sm"
-                radius="sm"
-                className="badge"
-                styles={{
-                  root: {
-                    textTransform: 'uppercase',
-                    fontSize: '0.7rem',
-                    letterSpacing: '0.06em',
-                  },
-                }}
-              >
-                {session.role}
-              </Badge>
-            ) : null}
-          </Group>
-        ) : null}
+        {/* Right: what the session is doing, the way out of it, and Settings. */}
+        <Group gap="sm" wrap="nowrap" align="center">
+          {session ? (
+            <>
+              <StatusChip tone={tone} label={session.status.label} />
+              {session.role ? (
+                <StatusChip
+                  tone="idle"
+                  label={session.role === 'host' ? 'Host' : 'Guest'}
+                  hiddenBelow="sm"
+                />
+              ) : null}
+            </>
+          ) : null}
 
-        {/* Right: Quick Actions & Settings */}
-        <Group gap="xs" align="center" wrap="nowrap">
-          {/* Quick Exit/Abort button when in session so users can exit without refreshing */}
-          {isSessionActiveOrConnecting ? (
-            <Tooltip label="Leave session and return to Home" position="bottom" withArrow>
+          {hasSessionToLeave && session ? (
+            <Tooltip
+              label="End this session. Anything still in transit is not delivered, and the code stops working."
+              position="bottom"
+              withArrow
+            >
               <Button
-                variant="light"
-                color="red"
-                size="xs"
-                leftSection={<IconX size={15} />}
+                variant="default"
+                size="sm"
+                className={THUMB_TARGET}
+                leftSection={<IconLogout size={16} aria-hidden="true" />}
                 onClick={() => {
                   session.abort()
                   navigate('/')
@@ -136,58 +148,76 @@ export function AppHeader({
             </Tooltip>
           ) : null}
 
-          {onOpenScanner ? (
-            <Tooltip label="Scan & Send via camera" position="bottom" withArrow>
-              <Button
-                variant="subtle"
-                color="gray"
-                size="xs"
-                leftSection={<IconCamera size={16} />}
-                onClick={onOpenScanner}
-                visibleFrom="sm"
-              >
-                Scan
-              </Button>
-            </Tooltip>
-          ) : null}
-
-          {onOpenManualCode ? (
-            <Tooltip label="Enter 8-character code" position="bottom" withArrow>
-              <Button
-                variant="subtle"
-                color="gray"
-                size="xs"
-                leftSection={<IconKeyboard size={16} />}
-                onClick={onOpenManualCode}
-                visibleFrom="md"
-              >
-                Code
-              </Button>
-            </Tooltip>
-          ) : null}
-
-          {onOpenSettings ? (
-            <Tooltip label="Settings & Library backup" position="bottom" withArrow>
-              <Button
-                variant="subtle"
-                color="gray"
-                size="xs"
-                leftSection={<IconSettings size={16} />}
-                onClick={onOpenSettings}
-                className="link"
-              >
-                Settings
-              </Button>
-            </Tooltip>
-          ) : (
-            <Link className="link" to="/settings" style={{ textDecoration: 'none' }}>
-              <Button variant="subtle" color="gray" size="xs" leftSection={<IconSettings size={16} />}>
-                Settings
-              </Button>
-            </Link>
-          )}
+          {/*
+            DESIGN.md: a route with no entry point is a route that does not exist. The control
+            IS the link (`component={Link}`) rather than a button inside an anchor, so the
+            header has one focusable thing per action and the tab order matches what is read.
+          */}
+          <Button
+            component={Link}
+            to="/settings"
+            className={`app-header__settings ${THUMB_TARGET}`}
+            variant="subtle"
+            color="gray"
+            size="sm"
+            leftSection={<IconSettings size={16} aria-hidden="true" />}
+          >
+            Settings
+          </Button>
         </Group>
       </Group>
     </header>
+  )
+}
+
+/**
+ * A status chip: Sunken fill, a `--qrbit-border` hairline, radius full, 22px tall, Label role
+ * (DESIGN.md, "Badges and Chips"). The dot carries the hue and the word carries the meaning,
+ * so the state survives a colour-blind visitor and a screen that is being read aloud — a
+ * badge never relies on colour alone.
+ */
+function StatusChip({
+  tone,
+  label,
+  hiddenBelow,
+}: {
+  tone: StatusTone
+  label: string
+  /**
+   * Below this breakpoint the chip is dropped. On a phone the header has room for the status
+   * line and the actions; which role this device took is stated on the session screen itself.
+   */
+  hiddenBelow?: 'xs' | 'sm' | 'md'
+}): ReactElement {
+  return (
+    <Group
+      gap="xs"
+      wrap="nowrap"
+      align="center"
+      pl="sm"
+      pr="md"
+      hiddenFrom={hiddenBelow}
+      style={{
+        height: '1.375rem',
+        flex: 'none',
+        borderRadius: 'var(--qrbit-radius-full)',
+        backgroundColor: 'var(--qrbit-sunken)',
+        border: '1px solid var(--qrbit-border)',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: '0.5rem',
+          height: '0.5rem',
+          flex: 'none',
+          borderRadius: 'var(--qrbit-radius-full)',
+          backgroundColor: TONE_DOT[tone],
+        }}
+      />
+      <Text className="qrbit-text-label" style={{ whiteSpace: 'nowrap' }}>
+        {label}
+      </Text>
+    </Group>
   )
 }
