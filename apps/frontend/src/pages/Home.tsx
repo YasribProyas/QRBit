@@ -238,67 +238,55 @@ export function Home() {
   }
 
   // 6. DEFAULT HOME VIEW
-  return (
-    <>
-      <HomeView
-        pairingCode={session.sessionCode}
-        onRegeneratePairing={() => session.restart()}
-        folders={folders}
-        files={files}
-        onSelectFileToEdit={(file) => setEditingFile(file)}
-        onSendFileDirectly={async (file) => {
-          await handleSendFileDirectly(file)
-          setScanning(true)
-        }}
-        onOpenScanner={() => setScanning(true)}
-        onCreateNewFile={handleCreateNewFile}
-        onJoinCode={(code) => handleScan(code)}
-        selectedCount={selectedIds.length}
-        roleLabel={session.roleLabel}
-        errorMessage={session.errorMessage}
-      />
+  const libraryBrowserNode = (
+    <LibraryBrowser
+      folders={folders}
+      items={items}
+      currentFolderId={currentFolderId}
+      onSelectFolder={setCurrentFolderId}
+      onCreateFolder={async (name, parentId) => {
+        await createFolder(name, parentId)
+      }}
+      onRenameFolder={(id, name) => {
+        reportToStore(renameFolder(id, name))
+      }}
+      onDeleteFolder={(id) => {
+        reportToStore(deleteFolder(id))
+      }}
+      onRenameItem={(id, name) => {
+        reportToStore(renameItem(id, name))
+      }}
+      onMoveItem={(id, targetFolderId) => {
+        reportToStore(moveItem(id, targetFolderId))
+      }}
+      onDeleteItem={(id) => {
+        reportToStore(deleteItem(id))
+      }}
+      onSendItems={sendSelected}
+      onSelectionChange={handleSelectionChange}
+      loading={loading}
+      error={error}
+    />
+  )
 
-      {/* Hidden test harness container ensuring 100% backward test compatibility */}
-      <div
-        className="sr-only"
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          width: 0,
-          height: 0,
-          overflow: 'hidden',
-          clip: 'rect(0, 0, 0, 0)',
-        }}
-      >
-        <LibraryBrowser
-          folders={folders}
-          items={items}
-          currentFolderId={currentFolderId}
-          onSelectFolder={setCurrentFolderId}
-          onCreateFolder={async (name, parentId) => {
-            await createFolder(name, parentId)
-          }}
-          onRenameFolder={(id, name) => {
-            reportToStore(renameFolder(id, name))
-          }}
-          onDeleteFolder={(id) => {
-            reportToStore(deleteFolder(id))
-          }}
-          onRenameItem={(id, name) => {
-            reportToStore(renameItem(id, name))
-          }}
-          onMoveItem={(id, targetFolderId) => {
-            reportToStore(moveItem(id, targetFolderId))
-          }}
-          onDeleteItem={(id) => {
-            reportToStore(deleteItem(id))
-          }}
-          onSendItems={sendSelected}
-          onSelectionChange={handleSelectionChange}
-          loading={loading}
-          error={error}
-        />
-      </div>
-    </>
+  return (
+    <HomeView
+      pairingCode={session.sessionCode}
+      onRegeneratePairing={() => session.restart()}
+      folders={folders}
+      files={files}
+      libraryContent={libraryBrowserNode}
+      onSelectFileToEdit={(file) => setEditingFile(file)}
+      onSendFileDirectly={async (file) => {
+        await handleSendFileDirectly(file)
+        setScanning(true)
+      }}
+      onOpenScanner={() => setScanning(true)}
+      onCreateNewFile={handleCreateNewFile}
+      onJoinCode={(code) => handleScan(code)}
+      selectedCount={selectedIds.length}
+      roleLabel={session.roleLabel}
+      errorMessage={session.errorMessage}
+    />
   )
 }

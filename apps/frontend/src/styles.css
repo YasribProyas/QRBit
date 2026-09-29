@@ -281,53 +281,33 @@ button {
   gap: var(--gap);
 }
 
-/* Dual-Pane Responsive Grid */
-.dual-pane-container {
-  width: 100%;
+/* App shell: sidebar + main */
+.home-body {
+  height: calc(100vh - 3.25rem);
+  overflow: hidden;
 }
 
-.dual-pane-layout {
-  display: flex;
-  flex-direction: column-reverse;
-  gap: var(--gap);
-  width: 100%;
+.home-sidebar {
+  display: flex !important;
 }
 
-.session-pane {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-  min-width: 0;
+/* Mobile: hide sidebar, show burger */
+@media (max-width: 899px) {
+  .home-sidebar {
+    display: none !important;
+  }
+  .mobile-burger {
+    display: flex !important;
+  }
 }
 
-.vault-pane {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-  min-width: 0;
-}
-
+/* Desktop: sidebar always visible, no burger */
 @media (min-width: 900px) {
-  .dual-pane-layout {
-    display: grid;
-    grid-template-columns: 390px 1fr;
-    gap: calc(var(--gap) * 1.5);
-    align-items: start;
+  .home-sidebar {
+    display: flex !important;
   }
-
-  .vault-pane {
-    position: sticky;
-    top: calc(var(--gap) * 1);
-    max-height: calc(100vh - 5rem);
-    overflow-y: auto;
-    padding-right: 0.25rem;
-  }
-}
-
-@media (min-width: 1200px) {
-  .dual-pane-layout {
-    grid-template-columns: 440px 1fr;
-    gap: calc(var(--gap) * 2);
+  .mobile-burger {
+    display: none !important;
   }
 }
 

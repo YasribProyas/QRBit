@@ -1,12 +1,22 @@
 import { useState } from 'react'
 import {
-  ArrowLeft,
-  Send,
-  Plus,
-  Edit2,
-  Check,
-  Layers,
-} from 'lucide-react'
+  IconArrowLeft,
+  IconSend,
+  IconPlus,
+  IconPencil,
+  IconCheck,
+  IconStack2,
+} from '@tabler/icons-react'
+import {
+  Box,
+  Group,
+  Stack,
+  Text,
+  Button,
+  ActionIcon,
+  TextInput,
+  UnstyledButton,
+} from '@mantine/core'
 import { BlockItem } from './BlockItem'
 import { AddBlockModal } from './AddBlockModal'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
@@ -30,7 +40,8 @@ export function FileEditView({
   const [blocks, setBlocks] = useState<FileBlock[]>(file.blocks || [])
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
 
-  // Reordering blocks
+  const currentFile = () => ({ ...file, name: fileName, blocks })
+
   const handleMoveUp = (index: number) => {
     if (index <= 0) return
     const next = [...blocks]
@@ -81,42 +92,15 @@ export function FileEditView({
   }
 
   const handleAddBlockType = (type: BlockType) => {
-    const newBlockId = `b-${Date.now()}`
-    const newBlock: FileBlock = { id: newBlockId, type }
-
-    switch (type) {
-      case 'heading':
-        newBlock.content = 'New Section Heading'
-        break
-      case 'shortText':
-        newBlock.label = 'Key'
-        newBlock.value = 'Value'
-        break
-      case 'richText':
-        newBlock.content = 'New documentation or notes...'
-        break
-      case 'image':
-        newBlock.fileName = 'attachment_photo.png'
-        newBlock.caption = 'Telemetry capture'
-        break
-      case 'fileAttachment':
-        newBlock.fileName = 'data_export.bin'
-        newBlock.fileSize = '2.4 MB'
-        break
-      case 'locked':
-        newBlock.label = 'Encrypted Key'
-        newBlock.content = 'sec_k982_token_payload'
-        newBlock.password = 'pass'
-        newBlock.isLocked = true
-        newBlock.isUnlocked = false
-        break
-      case 'divider':
-        break
+    const newBlock: FileBlock = {
+      id: `b-${Date.now()}`,
+      type,
+      content: '',
     }
-
     const updated = [...blocks, newBlock]
     setBlocks(updated)
     onSaveFile({ ...file, name: fileName, blocks: updated })
+    setIsAddModalOpen(false)
   }
 
   const handleTitleSubmit = () => {
@@ -129,119 +113,146 @@ export function FileEditView({
   }
 
   return (
-    <div className="flex flex-col min-h-full pb-14">
-      {/* Top Bar: Back, Editable Title, Send File Button */}
-      <header className="px-4 py-3 bg-white border-b border-[#D1D9E4] flex items-center justify-between sticky top-0 z-30 shadow-2xs">
-        <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
-          <button
-            type="button"
-            onClick={onBack}
-            className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors tactile-btn cursor-pointer"
-            title="Return to library"
+    <Box style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg)' }}>
+
+      {/* Header */}
+      <Box
+        component="header"
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 50,
+          background: 'var(--surface)',
+          borderBottom: '1px solid var(--border)',
+          padding: '0 1.25rem',
+          height: '3.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+        }}
+      >
+        {/* Left: back + editable title */}
+        <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+          <ActionIcon variant="subtle" color="gray" size="md" onClick={onBack} title="Back to library">
+            <IconArrowLeft size={18} />
+          </ActionIcon>
+
+          {isEditingTitle ? (
+            <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+              <TextInput
+                autoFocus
+                value={fileName}
+                onChange={e => setFileName(e.target.value)}
+                onBlur={handleTitleSubmit}
+                onKeyDown={e => e.key === 'Enter' && handleTitleSubmit()}
+                size="sm"
+                style={{ flex: 1 }}
+                styles={{ input: { fontWeight: 700 } }}
+              />
+              <ActionIcon variant="light" color="teal" size="sm" onClick={handleTitleSubmit}>
+                <IconCheck size={14} />
+              </ActionIcon>
+            </Group>
+          ) : (
+            <UnstyledButton
+              onClick={() => setIsEditingTitle(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}
+              title="Click to rename"
+            >
+              <Text fw={700} size="md" truncate style={{ fontFamily: 'var(--font-display)' }}>
+                {fileName}
+              </Text>
+              <IconPencil size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            </UnstyledButton>
+          )}
+        </Group>
+
+        {/* Right: Save + Send */}
+        <Group gap="xs" wrap="nowrap">
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => onSaveFile(currentFile())}
           >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
+            Save
+          </Button>
+          <Button
+            variant="filled"
+            color="signal"
+            size="sm"
+            leftSection={<IconSend size={14} />}
+            onClick={() => onSendFile(currentFile())}
+          >
+            Send
+          </Button>
+        </Group>
+      </Box>
 
-          {/* Editable Inline Title */}
-          <div className="min-w-0 flex-1">
-            {isEditingTitle ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="text"
-                  autoFocus
-                  value={fileName}
-                  onChange={(e) => setFileName(e.target.value)}
-                  onBlur={handleTitleSubmit}
-                  onKeyDown={(e) => e.key === 'Enter' && handleTitleSubmit()}
-                  className="w-full font-display font-bold text-base text-[#0F172A] bg-slate-50 border border-[#1D4ED8] rounded px-2 py-0.5 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleTitleSubmit}
-                  className="p-1 text-emerald-600 hover:bg-emerald-50 rounded cursor-pointer"
-                >
-                  <Check className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <div
-                onClick={() => setIsEditingTitle(true)}
-                className="group flex items-center gap-1.5 cursor-pointer py-0.5 rounded hover:bg-slate-50 transition-colors max-w-fit"
-                title="Click to rename"
-              >
-                <h2 className="font-display font-bold text-base text-[#0F172A] truncate">
-                  {fileName}
-                </h2>
-                <Edit2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#1D4ED8] shrink-0 transition-colors" />
-              </div>
-            )}
-          </div>
-        </div>
+      {/* Block list */}
+      <Box component="main" style={{ flex: 1, padding: '1.5rem 1.25rem', maxWidth: '640px', margin: '0 auto', width: '100%' }}>
+        <Stack gap="md">
+          {/* Meta */}
+          <Group justify="space-between" px={2}>
+            <Group gap={6}>
+              <IconStack2 size={14} style={{ color: 'var(--text-muted)' }} />
+              <Text size="xs" c="dimmed">
+                {blocks.length} {blocks.length === 1 ? 'block' : 'blocks'}
+              </Text>
+            </Group>
+            <Text size="xs" c="dimmed">Click block to edit · ··· to delete/move</Text>
+          </Group>
 
-        {/* Send File CTA */}
-        <button
-          type="button"
-          onClick={() => onSendFile({ ...file, name: fileName, blocks })}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-semibold rounded-lg shadow-xs tactile-btn shrink-0 cursor-pointer"
-        >
-          <Send className="w-3.5 h-3.5" />
-          <span>Send File</span>
-        </button>
-      </header>
+          {/* Blocks */}
+          <Stack gap="sm">
+            {blocks.map((block, index) => (
+              <BlockItem
+                key={block.id}
+                block={block}
+                index={index}
+                totalBlocks={blocks.length}
+                mode="edit"
+                onUpdate={handleUpdateBlock}
+                onDelete={handleDeleteBlock}
+                onDuplicate={handleDuplicateBlock}
+                onMoveUp={handleMoveUp}
+                onMoveDown={handleMoveDown}
+                onUnlockCredential={handleUnlockCredential}
+              />
+            ))}
+          </Stack>
 
-      {/* Main Content: Ordered List of Blocks */}
-      <main className="flex-1 px-4 py-5 max-w-xl mx-auto w-full space-y-4">
-        {/* Meta pill bar */}
-        <div className="flex items-center justify-between px-2 text-xs text-[#5B6B82]">
-          <span className="flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-slate-400" />
-            <span>
-              {blocks.length} {blocks.length === 1 ? 'block' : 'blocks'} in payload
-            </span>
-          </span>
-          <span className="text-[11px] font-mono text-slate-400">
-            Drag handle or arrows to reorder
-          </span>
-        </div>
-
-        {/* Blocks list */}
-        <div className="space-y-3">
-          {blocks.map((block, index) => (
-            <BlockItem
-              key={block.id}
-              block={block}
-              index={index}
-              totalBlocks={blocks.length}
-              mode="edit"
-              onUpdate={handleUpdateBlock}
-              onDelete={handleDeleteBlock}
-              onDuplicate={handleDuplicateBlock}
-              onMoveUp={handleMoveUp}
-              onMoveDown={handleMoveDown}
-              onUnlockCredential={handleUnlockCredential}
-            />
-          ))}
-        </div>
-
-        {/* Add Block Row / Button at bottom */}
-        <div className="pt-2">
-          <button
-            type="button"
+          {/* Add block */}
+          <UnstyledButton
             onClick={() => setIsAddModalOpen(true)}
-            className="w-full py-3 border-2 border-dashed border-[#D1D9E4] hover:border-[#1D4ED8] hover:bg-blue-50/30 rounded-xl flex items-center justify-center gap-2 text-xs font-semibold text-[#1D4ED8] transition-all tactile-btn cursor-pointer"
+            style={{
+              width: '100%',
+              padding: '0.875rem',
+              border: '2px dashed var(--border)',
+              borderRadius: 'var(--radius)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              color: 'var(--accent)',
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              transition: 'border-color 120ms, background 120ms',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLElement).style.background = 'rgba(29,78,216,0.04)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.background = '' }}
           >
-            <Plus className="w-4 h-4" />
-            <span>Add Block to Dossier</span>
-          </button>
-        </div>
-      </main>
+            <IconPlus size={16} />
+            Add block
+          </UnstyledButton>
+        </Stack>
+      </Box>
 
-      {/* Block Type Picker Modal */}
       <AddBlockModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         onSelectType={handleAddBlockType}
       />
-    </div>
+    </Box>
   )
 }
