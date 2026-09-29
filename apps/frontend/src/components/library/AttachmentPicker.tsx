@@ -129,13 +129,20 @@ export function AttachmentPicker({
         DESIGN.md's Button table: a labelled action is a `Button`, and the Default variant is the
         raised fill with 1px `--qrbit-border-strong` — the outline of a control the user must
         find. It is not the accent at rest: the signal blue means *this is the action*, and this
-        control only opens the OS picker on the user's behalf."
+        control only opens the OS picker on the user's behalf.
+
+        `flex: 'none'` keeps it exactly as wide as its own words. It is a fixed member of a `Group`
+        that also holds `Remove image`, in a row a quarter of the page wide on a phone, and a
+        shrinkable button in a flex row loses its label — Mantine's root is `overflow: hidden` over
+        a `white-space: nowrap` label. The row wraps instead (see `AttachmentControls` in
+        `BlockItem.tsx`).
       */}
       <Button
         type="button"
         variant="default"
         size="sm"
         leftSection={<Icon size={16} aria-hidden="true" />}
+        style={{ flex: 'none', maxWidth: '100%' }}
         onClick={() => {
           input.current?.click()
         }}

@@ -112,6 +112,13 @@ export function AddBlockModal({ isOpen, onClose, onSelectType }: AddBlockModalPr
               variant="default"
               size="md"
               // A list of choices reads as a list: label left, glyph left of it, nothing centred.
+              //
+              // The height is a minimum, not a fixed size. A row here is two lines of prose (name +
+              // what it holds) inside a Mantine `Button`, whose root is `overflow: hidden` at a fixed
+              // `--button-height-md` of 42px: on a narrow sheet the description takes a second line
+              // and the row cut it off mid-word. `2.75rem` is DESIGN.md's 44px thumb minimum — the
+              // same spelling `styles.css` uses — and the row grows past it instead of clipping.
+              style={{ height: 'auto', minHeight: '2.75rem' }}
               styles={{
                 root: { width: '100%' },
                 inner: { justifyContent: 'flex-start' },
@@ -148,13 +155,12 @@ export function AddBlockModal({ isOpen, onClose, onSelectType }: AddBlockModalPr
                   <Text span className="qrbit-text-body" style={{ fontWeight: 600 }}>
                     {item.name}
                   </Text>
-                  <Text
-                    span
-                    className="qrbit-text-body-secondary"
-                    c="dimmed"
-                    style={{ minWidth: 0 }}
-                    truncate
-                  >
+                  {/*
+                    Not `truncate`: this sentence is the reason a user picks the row ("Secret or key,
+                    encrypted when you give it a password"), and an ellipsis on it hides the
+                    instruction the locked row exists to give. It wraps, and the row grows.
+                  */}
+                  <Text span className="qrbit-text-body-secondary" c="dimmed" style={{ minWidth: 0 }}>
                     {item.desc}
                   </Text>
                 </Stack>

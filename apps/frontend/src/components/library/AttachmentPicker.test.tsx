@@ -191,3 +191,43 @@ describe('AttachmentPicker — refusals leave the block alone', () => {
     expect(LIBRARY_ATTACHMENT_MAX_BYTES).toBe(64 * 1024 * 1024)
   })
 })
+
+// ---------------------------------------------------------------------------
+// The owner's list 4 and 6: the picker is a DESIGN.md control with one name
+// ---------------------------------------------------------------------------
+
+describe('AttachmentPicker - the control says what it does, in one voice', () => {
+  it('is the Default control (raised fill, 1px border-strong) and takes any width from its words', () => {
+    mount({ blockType: 'fileAttachment' })
+
+    const control = element().querySelector('button')
+    if (control === null) throw new Error('test bug: the picker rendered no control')
+
+    // DESIGN.md's Default row: the outline of a control the user must find. It is not the accent
+    // at rest, because it only opens the OS picker on the user's behalf.
+    expect(control.getAttribute('data-variant')).toBe('default')
+    expect(control.style.getPropertyValue('--button-bd')).toContain('mantine-color-default-border')
+
+    // Sized to its content: a picker that a `Group` can squeeze loses its label, because Mantine's
+    // button root is `overflow: hidden` over a `white-space: nowrap` label.
+    expect(control.style.flexGrow).toBe('0')
+    expect(control.style.flexShrink).toBe('0')
+    expect(control.style.maxWidth).toBe('100%')
+  })
+
+  it('carries one name, visible and spoken, for the button and the field behind it', () => {
+    mount({ blockType: 'fileAttachment' })
+
+    const control = element().querySelector('button')
+    if (control === null) throw new Error('test bug: the picker rendered no control')
+
+    // The accessible name is the visible word (no `aria-label` overriding it with something else).
+    expect(control.getAttribute('aria-label')).toBe(null)
+    expect(control.textContent?.trim()).toBe('Choose file')
+
+    // The hidden input that actually holds the file is named with the same words, and is not a
+    // second tab stop.
+    expect(picker().getAttribute('aria-label')).toBe('Choose file')
+    expect(picker().tabIndex).toBe(-1)
+  })
+})

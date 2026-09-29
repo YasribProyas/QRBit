@@ -18,7 +18,7 @@
  *    `revealBlock`, `attachmentSizeLabel` and `ImagePreview`.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
   ActionIcon,
@@ -139,6 +139,13 @@ export function BlockItem({
   reorderOffset = 0,
 }: BlockItemProps) {
   const [passwordInput, setPasswordInput] = useState('')
+  /**
+   * Ids for the two caption/field pairs in the payload area. `useId` because several rows are on
+   * screen at once and an `htmlFor` that pointed at the wrong one would label the wrong field.
+   */
+  const labelFieldId = useId()
+  const fieldLabelId = useId()
+  const fieldValueId = useId()
   const [unlockError, setUnlockError] = useState(false)
   const [showUnlockModal, setShowUnlockModal] = useState(false)
   const [isDecrypting, setIsDecrypting] = useState(false)
@@ -218,7 +225,15 @@ export function BlockItem({
    */
   const grip =
     isReorderRow && reorderHandleProps !== undefined ? (
-      <ActionIcon variant="subtle" size="lg" c="dimmed" {...reorderHandleProps}>
+      // The tooltip says exactly what the accessible name says (`Reorder item 2 of 4`): one
+      // control, one name, visible or spoken (DESIGN.md wants the visible word).
+      <ActionIcon
+        variant="subtle"
+        size="lg"
+        c="dimmed"
+        title={reorderHandleProps['aria-label']}
+        {...reorderHandleProps}
+      >
         <IconGripVertical size={16} aria-hidden="true" />
       </ActionIcon>
     ) : null
@@ -622,7 +637,7 @@ export function BlockItem({
                 c="dimmed"
                 onClick={() => onMoveUp?.(index)}
                 disabled={index === 0}
-                title="Move up"
+                title={`Move ${block.type} block up`}
                 aria-label={`Move ${block.type} block up`}
               >
                 <IconChevronUp size={16} aria-hidden="true" />
@@ -633,7 +648,7 @@ export function BlockItem({
                 c="dimmed"
                 onClick={() => onMoveDown?.(index)}
                 disabled={index === totalBlocks - 1}
-                title="Move down"
+                title={`Move ${block.type} block down`}
                 aria-label={`Move ${block.type} block down`}
               >
                 <IconChevronDown size={16} aria-hidden="true" />
@@ -667,17 +682,29 @@ export function BlockItem({
       <div className="p-3 space-y-2">
         {/* Optional Label field for entities when editing (User can choose to set label for each entity) */}
         {mode === 'edit' && block.type !== 'shortText' && (
+          /*
+            The caption is the field's accessible name — a real `htmlFor` pair rather than a visible
+            "Label" beside an `aria-label` that says something else (DESIGN.md wants the visible
+            word, and one control should have one name).
+          */
           <Group gap="sm" wrap="nowrap" pb="xs">
-            <Text span className="qrbit-text-label" c="dimmed" style={{ flex: 'none', width: 56 }}>
+            <Text
+              span
+              component="label"
+              htmlFor={labelFieldId}
+              className="qrbit-text-label"
+              c="dimmed"
+              style={{ flex: 'none', width: 56 }}
+            >
               Label
             </Text>
             <TextInput
+              id={labelFieldId}
               size="sm"
               type="text"
               value={block.label || ''}
               onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
               placeholder="Label (optional)"
-              aria-label={`Label for this ${block.type} block`}
               style={{ flex: '1 1 auto', minWidth: 0 }}
             />
           </Group>
@@ -710,6 +737,8 @@ export function BlockItem({
                 <Group gap="sm" wrap="nowrap">
                   <Text
                     span
+                    component="label"
+                    htmlFor={fieldLabelId}
                     className="qrbit-text-label"
                     c="dimmed"
                     style={{ flex: 'none', width: 56 }}
@@ -717,18 +746,20 @@ export function BlockItem({
                     Label
                   </Text>
                   <TextInput
+                    id={fieldLabelId}
                     size="sm"
                     type="text"
                     value={block.label || ''}
                     onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
                     placeholder="Field label..."
-                    aria-label="Field label"
                     style={{ flex: '1 1 auto', minWidth: 0 }}
                   />
                 </Group>
                 <Group gap="sm" wrap="nowrap">
                   <Text
                     span
+                    component="label"
+                    htmlFor={fieldValueId}
                     className="qrbit-text-label"
                     c="dimmed"
                     style={{ flex: 'none', width: 56 }}
@@ -743,12 +774,12 @@ export function BlockItem({
                   */}
                   {canEditPayload ? (
                     <TextInput
+                      id={fieldValueId}
                       size="sm"
                       type="text"
                       value={block.value || ''}
                       onChange={(e) => onUpdate?.(block.id, { value: e.target.value })}
                       placeholder="Single-line value..."
-                      aria-label="Field value"
                       style={{ flex: '1 1 auto', minWidth: 0 }}
                     />
                   ) : (
@@ -1083,7 +1114,7 @@ export function BlockItem({
                   </Button>
                 </Group>
 
-                <Group gap="sm" wrap="nowrap">
+                <Group gap="sm" wrap="wrap">
                   <TextInput
                     size="sm"
                     type="password"
@@ -1095,14 +1126,14 @@ export function BlockItem({
                       setPasswordInput(e.target.value)
                       setUnlockError(false)
                     }}
-                    style={{ flex: '1 1 auto', minWidth: 0 }}
+                    style={{ flex: '1 1 12rem', minWidth: 0 }}
                   />
                   <Button
                     type="submit"
                     size="sm"
                     color="signal"
                     loading={isDecrypting}
-                    style={{ flex: 'none' }}
+                    style={{ flex: 'none', maxWidth: '100%' }}
                   >
                     {isDecrypting ? 'Decrypting...' : 'Decrypt'}
                   </Button>
@@ -1177,16 +1208,24 @@ export function BlockItem({
                   </p>
                 ) : null}
 
-                <Group justify="flex-end" gap="sm" wrap="nowrap">
+                <Group justify="flex-end" gap="sm" wrap="wrap">
                   <Button
                     type="button"
                     variant="subtle"
+                    c="dimmed"
                     size="sm"
+                    style={{ flex: 'none', maxWidth: '100%' }}
                     onClick={() => setShowLockConfigModal(false)}
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" size="sm" color="locked" loading={isEncrypting}>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    color="locked"
+                    loading={isEncrypting}
+                    style={{ flex: 'none', maxWidth: '100%' }}
+                  >
                     {isEncrypting ? 'Encrypting...' : 'Encrypt block'}
                   </Button>
                 </Group>
@@ -1230,17 +1269,32 @@ export function BlockItem({
                     Incorrect password. Please try again.
                   </p>
                 ) : null}
-                <Group justify="space-between" gap="sm" wrap="nowrap">
+                {/*
+                  Right-aligned and allowed to wrap, for the same reason as every other action row
+                  in this editor: a nowrap row squeezes its children below their own text width and
+                  Mantine's button clips rather than shrinking (`overflow: hidden` root,
+                  `white-space: nowrap` label). `Keep it encrypted` + `Decrypt and remove lock`
+                  together want more than a 380px sheet can give.
+                */}
+                <Group justify="flex-end" gap="sm" wrap="wrap">
                   <Button
                     type="button"
                     variant="subtle"
+                    c="dimmed"
                     size="sm"
+                    style={{ flex: 'none', maxWidth: '100%' }}
                     onClick={() => setShowLockConfigModal(false)}
                   >
                     Keep it encrypted
                   </Button>
                   {/* Destructive, and it names the consequence (DESIGN.md, "Dialogs"). */}
-                  <Button type="submit" size="sm" color="danger" loading={isDecrypting}>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    color="danger"
+                    loading={isDecrypting}
+                    style={{ flex: 'none', maxWidth: '100%' }}
+                  >
                     {isDecrypting ? 'Opening...' : 'Decrypt and remove lock'}
                   </Button>
                 </Group>
@@ -1378,7 +1432,7 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
 
   return (
     <div className="space-y-2">
-      <Group gap="sm" wrap="nowrap">
+      <Group gap="sm" wrap="wrap">
         <AttachmentPicker
           blockType={blockType}
           label={hasFile ? `Replace ${word}` : `Choose ${word}`}
@@ -1395,6 +1449,7 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
             size="sm"
             c="danger"
             leftSection={<IconX size={14} aria-hidden="true" />}
+            style={{ flex: 'none', maxWidth: '100%' }}
             onClick={remove}
           >
             Remove {word}

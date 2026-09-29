@@ -110,14 +110,48 @@ export function ConfirmDelete({
          */}
         <Text className="qrbit-text-body">{message}</Text>
 
-        <Group justify="flex-end" mt="lg" gap="sm" wrap="nowrap">
-          <Button variant="subtle" size="sm" data-autofocus onClick={onCancel}>
+        {/*
+         * The row wraps and every control in it is sized to its own words.
+         *
+         * Mantine's `Button` root is `overflow: hidden` and its label part is
+         * `white-space: nowrap`, so a button that is squeezed below its content width does not
+         * shrink its text — it cuts the text off. With `wrap="nowrap"` the two actions in a
+         * `size="sm"` sheet (380px, a 348px content box, 316px on a 320px phone) were squeezed
+         * whenever the caller's `confirmLabel` was long — `Delete folder and contents
+         * permanently` is ~290px on its own — and both labels lost their ends. `wrap="wrap"` plus
+         * `flex: none` on each control is the fix: the controls never give up content width, and
+         * the row gains a line instead.
+         *
+         * The confirm control additionally takes `maxWidth: 100%` with a wrapping label, because
+         * its words are supplied by the caller and can be longer than any sheet: at the narrowest
+         * supported width it grows to two lines inside the same 36px minimum height rather than
+         * truncating the sentence that names what is about to be destroyed.
+         */}
+        <Group justify="flex-end" mt="lg" gap="sm" wrap="wrap">
+          {/*
+            DESIGN.md's Quiet row: transparent fill, Ink Secondary label. `c="dimmed"` is how that
+            label reaches the bridged slot (`--mantine-color-dimmed` -> `--qrbit-ink-secondary`);
+            a bare `variant="subtle"` takes its label from the primary ramp instead
+            (`--button-color: var(--mantine-color-signal-light-color)`, the foot of the signal
+            ramp), so the safe answer is painted in the accent's family instead of at Ink
+            Secondary. The slot is reported to the theme lane; this is the semantic name.
+          */}
+          <Button
+            variant="subtle"
+            c="dimmed"
+            size="sm"
+            data-autofocus
+            style={{ flex: 'none', maxWidth: '100%' }}
+            onClick={onCancel}
+          >
             Cancel
           </Button>
           <Button
             // Filled Fault Red: the only control here that acts, and it looks like it.
             color="danger"
             size="sm"
+            style={{ flex: 'none', maxWidth: '100%', height: 'auto', minHeight: 'var(--button-height)' }}
+            styles={{ label: { whiteSpace: 'normal', lineHeight: 'var(--mantine-line-height)' } }}
             onClick={onConfirm}
           >
             {confirmLabel}

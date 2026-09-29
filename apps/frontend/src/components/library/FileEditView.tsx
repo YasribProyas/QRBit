@@ -463,16 +463,23 @@ export function FileEditView({
         Top bar: back, editable title, dirty state, Save, Send. It is sticky, so it is one of the
         few surfaces that genuinely floats above the page — it takes the sheet shadow rather than
         the old zero-offset halo, which DESIGN.md names as a defect ("The Offset-and-Blur Rule").
+
+        The `flex-wrap` on it is not decoration. Mantine's `Button` root is `overflow: hidden` and
+        its label part is `white-space: nowrap`, so a control that a row squeezes below its own
+        content width does not shrink its text — it cuts the text off. Letting the action cluster
+        take a line of its own, with every control on it `flex: none`, is what keeps
+        `Save dossier` and `Send` whole on a 320px phone — which is the device this product is
+        used on.
       */}
       <header
-        className="px-4 py-3 flex items-center justify-between sticky top-0 z-30 gap-2"
+        className="px-4 py-3 flex items-center justify-between flex-wrap sticky top-0 z-30 gap-2"
         style={{
           backgroundColor: 'var(--qrbit-raised)',
           borderBottom: '1px solid var(--qrbit-border)',
           boxShadow: 'var(--qrbit-shadow-lift)',
         }}
       >
-        <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: '1 1 auto' }}>
+        <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: '1 1 16rem' }}>
           <ActionIcon
             variant="subtle"
             size="lg"
@@ -554,7 +561,7 @@ export function FileEditView({
           </div>
         </Group>
 
-        <Group gap="sm" wrap="nowrap" style={{ flex: 'none' }}>
+        <Group gap="sm" wrap="wrap" justify="flex-end" style={{ flex: 'none', maxWidth: '100%' }}>
           {isDirty ? (
             /*
               Caution Amber means "a warning that is not a failure" — an unsaved draft — and the
@@ -572,23 +579,48 @@ export function FileEditView({
             </Badge>
           ) : null}
 
-          {/* The explicit save that replaced per-keystroke autosave */}
+          {/*
+            DESIGN.md's Button table gives this screen exactly two roles, and they are now
+            different ones. `Send` is the filled `signal` primary: the product is one motion —
+            put something in, show a code, hand it across — so the control that starts that motion
+            owns the accent, and the One Blue Rule means only one control on this bar may.
+            `Save dossier` is the Default role: raised fill, 1px `--qrbit-border-strong`, ink
+            label — DESIGN.md's own definition of "the outline of a control the user must find",
+            which is why it does not need the accent to be found. It is also the control the user
+            comes back to dozens of times per dossier, and a repeated action styled as the primary
+            would make the primary mean nothing.
+
+            Its state is in its own word and icon, not only in the amber badge next to it: clean
+            reads `Saved` with a check and is disabled, dirty reads `Save dossier` with the floppy
+            and is live. `data-save-state` is the same fact for anything that needs to read it
+            without matching on a label that changes.
+          */}
           <Button
-            color="signal"
+            variant="default"
             size="sm"
-            leftSection={<IconDeviceFloppy size={14} aria-hidden="true" />}
+            leftSection={
+              isDirty ? (
+                <IconDeviceFloppy size={14} aria-hidden="true" />
+              ) : (
+                <IconCheck size={14} aria-hidden="true" />
+              )
+            }
             disabled={!isDirty || !canPersist}
+            data-save-state={isDirty ? 'dirty' : 'clean'}
+            style={{ flex: 'none' }}
             onClick={handleSave}
           >
-            Save
+            {isDirty ? 'Save dossier' : 'Saved'}
           </Button>
 
+          {/* The screen's purpose: hand the dossier across. Filled signal, white label, both states. */}
           <Button
-            variant="light"
+            variant="filled"
             color="signal"
             size="sm"
             leftSection={<IconSend size={14} aria-hidden="true" />}
             disabled={!canPersist}
+            style={{ flex: 'none' }}
             onClick={handleSend}
           >
             Send
@@ -876,11 +908,35 @@ function EncryptBeforeSaveDialog({
           ) : null}
 
           {/* Quiet then Primary, right-aligned (DESIGN.md, "Dialogs"). */}
-          <Group justify="flex-end" gap="sm" wrap="nowrap">
-            <Button type="button" variant="subtle" size="sm" disabled={busy} onClick={onCancel}>
+          <Group justify="flex-end" gap="sm" wrap="wrap">
+            {/*
+              `c="dimmed"` is not a colour choice made here: it points the label at Mantine's
+              `--mantine-color-dimmed` slot, which `theme.ts` bridges to `--qrbit-ink-secondary` in
+              both schemes. Without it a `subtle` control takes its label from the primary ramp
+              (`--button-color: var(--mantine-color-signal-light-color)` = signal-9, the foot of the
+              accent's ramp, in the light scheme), which is not DESIGN.md's Quiet row and is why a
+              "Cancel"-class control reads as a smudge on paper. The slot is reported to the theme
+              lane; this prop is the semantic name, not a hand-painted value.
+            */}
+            <Button
+              type="button"
+              variant="subtle"
+              c="dimmed"
+              size="sm"
+              disabled={busy}
+              style={{ flex: 'none', maxWidth: '100%' }}
+              onClick={onCancel}
+            >
               Cancel the save
             </Button>
-            <Button type="submit" size="sm" color="locked" loading={busy} disabled={!canSubmit}>
+            <Button
+              type="submit"
+              size="sm"
+              color="locked"
+              loading={busy}
+              disabled={!canSubmit}
+              style={{ flex: 'none', maxWidth: '100%' }}
+            >
               {busy ? 'Encrypting...' : 'Encrypt and save'}
             </Button>
           </Group>
@@ -935,15 +991,51 @@ function LeaveDraftDialog({
           &ldquo;{dossierName}&rdquo; has unsaved edits. Leaving now loses them.
         </Text>
 
-        <Group justify="flex-end" gap="sm" wrap="nowrap">
-          <Button variant="subtle" size="sm" autoFocus onClick={onCancel}>
+        {/*
+          Three actions, three DESIGN.md roles, and the row that holds them may wrap.
+
+          `wrap="nowrap"` was the bug the owner saw as "texts on all of the buttons are partially
+          cut off": a `size="sm"` sheet is 380px wide, its content box is 348px (316px on a 320px
+          phone), and `Keep editing` + `Save & leave` + `Discard unsaved edits` want about 390px.
+          In a nowrap row flex items shrink, and because Mantine's button root is
+          `overflow: hidden` with a `white-space: nowrap` label, the shrink cut the words instead
+          of moving them. `wrap="wrap"` plus `flex: none` on each control makes each one exactly
+          as wide as its own words and lets the row become two lines instead.
+
+          The roles are the hierarchy: Quiet for the answer that costs nothing, Primary for the
+          one that keeps the work, and a Danger-labelled Default for the one that throws it away.
+          The destructive option is deliberately not a second filled control — two filled buttons
+          on one sheet is the same indistinguishability the top bar just had.
+        */}
+        <Group justify="flex-end" gap="sm" wrap="wrap">
+          <Button
+            variant="subtle"
+            c="dimmed"
+            size="sm"
+            autoFocus
+            style={{ flex: 'none', maxWidth: '100%' }}
+            onClick={onCancel}
+          >
             Keep editing
           </Button>
-          <Button color="signal" size="sm" disabled={!canSave} onClick={onSaveAndLeave}>
+          <Button
+            variant="filled"
+            color="signal"
+            size="sm"
+            disabled={!canSave}
+            style={{ flex: 'none', maxWidth: '100%' }}
+            onClick={onSaveAndLeave}
+          >
             Save &amp; leave
           </Button>
           {/* Names the consequence instead of promising a vague "Discard". */}
-          <Button variant="default" color="danger" size="sm" onClick={onDiscard}>
+          <Button
+            variant="default"
+            c="danger"
+            size="sm"
+            style={{ flex: 'none', maxWidth: '100%' }}
+            onClick={onDiscard}
+          >
             Discard unsaved edits
           </Button>
         </Group>

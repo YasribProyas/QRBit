@@ -151,6 +151,28 @@ function buttonByLabel(label: string): HTMLButtonElement {
   return found
 }
 
+/*
+ * The Save control is found by the state it declares, not by its words: its label is a sentence
+ * about the draft (`Save dossier` while there is one, `Saved` while there is not), so a label
+ * lookup would have to change with every edit. `data-save-state` is that same declaration, and the
+ * tests below still assert the words — just through the control the marker found.
+ */
+function saveButton(): HTMLButtonElement {
+  const found = element().querySelector<HTMLButtonElement>('button[data-save-state]')
+  if (found === null) throw new Error('test bug: the editor rendered no Save control')
+  return found
+}
+
+/**
+ * A control is sized to its content when a flex row cannot squeeze it narrower: `flex-grow: 0`
+ * and `flex-shrink: 0`. That is the whole truncation fix — Mantine's button root is
+ * `overflow: hidden` over a `white-space: nowrap` label, so a squeezed button does not shrink its
+ * text, it cuts the text off.
+ */
+function isContentSized(button: HTMLElement): boolean {
+  return button.style.flexGrow === '0' && button.style.flexShrink === '0'
+}
+
 function byText(text: string): boolean {
   return (element().textContent ?? '').includes(text)
 }
@@ -178,9 +200,27 @@ function dialogButtonContaining(text: string): HTMLButtonElement {
   return found
 }
 
+/** The same, scoped to the open dialog's own panel. */
+function buttonContainingInDialog(text: string): HTMLButtonElement {
+  const found = dialogButtons().find(
+    (button) =>
+      (button.textContent ?? '').includes(text) &&
+      button.closest('[role="dialog"]') !== null,
+  )
+  if (found === undefined) throw new Error(`test bug: no dialog button containing "${text}"`)
+  return found
+}
+
 function inDialog(text: string): boolean {
   const panel = document.body.querySelector('[role="dialog"]')
   return (panel?.textContent ?? '').includes(text)
+}
+
+/** The row of action buttons at the foot of the open dialog, as the element that holds them. */
+function dialogActionRow(aButton: HTMLButtonElement): HTMLElement {
+  const row = aButton.parentElement
+  if (row === null) throw new Error('test bug: the dialog action has no row')
+  return row
 }
 
 /**
@@ -361,14 +401,14 @@ describe('FileEditView — explicit save (D16.1)', () => {
 
     // Clean on arrival: no indicator, and nothing to save.
     expect(byText('Unsaved changes')).toBe(false)
-    expect(buttonByLabel('Save').disabled).toBe(true)
+    expect(saveButton().disabled).toBe(true)
 
     typeInto(headingInput(0), 'Alpha edited')
 
     expect(host.onSaveFile).not.toHaveBeenCalled()
     expect(host.onBack).not.toHaveBeenCalled()
     expect(byText('Unsaved changes')).toBe(true)
-    expect(buttonByLabel('Save').disabled).toBe(false)
+    expect(saveButton().disabled).toBe(false)
     expect(host.onDirtyChange).toHaveBeenLastCalledWith(true)
 
     // A second keystroke does not sneak a write in either.
@@ -381,7 +421,7 @@ describe('FileEditView — explicit save (D16.1)', () => {
     mount({ file: makeFile(), folders: FOLDERS, ...host })
 
     typeInto(headingInput(0), 'Alpha edited')
-    click(buttonByLabel('Save'))
+    click(saveButton())
 
     expect(host.onSaveFile).toHaveBeenCalledTimes(1)
     const saved = savedDraft(host)
@@ -394,7 +434,7 @@ describe('FileEditView — explicit save (D16.1)', () => {
     ])
 
     expect(byText('Unsaved changes')).toBe(false)
-    expect(buttonByLabel('Save').disabled).toBe(true)
+    expect(saveButton().disabled).toBe(true)
     expect(host.onDirtyChange).toHaveBeenLastCalledWith(false)
 
     // Re-opening a different file must not resurrect the previous draft: the seed follows the
@@ -403,7 +443,7 @@ describe('FileEditView — explicit save (D16.1)', () => {
     rerender({ file: reopened, folders: FOLDERS, ...host })
     expect(renderedOrder()).toEqual(['Delta'])
     expect(byText('Unsaved changes')).toBe(false)
-    expect(buttonByLabel('Save').disabled).toBe(true)
+    expect(saveButton().disabled).toBe(true)
   })
 
   it('keeps an in-progress draft when the host echoes the same dossier id back', () => {
@@ -423,7 +463,7 @@ describe('FileEditView — explicit save (D16.1)', () => {
 
     expect(renderedOrder()).toEqual(['Alpha edited', 'Bravo', 'Charlie'])
     expect(byText('Unsaved changes')).toBe(true)
-    expect(buttonByLabel('Save').disabled).toBe(false)
+    expect(saveButton().disabled).toBe(false)
   })
 
   it('leaves the library\'s own ordering field out of what it saves', () => {
@@ -431,7 +471,7 @@ describe('FileEditView — explicit save (D16.1)', () => {
     mount({ file: makeFile({ sortOrder: 5000 }), folders: FOLDERS, ...host })
 
     typeInto(headingInput(0), 'Alpha edited')
-    click(buttonByLabel('Save'))
+    click(saveButton())
 
     const saved = savedDraft(host)
     expect(saved.blocks.map((block) => block.content)).toEqual(['Alpha edited', 'Bravo', 'Charlie'])
@@ -449,7 +489,7 @@ describe('FileEditView — explicit save (D16.1)', () => {
     typeInto(titleInput(), 'Renamed Relay')
 
     expect(host.onSaveFile).not.toHaveBeenCalled()
-    click(buttonByLabel('Save'))
+    click(saveButton())
     expect(savedDraft(host).name).toBe('Renamed Relay')
   })
 })
@@ -463,7 +503,7 @@ describe('FileEditView — leaving a dirty draft (spec row 8)', () => {
     const host = callbacks()
     mount({ file: makeFile(), folders: FOLDERS, ...host })
 
-    click(buttonByLabel('Save')) // disabled, so nothing happens either way
+    click(saveButton()) // disabled, so nothing happens either way
     const back = backButton()
     click(back)
 
@@ -523,6 +563,188 @@ describe('FileEditView — leaving a dirty draft (spec row 8)', () => {
     expect(host.onBack.mock.invocationCallOrder[0] ?? 0).toBeGreaterThan(
       host.onSaveFile.mock.invocationCallOrder[0] ?? 0,
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The owner's list 1-3: two distinct button roles, and no dialog label clipped
+// ---------------------------------------------------------------------------
+
+describe('FileEditView — the top bar\'s two actions are different controls', () => {
+  /*
+   * The report was that Save and Send "look exact same". They are two DESIGN.md roles now, and
+   * that is asserted through the slots Mantine actually paints (`--button-bg`, `--button-bd`,
+   * `--button-color`) rather than through a class name, because a class name is hashed.
+   */
+  it('makes Send the filled signal primary and Save the bordered Default control', () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    const send = buttonByLabel('Send')
+    const save = saveButton()
+
+    expect(send.getAttribute('data-variant')).toBe('filled')
+    expect(send.style.getPropertyValue('--button-bg')).toContain('signal-filled')
+    expect(send.style.getPropertyValue('--button-color')).toBe('var(--mantine-color-white)')
+
+    // Default: the raised fill with 1px `--qrbit-border-strong` behind it — DESIGN.md's "the
+    // outline of a control the user must find", which is why Save does not need the accent.
+    expect(save.getAttribute('data-variant')).toBe('default')
+    expect(save.style.getPropertyValue('--button-bg')).toContain('mantine-color-default')
+    expect(save.style.getPropertyValue('--button-bd')).toContain('mantine-color-default-border')
+    expect(save.style.getPropertyValue('--button-bg')).not.toBe(send.style.getPropertyValue('--button-bg'))
+  })
+
+  it('never flips Send\'s label to a dark colour on hover', () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+    const send = buttonByLabel('Send')
+
+    // The black-on-blue hover was Mantine's `light` variant: its fill lifts to
+    // `--mantine-color-signal-light-hover` while the label stays `--mantine-color-signal-light-color`,
+    // which is signal-9 (`--qrbit-signal-deep`'s neighbour at the bottom of the ramp) in the light
+    // scheme — a near-black in the accent's own family, on a blue fill. A filled control takes
+    // its hover fill from the same ramp and its hover label from `--button-color` (white), so the
+    // only way this can regress is if a hover *label* slot is set at all.
+    expect(send.style.getPropertyValue('--button-hover')).toContain('signal-filled-hover')
+    expect(send.style.getPropertyValue('--button-hover-color')).toBe('')
+    expect(send.getAttribute('data-variant')).not.toBe('light')
+  })
+
+  /*
+   * The owner's point 5: the amber badge must not be the only thing that distinguishes Save's
+   * states. The control says it itself, in its own word and glyph.
+   */
+  it('says what Save is for in the control itself, not only in the badge beside it', () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    expect(saveButton().getAttribute('data-save-state')).toBe('clean')
+    expect(saveButton().textContent?.trim()).toBe('Saved')
+
+    typeInto(headingInput(0), 'Alpha edited')
+
+    expect(saveButton().getAttribute('data-save-state')).toBe('dirty')
+    expect(saveButton().textContent?.trim()).toBe('Save dossier')
+    expect(saveButton().disabled).toBe(false)
+
+    click(saveButton())
+
+    expect(saveButton().getAttribute('data-save-state')).toBe('clean')
+    expect(saveButton().textContent?.trim()).toBe('Saved')
+  })
+
+  it('sizes the top bar\'s actions to their own words and lets the cluster wrap', () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    typeInto(headingInput(0), 'Alpha edited')
+
+    for (const control of [saveButton(), buttonByLabel('Send')]) {
+      expect(isContentSized(control)).toBe(true)
+    }
+    // The cluster they live in wraps onto its own line rather than squeezing them.
+    const cluster = dialogActionRow(saveButton())
+    expect(cluster.style.getPropertyValue('--group-wrap')).toBe('wrap')
+  })
+})
+
+describe('FileEditView — no dialog label is cut off (spec row: "Discard changes?")', () => {
+  /*
+   * The cause, stated once because the fix is not obvious from the diff: a Mantine `Button` root
+   * is `overflow: hidden` and its label part is `white-space: nowrap`, so when a `wrap="nowrap"`
+   * row is narrower than its buttons want to be, the buttons shrink and the words are CUT, not
+   * ellipsised. Three actions in a `size="sm"` sheet (380px, 348px of content, 316px on a 320px
+   * phone) want about 390px. `flex: none` on each control plus a wrapping row is the fix: a
+   * control is exactly as wide as its own words, and the row gains a line.
+   */
+  it('gives the Discard dialog all three full labels, each control sized to its content', async () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    typeInto(headingInput(0), 'Alpha edited')
+    click(backButton())
+    await dialogOpened()
+
+    const actions = ['Keep editing', 'Save & leave', 'Discard unsaved edits'] as const
+    for (const label of actions) {
+      const control = buttonInDialog(label)
+      // The whole sentence is there — nothing was truncated to "Keep edit".
+      expect(control.textContent?.trim()).toBe(label)
+      // …and nothing can squeeze it: the control is sized to its content, not to the row.
+      expect(isContentSized(control)).toBe(true)
+    }
+
+    const row = dialogActionRow(buttonInDialog('Keep editing'))
+    expect(row.style.getPropertyValue('--group-wrap')).toBe('wrap')
+    expect(row.style.getPropertyValue('--group-justify')).toBe('flex-end')
+  })
+
+  it('gives the three actions three different DESIGN.md roles', async () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    typeInto(headingInput(0), 'Alpha edited')
+    click(backButton())
+    await dialogOpened()
+
+    const keep = buttonInDialog('Keep editing')
+    const saveAndLeave = buttonInDialog('Save & leave')
+    const discard = buttonInDialog('Discard unsaved edits')
+
+    // Quiet: transparent fill, and its label on the bridged Ink Secondary slot rather than on
+    // Mantine's default, which resolves a subtle label to `--mantine-color-signal-light-color` —
+    // the bottom of the signal ramp, a near-black in the accent's own family.
+    expect(keep.getAttribute('data-variant')).toBe('subtle')
+    expect(keep.style.getPropertyValue('--button-bg')).toBe('transparent')
+    expect(keep.style.color).toContain('mantine-color-dimmed')
+
+    // Primary: the one filled control in the dialog, and the one that keeps the work.
+    expect(saveAndLeave.getAttribute('data-variant')).toBe('filled')
+    expect(saveAndLeave.style.getPropertyValue('--button-bg')).toContain('signal-filled')
+
+    // Default, wearing the status colour: raised fill, 1px border-strong, Fault Red words.
+    // Two filled buttons one tap apart is the defect the top bar just had.
+    expect(discard.getAttribute('data-variant')).toBe('default')
+    expect(discard.style.getPropertyValue('--button-bd')).toContain('mantine-color-default-border')
+    expect(discard.style.color).toContain('mantine-color-danger')
+
+    // Safe answer first in DOM order, and the dialog is a real modal (Escape still cancels).
+    const order = Array.from(dialogActionRow(keep).querySelectorAll('button'))
+    expect(order[0]).toBe(keep)
+    expect(order.at(-1)).toBe(discard)
+  })
+
+  it('keeps the encrypt-before-save actions whole too, with the same role split', async () => {
+    const host = callbacks()
+    const secret: FileBlock = { id: 'b-sec', type: 'locked', content: 'hunter2-or-not' }
+    mount({
+      file: makeFile({ blocks: [heading('b-1', 'Alpha'), secret] }),
+      folders: FOLDERS,
+      ...host,
+    })
+
+    // The prompt only opens on a save that is allowed to happen, so the draft must be dirty.
+    typeInto(headingInput(0), 'Alpha edited')
+    click(saveButton())
+    await dialogOpened()
+
+    // The prompt is up because a marked secret is still plaintext — the invariant under test here
+    // is that answering it is possible at all, so both of its controls must be legible.
+    const cancel = buttonInDialog('Cancel the save')
+    const submit = buttonContainingInDialog('Encrypt and save')
+    expect(cancel.textContent?.trim()).toBe('Cancel the save')
+    expect(cancel.style.color).toContain('mantine-color-dimmed')
+    expect(submit.textContent?.trim()).toBe('Encrypt and save')
+    for (const control of [cancel, submit]) {
+      expect(isContentSized(control)).toBe(true)
+    }
+    expect(dialogActionRow(cancel).style.getPropertyValue('--group-wrap')).toBe('wrap')
+
+    // And cancelling still writes nothing: the security path is untouched by the relayout.
+    click(cancel)
+    await dialogClosed()
+    expect(host.onSaveFile).not.toHaveBeenCalled()
   })
 })
 
@@ -602,7 +824,7 @@ describe('FileEditView — reordering blocks', () => {
     expect(host.onSaveFile).not.toHaveBeenCalled()
     expect(byText('Unsaved changes')).toBe(true)
 
-    click(buttonByLabel('Save'))
+    click(saveButton())
     const saved = savedDraft(host)
     expect(saved.blocks.map((block) => block.id)).toEqual(['b-3', 'b-1', 'b-2'])
   })
@@ -700,7 +922,7 @@ describe('FileEditView — folder membership', () => {
     await flush()
 
     typeInto(headingInput(0), 'Alpha edited')
-    click(buttonByLabel('Save'))
+    click(saveButton())
 
     const saved = savedDraft(host)
     expect(saved.folderId).toBe('f-2')
@@ -751,6 +973,36 @@ function attachmentBlockOf(file: LibraryFile, index = 0) {
 }
 
 describe('FileEditView — an attachment block holds a file the user chose', () => {
+  it('gives every block-type row its full description, with room to grow rather than clip', async () => {
+    const host = callbacks()
+    mount({ file: makeFile(), folders: FOLDERS, ...host })
+
+    click(buttonContaining('Add Block to Dossier'))
+    await dialogOpened()
+
+    const rows = Array.from(
+      document.body.querySelectorAll('[role="dialog"] button[data-variant="default"]'),
+    ) as HTMLButtonElement[]
+    expect(rows).toHaveLength(7)
+
+    for (const row of rows) {
+      // Two lines of prose inside a fixed-height, `overflow: hidden` button is the same cut-off as
+      // a squeezed dialog action: the row has to grow, not ellipsis the instruction.
+      expect(row.style.height).toBe('auto')
+      expect(row.style.minHeight).toBe('2.75rem')
+      // One name, visible and spoken: the accessible name is the row's own words.
+      expect(row.getAttribute('aria-label')).toBe(null)
+      expect((row.textContent ?? '').trim().length).toBeGreaterThan(0)
+    }
+
+    // The sentence the locked row exists to tell the user, whole.
+    const locked = rows.find((row) => (row.textContent ?? '').includes('Locked Credential'))
+    if (locked === undefined) throw new Error('test bug: no locked-credential row')
+    expect(locked.textContent?.trim()).toBe(
+      'Locked CredentialSecret or key, encrypted when you give it a password',
+    )
+  })
+
   it('adds an image block with nothing invented on it', async () => {
     const host = callbacks()
     mount({ file: makeFile(), folders: FOLDERS, ...host })
@@ -778,7 +1030,7 @@ describe('FileEditView — an attachment block holds a file the user chose', () 
 
     // And a Save writes the same emptiness to the library, because an unfinished attachment is
     // work in progress — it just cannot be sent.
-    click(buttonByLabel('Save'))
+    click(saveButton())
     const saved = attachmentBlockOf(savedDraft(host), 3)
     expect(saved.type).toBe('image')
     expect(saved.fileName).toBeUndefined()
@@ -842,7 +1094,7 @@ describe('FileEditView — an attachment block holds a file the user chose', () 
     expect(byText('no size until a file is chosen')).toBe(true)
 
     // Save now: the draft still holds an empty block, so the refusal wrote nothing half-way.
-    click(buttonByLabel('Save'))
+    click(saveButton())
     expect(host.onSaveFile).not.toHaveBeenCalled() // a no-op choice left the draft clean
   })
 

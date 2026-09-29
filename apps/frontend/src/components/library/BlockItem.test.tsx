@@ -1095,3 +1095,92 @@ describe('BlockItem — the status pill names which side it is reporting', () =>
     expect(text()).not.toContain('Delivered')
   })
 })
+
+// ---------------------------------------------------------------------------
+// The owner's list 4 and 6: one name per control, and no control squeezed off its words
+// ---------------------------------------------------------------------------
+
+describe('BlockItem — a control says the same thing out loud as in its tooltip', () => {
+  /*
+   * DESIGN.md wants the visible word. The row previously had the pair `title="Move up"` and
+   * `aria-label="Move heading block up"` on the same control: the screen-reader user and the
+   * hover-text user were told different things. The tooltip now repeats the accessible name, and
+   * the grip's tooltip is the hook's own string rather than a fourth name invented beside it.
+   */
+  it('matches the arrow controls\' tooltip to their accessible name', () => {
+    mount({ blocks: [heading('b-1', 'Alpha'), heading('b-2', 'Bravo')] })
+
+    for (const direction of ['up', 'down'] as const) {
+      const arrow = arrowIn(1, direction)
+      const name = arrow.getAttribute('aria-label') ?? ''
+      expect(name).toMatch(new RegExp(`^Move heading block ${direction}$`))
+      expect(arrow.getAttribute('title')).toBe(name)
+    }
+  })
+
+  it('matches the grip\'s tooltip to the name the reorder hook gave it', () => {
+    mount({ blocks: [heading('b-1', 'Alpha'), heading('b-2', 'Bravo')] })
+
+    const grip = gripAt(0)
+    const name = grip.getAttribute('aria-label') ?? ''
+    expect(name).toBe('Reorder item 1 of 2')
+    expect(grip.getAttribute('title')).toBe(name)
+    // Still the hook's handle: `touch-action: none` is what makes a touch drag a drag.
+    expect(grip.style.touchAction).toBe('none')
+  })
+})
+
+describe('BlockItem — the row\'s controls are sized to their own words', () => {
+  /*
+   * A Mantine `Button` root is `overflow: hidden` over a `white-space: nowrap` label, so a control
+   * that a flex row squeezes below its content width loses its text rather than shrinking it. That
+   * is the defect reported on "Discard changes?", and the row has the same two shapes: the
+   * attachment controls (`Choose image` + `Remove image`) and the lock dialog's actions
+   * (`Keep it encrypted` + `Decrypt and remove lock`, ~340px in a 348px sheet).
+   */
+  it('keeps the attachment controls content-sized in a row that wraps', () => {
+    mount({ blocks: [{ id: 'b-img', type: 'image' }] })
+
+    chooseFile(new File([new Uint8Array([1, 2, 3])], 'rig.png', { type: 'image/png' }))
+
+    for (const label of ['Replace image', 'Remove image']) {
+      const control = buttonByLabel(label)
+      expect(control.textContent?.trim()).toBe(label)
+      expect(control.style.flexGrow).toBe('0')
+      expect(control.style.flexShrink).toBe('0')
+    }
+
+    const row = buttonByLabel('Replace image').parentElement
+    if (row === null) throw new Error('test bug: the attachment controls have no row')
+    expect(row.style.getPropertyValue('--group-wrap')).toBe('wrap')
+  })
+
+  it('keeps the lock dialog\'s actions content-sized in a row that wraps', async () => {
+    mount({ blocks: [heading('b-1', 'Alpha')] })
+
+    openLockModal()
+    const dialog = await openDialog()
+
+    const cancel = Array.from(dialog.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => (button.textContent ?? '').trim() === 'Cancel',
+    )
+    const submit = Array.from(dialog.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => (button.textContent ?? '').trim() === 'Encrypt block',
+    )
+    if (cancel === undefined || submit === undefined) {
+      throw new Error('test bug: the lock dialog lost its actions')
+    }
+
+    for (const control of [cancel, submit]) {
+      expect(control.style.flexGrow).toBe('0')
+      expect(control.style.flexShrink).toBe('0')
+    }
+    const row = cancel.parentElement
+    if (row === null) throw new Error('test bug: the dialog actions have no row')
+    expect(row.style.getPropertyValue('--group-wrap')).toBe('wrap')
+    // Quiet = transparent fill on the bridged Ink Secondary slot, not the accent's dark end.
+    expect(cancel.getAttribute('data-variant')).toBe('subtle')
+    expect(cancel.style.color).toContain('mantine-color-dimmed')
+  })
+
+})

@@ -206,6 +206,49 @@ afterEach(() => {
 })
 
 describe('ConfirmDelete — the dialog itself', () => {
+  /*
+   * The same defect the owner reported on the editor's "Discard changes?" sheet, in the dialog
+   * that shares its layout: a `wrap="nowrap"` action row inside a `size="sm"` modal (380px wide,
+   * 348px of content, 316px on a 320px phone) squeezes its buttons below their own text width,
+   * and a Mantine button does not shrink a label — its root is `overflow: hidden` over a
+   * `white-space: nowrap` label, so the words lose their ends. `Delete folder and contents
+   * permanently` plus `Cancel` wants ~400px.
+   */
+  it('says both answers in full, each control sized to its own words', () => {
+    renderDialog()
+
+    for (const label of ['Cancel', COPY.confirmLabel]) {
+      const control = action(label)
+      // The complete sentence is present — not "Delete folder and contents perma".
+      expect(control.textContent?.trim()).toBe(label)
+      expect(control.style.flexGrow).toBe('0')
+      expect(control.style.flexShrink).toBe('0')
+      expect(control.style.maxWidth).toBe('100%')
+    }
+
+    // The row gains a line instead of cutting a word.
+    const row = dialogButtons()[0]?.parentElement
+    if (row === null || row === undefined) throw new Error('test bug: no action row')
+    expect(row.style.getPropertyValue('--group-wrap')).toBe('wrap')
+    expect(row.style.getPropertyValue('--group-justify')).toBe('flex-end')
+  })
+
+  it('lets a caller\'s long verb wrap inside the control rather than clip outside it', () => {
+    renderDialog({ confirmLabel: 'Delete folder, 12 dossiers and every item inside them permanently' })
+
+    const confirm = action(
+      'Delete folder, 12 dossiers and every item inside them permanently',
+    )
+    // Height is the token's minimum, not a fixed 36px, so a two-line verb still fits…
+    expect(confirm.style.height).toBe('auto')
+    expect(confirm.style.minHeight).toBe('var(--button-height)')
+    // …because the label part is allowed to break lines instead of being cut.
+    const spans = Array.from(confirm.querySelectorAll('span'))
+    const label = spans.at(-1)
+    if (!(label instanceof HTMLElement)) throw new Error('test bug: no label part')
+    expect(label.style.whiteSpace).toBe('normal')
+  })
+
   it('is a modal dialog named by its title and described by its message', () => {
     renderDialog()
     const node = dialog()
