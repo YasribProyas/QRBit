@@ -391,6 +391,67 @@ describe('theme.ts agrees with DESIGN.md', () => {
   })
 })
 
+describe('the variant bridge', () => {
+  /**
+   * DESIGN.md's button table gives the Quiet row (`variant="subtle"`, and the icon-only
+   * `ActionIcon` twin) a transparent fill and Ink Secondary text. Mantine's own resolver answers
+   * that control from the *primary ramp* — `--mantine-color-signal-light-color`, shade 9, a navy
+   * that appears nowhere in the document — which is both a value the design system never chose
+   * and a chain that breaks the moment a ramp slot is missing. `theme.test.ts` cannot see the
+   * computed colour (that is `themeBridge.test.tsx`'s job); what it can pin is that the quiet
+   * control is expressed through the semantic slots the bridge owns in both schemes.
+   */
+  it('maps the Quiet variant onto semantic slots, not onto a ramp shade', () => {
+    // `undefined` is what a control with no `color` prop resolves to *before* the call
+    // (`color: color || theme.primaryColor`), so the primary name is the case under test;
+    // `parseThemeColor` refuses a literal undefined.
+    for (const color of [merged.primaryColor, 'gray', 'dark', 'dimmed']) {
+      const colors = merged.variantColorResolver({
+        color,
+        theme: merged,
+        variant: 'subtle',
+        gradient: undefined,
+        autoContrast: undefined,
+      })
+      expect(colors.color, `subtle/${color ?? 'none'}`).toBe('var(--mantine-color-dimmed)')
+      expect(colors.background, `subtle/${color ?? 'none'}`).toBe('transparent')
+      // "Hover lifts the fill one step" — the same slot a `variant="default"` control hovers to.
+      expect(colors.hover, `subtle/${color ?? 'none'}`).toBe('var(--mantine-color-default-hover)')
+    }
+
+    // A quiet control that names a colour that *means* something keeps that colour: there the
+    // hue is the message, and the Quiet row is about the neutral case.
+    const danger = merged.variantColorResolver({
+      color: 'danger',
+      theme: merged,
+      variant: 'subtle',
+      gradient: undefined,
+      autoContrast: undefined,
+    })
+    expect(danger.color).toBe('var(--mantine-color-danger-light-color)')
+    expect(danger.color).not.toBe('var(--mantine-color-dimmed)')
+  })
+
+  it('never answers a semantic colour name with the bare name', () => {
+    // `parseThemeColor` does not treat `dimmed`/`error`/`text` as ramp colours, so Mantine's
+    // resolver returns the string as-is: `--button-color: dimmed` is not a colour, and the
+    // declaration is dropped at computed-value time instead of taking the documented ink.
+    for (const variant of ['subtle', 'default', 'light', 'filled']) {
+      for (const color of ['dimmed', 'text', 'error', 'success', 'placeholder']) {
+        const colors = merged.variantColorResolver({
+          color,
+          theme: merged,
+          variant,
+          gradient: undefined,
+          autoContrast: undefined,
+        })
+        expect(colors.color, `${variant}/${color}`).not.toBe(color)
+        expect(colors.color, `${variant}/${color}`).toMatch(/^var\(--mantine-color-[a-z-]+\)$/)
+      }
+    }
+  })
+})
+
 describe('the scheme preference store', () => {
   it('is one namespaced key, because session data may not be stored at all', () => {
     expect(THEME_STORAGE_KEY).toBe('qrbit:theme')

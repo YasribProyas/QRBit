@@ -374,6 +374,14 @@ place the product shows its mechanics, so it is the only place that earns geomet
 ### Do:
 - **Do** consume tokens: `var(--qrbit-ink)`, `var(--qrbit-border-strong)`, or a Mantine
   semantic colour defined in `theme.ts`. Every component reads the same 18 names.
+- **Do** deliver the Mantine half of the bridge through a channel the CSP allows. Mantine
+  injects `cssVariablesResolver` output as an inline `<style>` element, and `style-src 'self'`
+  refuses it, so the slots would silently fall back to the framework's own defaults — grey
+  dark surfaces, and quiet controls whose label ends at `var(--mantine-color-white)`. The map
+  is therefore written onto `<html>` through the CSSOM (`applyThemeCssVariables` in
+  `theme.ts`, called before the first paint and on every scheme switch), which is the same
+  reason `style={{…}}` is legal here. `themeBridge.test.tsx` pins it; the guarantee is not
+  visible in any component test, because jsdom resolves no `var()` chain.
 - **Do** ship both schemes from one declaration set. `[data-theme]` decides; components never
   know which scheme they are in.
 - **Do** use one of the seven type roles, exactly.

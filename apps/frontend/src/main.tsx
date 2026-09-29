@@ -7,6 +7,7 @@ import { Home } from './pages/Home'
 import { Session } from './pages/Session'
 import { Settings } from './pages/Settings'
 import {
+  applyThemeCssVariables,
   applyThemeScheme,
   initialThemeScheme,
   qrbitCssVariablesResolver,
@@ -33,8 +34,17 @@ if (container === null) {
  * effects run after paint, and a visitor whose system is dark would otherwise see the
  * light scheme for a frame. Both calls resolve the same stored value with the same rule,
  * which lives in theme.ts.
+ *
+ * `applyThemeCssVariables` runs in the same breath because Mantine's own delivery of
+ * `cssVariablesResolver` cannot be relied on here: it injects the map as an inline `<style>`
+ * element, which this app's `style-src 'self'` blocks, so without this the document would
+ * style every Mantine control from the framework's static defaults (white-on-white quiet
+ * controls in light, Mantine's own grey ramps in dark). The CSSOM is not governed by
+ * `style-src`; see the note on `applyThemeCssVariables` in theme.ts.
  */
-applyThemeScheme(initialThemeScheme())
+const initialScheme = initialThemeScheme()
+applyThemeScheme(initialScheme)
+applyThemeCssVariables(initialScheme)
 
 /** Mounts the single `data-theme` mirror inside the provider that owns the scheme. */
 function ThemedApp() {

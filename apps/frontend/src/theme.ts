@@ -1,13 +1,19 @@
 import { useEffect } from 'react'
 import {
+  DEFAULT_THEME,
   createTheme,
   defaultCssVariablesResolver,
+  defaultVariantColorsResolver,
   isMantineColorScheme,
   localStorageColorSchemeManager,
+  mergeMantineTheme,
   useComputedColorScheme,
   type CSSVariablesResolver,
   type MantineColorSchemeManager,
   type MantineColorsTuple,
+  type MantineTheme,
+  type VariantColorResolverResult,
+  type VariantColorsResolverInput,
 } from '@mantine/core'
 
 /**
@@ -41,6 +47,23 @@ import {
  *    measured as an invalid colour and Mantine would pick the wrong text on top of it. So
  *    the ramps below are literal hexes taken verbatim from DESIGN.md and pinned to the
  *    `--qrbit-*` tokens by `theme.test.ts` — the agreement is asserted, not hoped for.
+ *  - **And a map Mantine injects as an inline `<style>` does not reach the page at all.**
+ *    `style-src 'self'` (vite.config.ts's `pagesSecurityHeaders`, which writes the CSP into
+ *    `dist/_headers`) forbids inline style *elements*, and `MantineProvider` delivers the
+ *    resolver's output as exactly one: `<style data-mantine-styles>` with
+ *    `dangerouslySetInnerHTML`. Blocked, every slot falls through to Mantine's own static
+ *    defaults in `@mantine/core/styles.css`, which is why the owner saw grey dark surfaces
+ *    (Mantine's own `dark-7`/`dark-6` are neutral #242424/#2E2E2E where DESIGN.md names a
+ *    blue-black #0E1420 canvas and a #171F2C raised step) and invisible light controls: each
+ *    Mantine control class ends its
+ *    colour chain at white on purpose (`.m_…{--button-color:var(--mantine-color-white);
+ *    color:var(--button-color,var(--mantine-color-white))}`), so a label whose slot never
+ *    arrived paints white on a white panel. `applyThemeCssVariables` below is the delivery
+ *    that survives that policy: the CSSOM is not governed by `style-src` (see the note in
+ *    vite.config.ts and DESIGN.md's "Don't" list — `style={{…}}` is legal, `<style>` blocks
+ *    are not), so writing the same map onto `<html>`'s style is the channel this policy does
+ *    allow. The resolver is still wired into `cssVariablesResolver` because where injection
+ *    *is* allowed (local dev, Storybook, tests) it must produce the same values.
  *  - **What the theme object cannot hold stays in CSS**, and the list is repeated at the
  *    foot of this file next to the code that had to work around it: the seven type roles
  *    and their tracking (`HeadingStyle` carries size/weight/line-height but no
@@ -118,11 +141,17 @@ export function initialThemeScheme(): ThemeScheme {
  * disagree, and no component reads or writes the attribute itself. Mounted once by
  * `main.tsx`; a test or a story that mounts Mantine components in isolation can mount it
  * the same way (see `ThemeToggle.test.tsx`).
+ *
+ * It re-applies the CSS variables with the scheme too: `--mantine-color-default-hover` and
+ * `--mantine-color-anchor` are the two slots whose *mapping* (not just their token) differs
+ * per scheme, and the CSSOM delivery in `applyThemeCssVariables` has no selectors to do it
+ * for it.
  */
 export function useThemeSchemeAttribute(): void {
   const scheme = useComputedColorScheme('light', { getInitialValueInEffect: false })
   useEffect(() => {
     applyThemeScheme(scheme)
+    applyThemeCssVariables(scheme)
   }, [scheme])
 }
 
@@ -248,6 +277,79 @@ const headingSizes = {
   h6: { fontSize: '12px', fontWeight: '600', lineHeight: '1.3' },
 } as const
 
+/* --------------------------------------------------------------- variants -- */
+
+/**
+ * Mantine's own `variantColorResolver` answers a semantic name by handing the *bare string*
+ * back wherever it is not a ramp colour: `variant="light" color="dimmed"` produces
+ * `--button-color: dimmed`, which is not a CSS colour, so the declaration is invalid at
+ * computed-value time and the label silently inherits whatever ink is around it. These are
+ * the slots the semantic names actually mean,
+ * in both schemes, so `c="dimmed"` on a control is the same colour as `c="dimmed"` on a
+ * `<Text>` (which Mantine does resolve properly).
+ */
+const SEMANTIC_TEXT_SLOTS: Record<string, string> = {
+  default: 'var(--mantine-color-default-color)',
+  body: 'var(--mantine-color-text)',
+  text: 'var(--mantine-color-text)',
+  dimmed: 'var(--mantine-color-dimmed)',
+  placeholder: 'var(--mantine-color-placeholder)',
+  error: 'var(--mantine-color-error)',
+  success: 'var(--mantine-color-success)',
+  anchor: 'var(--mantine-color-anchor)',
+}
+
+/** The neutral answers a quiet control can be given: no colour, the accent, or a grey ramp. */
+function isNeutralVariantColor(input: VariantColorsResolverInput): boolean {
+  if (input.color === undefined) return true
+  const named: unknown = input.color
+  if (typeof named !== 'string') return false
+  return (
+    named === input.theme.primaryColor ||
+    named === 'default' ||
+    named === 'gray' ||
+    named === 'dark' ||
+    named in SEMANTIC_TEXT_SLOTS
+  )
+}
+
+/**
+ * DESIGN.md's button table gives the Quiet row (`variant="subtle"`, and the icon-only
+ * `ActionIcon` twin) a transparent fill and **Ink Secondary** text, with hover "lifting the
+ * fill one step". Mantine's resolver answers both from the *primary ramp*: the label takes
+ * `--mantine-color-signal-light-color` (shade 9 — a navy that is not in the palette at all)
+ * and the hover takes `--mantine-color-signal-light-hover` (shade 2 — a pale blue). Pointing
+ * the neutral quiet control at the two semantic slots instead makes the documented colour the
+ * computed one, and those slots are names the bridge owns in *both* schemes
+ * (`dimmed` → `--qrbit-ink-secondary`, `default-hover` → `--qrbit-sunken` / `--qrbit-selected`)
+ * rather than shade indices that drift with the ramp — which is also what makes a quiet
+ * label independent of whether a ramp slot survived.
+ *
+ * A quiet control that names a colour that *means* something (`color="danger"`) keeps
+ * Mantine's answer: there the hue is the message, and DESIGN.md's Quiet row is about the
+ * neutral case.
+ */
+function qrbitVariantColorResolver(input: VariantColorsResolverInput): VariantColorResolverResult {
+  const colors = defaultVariantColorsResolver(input)
+  const semantic = typeof input.color === 'string' ? SEMANTIC_TEXT_SLOTS[input.color] : undefined
+
+  if (input.variant === 'subtle' && isNeutralVariantColor(input)) {
+    return {
+      ...colors,
+      background: 'transparent',
+      hover: 'var(--mantine-color-default-hover)',
+      color: 'var(--mantine-color-dimmed)',
+    }
+  }
+
+  // The bare-name leak above, for every other variant.
+  if (semantic !== undefined && colors.color === input.color) {
+    return { ...colors, color: semantic }
+  }
+
+  return colors
+}
+
 /* ------------------------------------------------------------------- theme -- */
 
 export const theme = createTheme({
@@ -319,6 +421,8 @@ export const theme = createTheme({
     sizes: headingSizes,
   },
   cursorType: 'pointer',
+  /** DESIGN.md's Quiet row, expressed through the semantic slots rather than a ramp shade. */
+  variantColorResolver: qrbitVariantColorResolver,
   components: {
     /** Radius by role, not by component default: controls `sm`, floating `md`, panels `lg`. */
     Button: { defaultProps: { radius: 'sm' } },
@@ -390,6 +494,64 @@ export const qrbitCssVariablesResolver: CSSVariablesResolver = (mantineTheme) =>
   })
 
   return resolved
+}
+
+/**
+ * The theme exactly as `MantineProvider` renders it: `theme` is a partial override and the
+ * resolver needs the merged whole (it reads `theme.breakpoints`, `theme.fontWeights`, every
+ * ramp). `mergeMantineTheme` is the same call the provider makes, so a value read from here
+ * is the value the provider would have produced.
+ */
+export const resolvedTheme: MantineTheme = mergeMantineTheme(DEFAULT_THEME, theme)
+
+/** The names written to `<html>` by the last `applyThemeCssVariables` call. */
+let appliedVariableNames: string[] = []
+
+/**
+ * Delivers the bridge to the document through the CSSOM.
+ *
+ * This exists because of the collision between our own Content-Security-Policy
+ * (`style-src 'self'`, no `'unsafe-inline'`, no nonce — vite.config.ts) and the way Mantine
+ * ships a resolver's output: one inline `<style data-mantine-styles>` element, which that
+ * policy blocks. The consequence is not a missing nicety but a wrong colour — Mantine's
+ * control classes end every colour chain at `var(--mantine-color-white)`, and its static
+ * sheet carries *its* defaults, not ours (`--mantine-color-body` in dark would be Mantine's
+ * grey #2C2E33 where DESIGN.md says #0E1420) — so the light scheme painted quiet controls
+ * white-on-white and the dark scheme painted every floating surface grey.
+ *
+ * Setting properties on `document.documentElement.style` is CSSOM, and CSSOM is outside
+ * `style-src`'s reach (that is the same mechanism that makes React's `style={{…}}` legal
+ * here, and Mantine's own per-element `--button-*` variables work). Inline styles on `<html>`
+ * outrank both the static sheet and the injected one, so this is the last word on the slots
+ * and the injected sheet stays a no-op duplicate where it is allowed to apply.
+ *
+ * Call it with the resolved scheme, and call it again when that scheme changes:
+ * `main.tsx` does it once before the first paint (so a dark-preference visitor never gets a
+ * frame of Mantine defaults) and `useThemeSchemeAttribute` does it on every switch. Only the
+ * active scheme is written — Mantine's own `:root[data-mantine-color-scheme=…]` selectors
+ * cannot be expressed through the CSSOM, so the switch is explicit here.
+ */
+export function applyThemeCssVariables(scheme: ThemeScheme): void {
+  if (typeof document === 'undefined') return
+
+  const resolved = qrbitCssVariablesResolver(resolvedTheme)
+  const byScheme = scheme === 'dark' ? resolved.dark : resolved.light
+  const declarations = new Map<string, string>()
+  for (const [name, value] of Object.entries(resolved.variables)) {
+    declarations.set(name, String(value))
+  }
+  for (const [name, value] of Object.entries(byScheme)) {
+    declarations.set(name, String(value))
+  }
+
+  const { style } = document.documentElement
+  for (const name of appliedVariableNames) {
+    if (!declarations.has(name)) style.removeProperty(name)
+  }
+  for (const [name, value] of declarations) {
+    style.setProperty(name, value)
+  }
+  appliedVariableNames = [...declarations.keys()]
 }
 
 /*
