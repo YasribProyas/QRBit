@@ -312,6 +312,15 @@ async function settle(): Promise<void> {
   }
 }
 
+/** One animation frame — what Mantine needs before a portal'd dropdown exists. */
+async function frame(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(null))
+    })
+  })
+}
+
 async function waitFor(condition: () => boolean, description: string): Promise<void> {
   for (let attempt = 0; attempt < 400; attempt += 1) {
     if (condition()) return
@@ -374,14 +383,29 @@ function buttonIn(scope: HTMLElement, selector: string, what: string): HTMLButto
   return node
 }
 
-/** The dossier row's `···` menu entry, opening the menu first. */
-function rowMenuItem(element: HTMLElement, name: string, label: string): HTMLButtonElement {
+/**
+ * The dossier row's `···` menu entry, opening the menu first.
+ *
+ * Mantine renders `Menu.Dropdown` through a portal on `document.body`, so the items are NOT
+ * descendants of the row: searching `row` only worked while the menu was an inline div, and this
+ * helper silently found nothing once the panel moved to a real Menu. One dropdown is open at a
+ * time, so the document scope is the dropdown's own scope in practice.
+ */
+function rowMenuItem(element: HTMLElement, name: string, label: string): Promise<HTMLButtonElement> {
   const row = rowFor(element, name)
   click(buttonIn(row, '.library-panel__file-menu-toggle', 'row menu'))
-  for (const item of row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) {
-    if (item.textContent === label) return item
-  }
-  throw new Error(`test bug: no dossier menu item labelled ${label}`)
+  // A frame, not just macrotasks: Mantine mounts the dropdown on an animation frame, and this
+  // file's `settle()` only yields `setTimeout(0)`, so the dropdown had not been created yet when
+  // the item was looked up. The dropdown is ALSO read from `document`, because Mantine renders
+  // `Menu.Dropdown` through a portal rather than inside the row.
+  return frame()
+    .then(settle)
+    .then(() => {
+      for (const item of document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) {
+        if (item.textContent === label) return item
+      }
+      throw new Error(`test bug: no dossier menu item labelled ${label}`)
+    })
 }
 
 let mintFetch: Mock
@@ -467,9 +491,13 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
     const element = renderHome()
     await waitFor(() => dossierNames(element).length === 1, 'the library to load')
 
-    click(rowMenuItem(element, 'Loose note', 'Delete'))
+    click(await rowMenuItem(element, 'Loose note', 'Delete dossier'))
 
-    const dialog = element.querySelector('[role="dialog"]')
+    // ConfirmDelete is a Mantine `Modal`: it portals to document.body (not the container) and
+    // mounts on a frame, so both the scope and the timing here differ from the inline dialogs
+    // this file was written against.
+    await frame()
+    const dialog = document.querySelector('[role="dialog"]')
     if (!(dialog instanceof HTMLElement)) throw new Error('test bug: no confirmation dialog')
     expect(dossierNames(element)).toEqual(['Loose note'])
     expect((await getFilesInFolder(ROOT_FOLDER_ID)).map((stored) => stored.id)).toEqual([

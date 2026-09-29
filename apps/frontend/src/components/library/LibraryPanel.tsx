@@ -319,7 +319,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
         <Group justify="space-between" align="flex-end" wrap="nowrap" gap="md">
           <div className="min-w-0">
             <Title order={2} className="qrbit-text-headline">
-              Library
+              Local Library
             </Title>
             <Text className="qrbit-text-body-secondary" mt="xs">
               Dossiers stored on this device
