@@ -1970,3 +1970,25 @@ button {
   gap: 0.5rem;
   margin-top: 0.25rem;
 }
+
+/* ------------------------------------------------------------- floating surfaces ------ */
+/*
+ * Mantine's dropdown BACKGROUND has no CSS variable: Menu.Dropdown / Popover.Dropdown take it
+ * from colors.dark[6], and when the `dark` ramp was rebuilt from DESIGN.md that index became a
+ * surface step adjacent to the canvas -- so menus rendered as part of the page behind them, and
+ * the light scheme's edge resolved to a 1.16:1 tint. The border, item colour and item hover DO
+ * have slots and are mapped in theme.ts; only the background needs to live here.
+ *
+ * This file is imported after @mantine/core/styles.css (main.tsx), so equal-specificity rules
+ * here win, and a bundled stylesheet is what `style-src 'self'` allows -- unlike Mantine's own
+ * inline variable delivery, which this app's CSP discards (see the note in theme.ts).
+ *
+ * --qrbit-shadow-sheet is a real shadow in light and a 1px ring in dark, so a floating surface
+ * keeps an edge in both schemes without inventing a third shadow.
+ */
+.mantine-Popover-dropdown,
+.mantine-Menu-dropdown {
+  background-color: var(--qrbit-raised);
+  border: 1px solid var(--qrbit-border-strong);
+  box-shadow: var(--qrbit-shadow-sheet);
+}

@@ -470,6 +470,15 @@ export const qrbitCssVariablesResolver: CSSVariablesResolver = (mantineTheme) =>
     '--mantine-color-error': 'var(--qrbit-danger)',
     '--mantine-color-success': 'var(--qrbit-success)',
     /*
+     * Floating surfaces. Mantine's Menu/Popover read these three slots; none of them were
+     * mapped, so dropdowns fell back to the static sheet -- which is how the owner's "grey
+     * context menu bad" and "grey buttons bad" both happened. The dropdown BACKGROUND has no
+     * slot at all (it follows colors.dark[6]); that one is set in styles.css.
+     */
+    '--popover-border-color': 'var(--qrbit-border-strong)',
+    '--menu-item-color': 'var(--qrbit-ink)',
+    '--menu-item-hover': 'var(--qrbit-selected)',
+    /*
      * The shadow names too, which is the only way a `<Modal shadow="xl">` can follow the
      * scheme: `theme.shadows` is one scale with no dark counterpart, and DESIGN.md wants a
      * hairline where the light scheme wants a sheet. Mantine emits the theme's scale in the
