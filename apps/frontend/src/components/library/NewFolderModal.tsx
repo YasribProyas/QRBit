@@ -8,15 +8,23 @@
  *
  * Validation is deliberately one rule: a folder needs a non-empty name. The name is
  * trimmed before it is handed over — a name that is only whitespace is not a name,
- * and a trailing space is invisible in the tree.
+ * and a trailing space is invisible in the tree. The rule is stated twice on purpose
+ * and tested twice on purpose: the submit control is disabled while the field is blank,
+ * and `submit()` refuses the same state, because a disabled button is a affordance and
+ * an Enter key is a shortcut around it.
  *
- * The create callback is the store's, so it can be asynchronous (IndexedDB). The
- * dialog stays open and busy until it settles, and reports a rejection instead of
- * closing and leaving the user to wonder whether the folder exists.
+ * The create callback is the store's, so it can be asynchronous (IndexedDB). The dialog
+ * stays open and busy until it settles, and reports a rejection instead of closing and
+ * leaving the user to wonder whether the folder exists. While it is busy nothing dismisses
+ * it — not Escape, not the backdrop, not Cancel — because a folder that arrives after the
+ * dialog has gone looks like a folder that was never asked for.
  */
 
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { Button, Group, Modal, TextInput } from '@mantine/core'
+
+import { WithMantine } from '../common/WithMantine'
 
 export interface NewFolderModalProps {
   /** The folder the new one goes inside; `null` is the tree's Root. */
@@ -33,6 +41,11 @@ export function NewFolderModal({ parentId, parentName, onCreate, onClose }: NewF
   const [error, setError] = useState<string | null>(null)
 
   const trimmed = name.trim()
+
+  const dismiss = (): void => {
+    if (busy) return
+    onClose()
+  }
 
   const submit = async (): Promise<void> => {
     if (busy || trimmed === '') return
@@ -53,64 +66,58 @@ export function NewFolderModal({ parentId, parentName, onCreate, onClose }: NewF
   }
 
   return (
-    <div
-      className="library-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="new-folder-title"
-    >
-      <form
-        className="library-modal__panel"
-        aria-busy={busy}
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault()
-          void submit()
-        }}
+    <WithMantine>
+      <Modal
+        opened
+        onClose={dismiss}
+        title={`New folder in ${parentName}`}
+        size="sm"
+        centered
+        padding="lg"
+        withCloseButton={false}
       >
-        <h2 className="library-modal__title" id="new-folder-title">
-          New folder in {parentName}
-        </h2>
-
-        <label className="library-modal__field">
-          <span className="library-modal__field-label">Folder name</span>
-          <input
-            className="library-modal__input"
+        <form
+          aria-busy={busy}
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault()
+            void submit()
+          }}
+        >
+          <TextInput
+            label="Folder name"
+            // DESIGN.md's Label role is 12px/600; Mantine's input label is 12px/500, and
+            // the weight is not a theme slot, so it is set at the call site (see theme.ts).
+            styles={{ label: { fontWeight: 600 } }}
             type="text"
             value={name}
-            aria-label="Folder name"
             autoComplete="off"
             autoFocus
+            disabled={busy}
+            error={error ?? undefined}
             onChange={(event) => {
               setName(event.target.value)
             }}
           />
-        </label>
 
-        {error !== null ? (
-          <p className="library-modal__error item-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="library-modal__actions">
-          <button
-            type="submit"
-            className="button library-modal__submit"
-            disabled={busy || trimmed === ''}
-          >
-            {busy ? 'Creating…' : 'Create'}
-          </button>
-          <button
-            type="button"
-            className="button library-modal__cancel"
-            onClick={onClose}
-            disabled={busy}
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
+          <Group justify="flex-end" mt="lg" gap="sm" wrap="nowrap">
+            <Button variant="subtle" size="sm" disabled={busy} onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              // The one affirmative action in this dialog, so it wears the one accent
+              // (DESIGN.md, "The One Blue Rule").
+              color="signal"
+              size="sm"
+              loading={busy}
+              disabled={trimmed === ''}
+            >
+              {busy ? 'Creating…' : 'Create'}
+            </Button>
+          </Group>
+        </form>
+      </Modal>
+    </WithMantine>
   )
 }
 

@@ -9,6 +9,11 @@
  * confirms, the backdrop is not an answer, only the named destructive control acts, and
  * focus goes into the dialog on open and back to the trigger on close so a keyboard user
  * is not left at the top of the document after a cancel.
+ *
+ * The dialog is a Mantine `Modal`, which renders through a Portal into `document.body`, so
+ * these helpers reach it through the document rather than through the harness host — a
+ * modal is document-level furniture, and an assertion scoped to the mount point would be
+ * asserting that the portal is broken.
  */
 
 import { act, createElement, useState } from 'react'
@@ -19,12 +24,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConfirmDelete } from './ConfirmDelete'
 import type { ConfirmDeleteProps } from './ConfirmDelete'
 
-/** The copy a folder cascade would get, as the dialog itself sees it. */
+/** The copy a folder cascade would get, as `describeDelete` states it. */
 const COPY = {
   title: 'Delete “Work”?',
   message:
-    'This permanently deletes 2 folders and 3 items from this device — “Work” and every ' +
-    'folder and file nested inside it. This cannot be undone.',
+    'This permanently deletes 1 folder, 2 dossiers and 3 items from this device — “Work” and ' +
+    'every folder and file nested inside it. This cannot be undone.',
   confirmLabel: 'Delete folder and contents permanently',
 }
 
@@ -75,23 +80,53 @@ function click(element: HTMLElement): void {
   })
 }
 
-function pressEscape(): void {
+/** The gesture a real backdrop tap is: `pointerdown`/`mousedown`, not a bare click. */
+function press(element: Element): void {
   act(() => {
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
 }
 
-function dialog(element: HTMLElement): HTMLElement {
-  const node = element.querySelector('[role="dialog"]')
+/**
+ * Escape, from the element a browser would send it from.
+ *
+ * `document` is not a legal `keydown` target for a user: the event always starts at the
+ * focused element (or the body when nothing is focused), and Mantine's escape handler reads
+ * `event.target.getAttribute(...)`, which a document-targeted event does not have.
+ */
+function pressEscape(): void {
+  act(() => {
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+}
+
+/** Lets Mantine's portal, transition and focus trap commit before an assertion reads them. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(null))
+    })
+  })
+}
+
+function dialog(): HTMLElement {
+  const node = document.querySelector('[role="dialog"]')
   if (!(node instanceof HTMLElement)) throw new Error('test bug: no dialog')
   return node
 }
 
-function action(element: HTMLElement, label: string): HTMLButtonElement {
-  for (const candidate of element.querySelectorAll<HTMLButtonElement>('button')) {
+function action(label: string): HTMLButtonElement {
+  for (const candidate of dialog().querySelectorAll<HTMLButtonElement>('button')) {
     if (candidate.textContent === label) return candidate
   }
   throw new Error(`test bug: no button labelled ${label}`)
+}
+
+/** The dialog's buttons in DOM order — which is tab order, and the order a thumb reaches. */
+function dialogButtons(): HTMLButtonElement[] {
+  return [...dialog().querySelectorAll<HTMLButtonElement>('button')]
 }
 
 /**
@@ -147,11 +182,12 @@ function triggerOf(element: HTMLElement): HTMLButtonElement {
  * the thing to hand focus back to — so a test that presses the trigger without focusing
  * it first is testing a keyboard user who was not on the trigger at all.
  */
-function openFromTrigger(trigger: HTMLButtonElement): void {
+async function openFromTrigger(trigger: HTMLButtonElement): Promise<void> {
   act(() => {
     trigger.focus()
   })
   click(trigger)
+  await settle()
 }
 
 beforeEach(() => {
@@ -171,8 +207,8 @@ afterEach(() => {
 
 describe('ConfirmDelete — the dialog itself', () => {
   it('is a modal dialog named by its title and described by its message', () => {
-    const { element } = renderDialog()
-    const node = dialog(element)
+    renderDialog()
+    const node = dialog()
 
     expect(node.getAttribute('aria-modal')).toBe('true')
 
@@ -181,30 +217,33 @@ describe('ConfirmDelete — the dialog itself', () => {
     if (labelledBy === null || describedBy === null) throw new Error('test bug: unlabelled dialog')
 
     expect(document.getElementById(labelledBy)?.textContent).toBe(COPY.title)
-    expect(document.getElementById(describedBy)?.textContent).toBe(COPY.message)
+    expect(document.getElementById(describedBy)?.textContent).toContain(COPY.message)
   })
 
   it('offers the destructive verb as the only thing that acts', () => {
-    const { element, props } = renderDialog()
+    const { props } = renderDialog()
 
-    expect(action(element, COPY.confirmLabel).textContent).toBe(
-      'Delete folder and contents permanently',
-    )
-    // The danger treatment rides on the confirm control alone.
-    expect(element.querySelector('.confirm-delete__confirm')?.textContent).toBe(COPY.confirmLabel)
-    expect(element.querySelector('.library-modal__cancel')?.textContent).toBe('Cancel')
+    expect(action(COPY.confirmLabel).textContent).toBe(COPY.confirmLabel)
 
     // Cancel first, then the destructive control: tab order and thumb reach meet the
     // safe answer before the one that costs the library a subtree.
-    const buttons = [...element.querySelectorAll<HTMLButtonElement>('.library-modal__actions button')]
+    const buttons = dialogButtons()
     expect(buttons.map((candidate) => candidate.textContent)).toEqual([
       'Cancel',
       COPY.confirmLabel,
     ])
-    expect(buttons[1]?.className).toContain('confirm-delete__confirm')
-    expect(buttons[0]?.className).not.toContain('confirm-delete__confirm')
-
     expect(props.onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('wears the danger treatment on the confirm control alone', () => {
+    renderDialog()
+    const [cancel, confirm] = dialogButtons()
+    if (cancel === undefined || confirm === undefined) throw new Error('test bug: fewer buttons than rendered')
+
+    // The theme's `danger` colour is what makes it Fault Red, in both schemes; nothing here
+    // writes a hex value, so the control follows the token the dialog is named after.
+    expect(confirm.style.getPropertyValue('--button-bg')).toContain('danger')
+    expect(cancel.style.getPropertyValue('--button-bg')).not.toContain('danger')
   })
 
   it('never reaches for window.confirm or window.alert', () => {
@@ -214,8 +253,8 @@ describe('ConfirmDelete — the dialog itself', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
 
-    const { element, props } = renderDialog()
-    click(action(element, COPY.confirmLabel))
+    const { props } = renderDialog()
+    click(action(COPY.confirmLabel))
     pressEscape()
 
     expect(confirmSpy).not.toHaveBeenCalled()
@@ -224,37 +263,43 @@ describe('ConfirmDelete — the dialog itself', () => {
   })
 
   it('ignores the backdrop: dismissing on empty space is not an answer', () => {
-    const { element, props } = renderDialog()
+    const { props } = renderDialog()
 
-    click(dialog(element))
+    // Mantine's `Overlay` is the one `position: fixed` surface the dialog mounts behind its
+    // panel; `data-fixed` is how it says so.
+    const overlay = document.querySelector('[data-fixed="true"]')
+    if (overlay === null) throw new Error('test bug: no overlay to press')
+
+    press(overlay)
+    click(dialog())
 
     expect(props.onCancel).not.toHaveBeenCalled()
     expect(props.onConfirm).not.toHaveBeenCalled()
-    expect(element.querySelector('[role="dialog"]')).not.toBe(null)
+    expect(document.querySelector('[role="dialog"]')).not.toBe(null)
   })
 })
 
 describe('ConfirmDelete — answers', () => {
   it('confirms exactly once, through the destructive control only', () => {
-    const { element, props } = renderDialog()
+    const { props } = renderDialog()
 
-    click(action(element, COPY.confirmLabel))
+    click(action(COPY.confirmLabel))
 
     expect(props.onConfirm).toHaveBeenCalledTimes(1)
     expect(props.onCancel).not.toHaveBeenCalled()
   })
 
   it('cancels through the cancel control', () => {
-    const { element, props } = renderDialog()
+    const { props } = renderDialog()
 
-    click(action(element, 'Cancel'))
+    click(action('Cancel'))
 
     expect(props.onCancel).toHaveBeenCalledTimes(1)
     expect(props.onConfirm).not.toHaveBeenCalled()
   })
 
   it('takes Escape as a cancel, never as a confirm', () => {
-    const { element, props } = renderDialog()
+    const { props } = renderDialog()
 
     pressEscape()
 
@@ -263,7 +308,7 @@ describe('ConfirmDelete — answers', () => {
   })
 
   it('stops listening once it is closed', () => {
-    const { element, props } = renderDialog()
+    const { props } = renderDialog()
 
     pressEscape()
     const harness = openHarnesses[openHarnesses.length - 1]
@@ -271,59 +316,59 @@ describe('ConfirmDelete — answers', () => {
     harness.unmount()
     openHarnesses.pop()
 
-    act(() => {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    })
+    pressEscape()
 
     expect(props.onCancel).toHaveBeenCalledTimes(1)
-    expect(element.querySelector('[role="dialog"]')).toBe(null)
+    expect(document.querySelector('[role="dialog"]')).toBe(null)
   })
 })
 
 describe('ConfirmDelete — focus', () => {
-  it('moves focus into the dialog on open, onto the safe control', () => {
+  it('moves focus into the dialog on open, onto the safe control', async () => {
     const { element } = mount(createElement(Trigger, { onConfirm: vi.fn(), onCancel: vi.fn() }))
     const trigger = triggerOf(element)
 
-    openFromTrigger(trigger)
+    await openFromTrigger(trigger)
 
     const focused = document.activeElement
     if (!(focused instanceof HTMLElement)) throw new Error('test bug: nothing focused')
 
-    expect(dialog(element).contains(focused)).toBe(true)
+    expect(dialog().contains(focused)).toBe(true)
     expect(focused.textContent).toBe('Cancel')
   })
 
-  it('returns focus to the trigger when the user cancels', () => {
+  it('returns focus to the trigger when the user cancels', async () => {
     const onCancel = vi.fn()
     const { element } = mount(createElement(Trigger, { onConfirm: vi.fn(), onCancel }))
     const trigger = triggerOf(element)
 
-    openFromTrigger(trigger)
-    click(action(element, 'Cancel'))
+    await openFromTrigger(trigger)
+    click(action('Cancel'))
 
     expect(onCancel).toHaveBeenCalledTimes(1)
-    expect(element.querySelector('[role="dialog"]')).toBe(null)
+    expect(document.querySelector('[role="dialog"]')).toBe(null)
     expect(document.activeElement).toBe(trigger)
   })
 
-  it('returns focus to the trigger when Escape cancels', () => {
+  it('returns focus to the trigger when Escape cancels', async () => {
     const { element } = mount(createElement(Trigger, { onConfirm: vi.fn(), onCancel: vi.fn() }))
     const trigger = triggerOf(element)
 
-    openFromTrigger(trigger)
+    await openFromTrigger(trigger)
     pressEscape()
 
-    expect(element.querySelector('[role="dialog"]')).toBe(null)
+    expect(document.querySelector('[role="dialog"]')).toBe(null)
     expect(document.activeElement).toBe(trigger)
   })
 
-  it('returns focus to the trigger after a confirm, too', () => {
-    const { element } = mount(createElement(Trigger, { onConfirm: vi.fn(), onCancel: vi.fn() }))
+  it('returns focus to the trigger after a confirm, too', async () => {
+    const { element } = mount(
+      createElement(Trigger, { onConfirm: vi.fn(), onCancel: vi.fn() }),
+    )
     const trigger = triggerOf(element)
 
-    openFromTrigger(trigger)
-    click(action(element, COPY.confirmLabel))
+    await openFromTrigger(trigger)
+    click(action(COPY.confirmLabel))
 
     expect(document.activeElement).toBe(trigger)
   })

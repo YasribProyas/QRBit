@@ -10,25 +10,32 @@
  * So this is a real dialog. It owns presentation and keyboard behaviour only; the words
  * come from the caller, which is the only thing that knows what is about to be lost. That
  * keeps it reusable outside the library (a session clear, an export wipe) without it
- * having to know anything about either.
+ * having to know anything about either. `lib/folders.ts`'s `describeDelete` is what
+ * supplies the words when the loss is a folder tree, because the numbers in them have to
+ * come from the same arithmetic the delete runs.
  *
  * The contract with its callers:
  *  - The confirm control is the only path that acts, and both its label and its styling
  *    say that what happens next is permanent. It is deliberately LAST in the DOM, so
  *    reading order, tab order and thumb reach all meet the safe control first.
- *  - Escape always cancels. It never confirms, whatever else is listening.
- *  - Focus moves into the dialog on open — onto Cancel, because the default reply to a
- *    destructive question should be the one that costs nothing — and goes back to the
- *    element that opened it when the dialog unmounts. The restore is best effort by
- *    nature: a trigger that unmounts while the dialog is open (a row menu that closes
- *    itself on the way in) cannot be focused again, so it is skipped rather than pushing
- *    focus at a detached node.
- *  - Backdrop clicks do nothing. Dismissing a dialog that offers a Cancel button by
- *    tapping the empty space beside the panel is how the wrong answer gets given.
+ *  - Escape always cancels. It never confirms, whatever else is listening. That is
+ *    Mantine's `closeOnEscape`, which routes to `onCancel` — the same callback the Cancel
+ *    button uses, so there is one way to back out rather than two that can drift.
+ *  - Focus moves into the dialog on open — onto Cancel, via `data-autofocus`, because the
+ *    default reply to a destructive question should be the one that costs nothing — and
+ *    goes back to the element that opened it when the dialog closes (Mantine's
+ *    `returnFocus`). The restore is best effort by nature: a trigger that unmounts while
+ *    the dialog is open (a row menu that closes itself on the way in) cannot be focused
+ *    again, so it is skipped rather than pushing focus at a detached node.
+ *  - Backdrop clicks do nothing (`closeOnClickOutside={false}`). Dismissing a dialog that
+ *    offers a Cancel button by tapping the empty space beside the panel is how the wrong
+ *    answer gets given.
  */
 
-import { useEffect, useId, useRef } from 'react'
-import type { CSSProperties } from 'react'
+import { useEffect, useRef } from 'react'
+import { Button, Group, Modal, Text } from '@mantine/core'
+
+import { WithMantine } from './common/WithMantine'
 
 export interface ConfirmDeleteProps {
   /** The dialog's accessible name, e.g. `Delete “Work”?`. */
@@ -42,21 +49,14 @@ export interface ConfirmDeleteProps {
 }
 
 /**
- * The destructive treatment.
+ * The one destructive question in the app.
  *
- * The shared modal shell (`.library-modal*`) already styles the overlay, the panel and
- * the button row, so only the two properties that shell does not express are set here:
- * the theme's own `--error` token — the same colour the `···` menus use for their danger
- * entries — and a weight that keeps the label from reading like the muted Cancel next to
- * it. The `confirm-delete__confirm` class is the hook for moving this into the
- * stylesheet later without touching the markup.
+ * DESIGN.md's dialog row: a Mantine `Modal` (radius md, the sheet shadow, title at the
+ * Title role), actions right-aligned in the order Quiet then Primary, and the destructive
+ * answer wearing Danger — the filled Fault Red control whose white label reads 6.53:1 in
+ * both schemes. No hex and no ad-hoc size is written here: the red is `--qrbit-danger`
+ * through the theme's `danger` colour, and the type roles come from `qrbit-text-*`.
  */
-const DANGER_STYLE: CSSProperties = {
-  color: 'var(--error)',
-  borderColor: 'color-mix(in srgb, var(--error) 55%, var(--border-strong))',
-  fontWeight: 650,
-}
-
 export function ConfirmDelete({
   title,
   message,
@@ -64,83 +64,66 @@ export function ConfirmDelete({
   onConfirm,
   onCancel,
 }: ConfirmDeleteProps) {
-  const headingId = useId()
-  const bodyId = useId()
-  const cancelRef = useRef<HTMLButtonElement | null>(null)
-
   /*
-   * The cancel callback is read through a ref so an inline arrow prop (a new function
-   * identity per render, which is what every caller here passes) cannot re-subscribe the
-   * Escape listener. This effect is declared before that one, so on mount the ref is
-   * already current by the time the listener can be called.
+   * The focus handoff back to whoever asked the question.
+   *
+   * Mantine returns focus when `opened` flips to false, and this dialog is not driven that
+   * way — callers unmount it the moment it is answered, so the flip never happens. Capturing
+   * the invoker on mount and restoring it on unmount is the only spelling that works, and it
+   * is best effort by nature: `returnFocus={false}` below says the dialog is not relying on
+   * Mantine's version of this.
    */
-  const onCancelRef = useRef(onCancel)
+  const invoker = useRef<HTMLElement | null>(null)
   useEffect(() => {
-    onCancelRef.current = onCancel
-  })
-
-  useEffect(() => {
-    const trigger = document.activeElement
-    cancelRef.current?.focus()
+    invoker.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
 
     return () => {
-      if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus()
-    }
-  }, [])
-
-  /*
-   * Escape cancels. A document listener rather than a key handler on the panel, the same
-   * idiom the library browser uses for leaving selection mode: it works wherever focus
-   * happens to be, including on a browser chrome edge after a mis-tap.
-   */
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      onCancelRef.current()
-    }
-
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
+      const target = invoker.current
+      if (target !== null && target.isConnected) target.focus()
     }
   }, [])
 
   return (
-    <div
-      className="library-modal confirm-delete"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={headingId}
-      aria-describedby={bodyId}
-    >
-      <div className="library-modal__panel confirm-delete__panel">
-        <h2 className="library-modal__title confirm-delete__title" id={headingId}>
-          {title}
-        </h2>
+    <WithMantine>
+      <Modal
+        // The dialog exists only while a delete is pending: callers mount and unmount it,
+        // so `opened` is constant and there is no exit transition to animate into a tree
+        // that is already gone.
+        opened
+        onClose={onCancel}
+        title={title}
+        size="sm"
+        centered
+        padding="lg"
+        withCloseButton={false}
+        closeOnClickOutside={false}
+        returnFocus={false}
+      >
+        {/*
+         * The consequence, in the Body role. It is the sentence a person has to read before
+         * they answer, so it is not demoted to helper text and not tinted: emphasis comes from
+         * the words and the size (DESIGN.md, "The Weight Before Colour Rule"), and the colour
+         * is the theme's `text` slot, which is `--qrbit-ink` in both schemes. Mantine points
+         * the dialog's `aria-describedby` at this region, so a screen reader reads the loss
+         * aloud with the buttons after it.
+         */}
+        <Text className="qrbit-text-body">{message}</Text>
 
-        <p className="library-modal__hint confirm-delete__message" id={bodyId}>
-          {message}
-        </p>
-
-        <div className="library-modal__actions">
-          <button
-            type="button"
-            className="button library-modal__cancel confirm-delete__cancel"
-            ref={cancelRef}
-            onClick={onCancel}
-          >
+        <Group justify="flex-end" mt="lg" gap="sm" wrap="nowrap">
+          <Button variant="subtle" size="sm" data-autofocus onClick={onCancel}>
             Cancel
-          </button>
-          <button
-            type="button"
-            className="button confirm-delete__confirm"
-            style={DANGER_STYLE}
+          </Button>
+          <Button
+            // Filled Fault Red: the only control here that acts, and it looks like it.
+            color="danger"
+            size="sm"
             onClick={onConfirm}
           >
             {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </Group>
+      </Modal>
+    </WithMantine>
   )
 }

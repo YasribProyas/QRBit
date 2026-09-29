@@ -4,8 +4,13 @@
  *
  * What is pinned: the parent is fixed by the browser and stated in the title, a blank
  * name cannot be submitted and is trimmed when it is, the store's asynchronous create
- * keeps the dialog busy until it settles, and a rejection is reported instead of the
- * dialog closing as if the folder existed.
+ * keeps the dialog busy until it settles, a rejection is reported instead of the dialog
+ * closing as if the folder existed, and a busy dialog cannot be dismissed — because a
+ * folder that turns up after the dialog has gone looks like one that was never asked for.
+ *
+ * The dialog is a Mantine `Modal`, which portals into `document.body`, so the helpers read
+ * it from the document. The field is named by its visible label (Mantine wires `label` to
+ * the input through ids), which is what `field()` resolves.
  */
 
 import { act, createElement } from 'react'
@@ -58,22 +63,32 @@ function renderModal(overrides: Partial<NewFolderModalProps> = {}): Harness {
   )
 }
 
-function bySelector<T extends Element>(
-  element: HTMLElement,
-  selector: string,
-  constructor: new () => T,
-): T {
-  const node = element.querySelector(selector)
-  if (!(node instanceof constructor)) throw new Error(`test bug: nothing matching ${selector}`)
+function dialog(): HTMLElement {
+  const node = document.querySelector('[role="dialog"]')
+  if (!(node instanceof HTMLElement)) throw new Error('test bug: no dialog')
   return node
 }
 
-function button(element: HTMLElement, selector: string): HTMLButtonElement {
-  return bySelector(element, selector, HTMLButtonElement)
+function field(): HTMLInputElement {
+  const input = dialog().querySelector('input')
+  if (!(input instanceof HTMLInputElement)) throw new Error('test bug: no folder name field')
+  return input
 }
 
-function nameInput(element: HTMLElement): HTMLInputElement {
-  return bySelector(element, '.library-modal__input', HTMLInputElement)
+function action(label: string): HTMLButtonElement {
+  for (const candidate of dialog().querySelectorAll<HTMLButtonElement>('button')) {
+    if (candidate.textContent === label) return candidate
+  }
+  throw new Error(`test bug: no button labelled ${label}`)
+}
+
+/** Lets Mantine's portal, transition and focus trap commit before an assertion reads them. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(null))
+    })
+  })
 }
 
 function click(element: HTMLElement): void {
@@ -82,24 +97,30 @@ function click(element: HTMLElement): void {
   })
 }
 
-function typeInto(field: HTMLInputElement, value: string): void {
+function pressEscape(): void {
+  act(() => {
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+}
+
+function typeInto(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   if (setter === undefined) throw new Error('test bug: value has no setter')
-  setter.call(field, value)
+  setter.call(input, value)
 
   act(() => {
-    field.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
 
 /** Submitting awaits `onCreate`, so the microtask after it has to be flushed too. */
-async function submitForm(element: HTMLElement): Promise<void> {
-  dispatchSubmit(element)
+async function submitForm(): Promise<void> {
+  dispatchSubmit()
   await act(async () => {})
 }
 
-function dispatchSubmit(element: HTMLElement): void {
-  const form = element.querySelector('form')
+function dispatchSubmit(): void {
+  const form = dialog().querySelector('form')
   if (form === null) throw new Error('test bug: no form')
   act(() => {
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
@@ -121,38 +142,38 @@ afterEach(() => {
 })
 
 describe('NewFolderModal', () => {
-  it('names the parent folder and starts with an empty, focused field', () => {
-    const harness = renderModal({ parentName: 'Root' })
+  it('names the parent folder and starts with an empty, focused field', async () => {
+    renderModal({ parentName: 'Root' })
+    await settle()
 
-    expect(harness.element.querySelector('.library-modal__title')?.textContent).toBe(
-      'New folder in Root',
-    )
-    expect(nameInput(harness.element).value).toBe('')
-    expect(document.activeElement).toBe(nameInput(harness.element))
-    expect(button(harness.element, '.library-modal__submit').disabled).toBe(true)
+    const title = document.getElementById(dialog().getAttribute('aria-labelledby') ?? '')
+    expect(title?.textContent).toBe('New folder in Root')
+    expect(field().value).toBe('')
+    expect(document.activeElement).toBe(field())
+    expect(action('Create').disabled).toBe(true)
   })
 
   it('refuses a blank name', async () => {
     const onCreate = vi.fn()
-    const harness = renderModal({ onCreate })
+    renderModal({ onCreate })
 
-    typeInto(nameInput(harness.element), '   ')
+    typeInto(field(), '   ')
 
-    expect(button(harness.element, '.library-modal__submit').disabled).toBe(true)
+    expect(action('Create').disabled).toBe(true)
 
-    await submitForm(harness.element)
+    await submitForm()
 
     expect(onCreate).not.toHaveBeenCalled()
-    expect(harness.element.querySelector('.library-modal')).not.toBe(null)
+    expect(document.querySelector('[role="dialog"]')).not.toBe(null)
   })
 
   it('creates in the current folder with a trimmed name and closes', async () => {
     const onCreate = vi.fn()
     const onClose = vi.fn()
-    const harness = renderModal({ onCreate, onClose, parentId: 'f1' })
+    renderModal({ onCreate, onClose, parentId: 'f1' })
 
-    typeInto(nameInput(harness.element), '  Thesis  ')
-    await submitForm(harness.element)
+    typeInto(field(), '  Thesis  ')
+    await submitForm()
 
     expect(onCreate).toHaveBeenCalledWith('Thesis', 'f1')
     expect(onClose).toHaveBeenCalledTimes(1)
@@ -160,10 +181,10 @@ describe('NewFolderModal', () => {
 
   it('creates at the root when the browser is at the root', async () => {
     const onCreate = vi.fn()
-    const harness = renderModal({ onCreate, parentId: null, parentName: 'Root' })
+    renderModal({ onCreate, parentId: null, parentName: 'Root' })
 
-    typeInto(nameInput(harness.element), 'Archive')
-    await submitForm(harness.element)
+    typeInto(field(), 'Archive')
+    await submitForm()
 
     expect(onCreate).toHaveBeenCalledWith('Archive', null)
   })
@@ -177,17 +198,22 @@ describe('NewFolderModal', () => {
         }),
     )
     const onClose = vi.fn()
-    const harness = renderModal({ onCreate, onClose })
+    renderModal({ onCreate, onClose })
 
-    typeInto(nameInput(harness.element), 'Archive')
+    typeInto(field(), 'Archive')
     // Dispatch on its own so the pending `onCreate` can be observed before it settles:
     // overlapping `act` scopes (awaiting the submit and releasing it at once) break the
     // environment for every later test in the file.
-    dispatchSubmit(harness.element)
+    dispatchSubmit()
     await act(async () => {})
 
-    expect(button(harness.element, '.library-modal__submit').textContent).toBe('Creating…')
-    expect(button(harness.element, '.library-modal__cancel').disabled).toBe(true)
+    expect(action('Creating…').disabled).toBe(true)
+    expect(action('Cancel').disabled).toBe(true)
+    expect(field().disabled).toBe(true)
+
+    // A busy dialog is not dismissible: Escape and Cancel both have to wait for the write.
+    pressEscape()
+    click(action('Cancel'))
     expect(onClose).not.toHaveBeenCalled()
 
     await act(async () => {
@@ -202,25 +228,25 @@ describe('NewFolderModal', () => {
       throw new Error('quota exceeded')
     })
     const onClose = vi.fn()
-    const harness = renderModal({ onCreate, onClose })
+    renderModal({ onCreate, onClose })
 
-    typeInto(nameInput(harness.element), 'Archive')
-    await submitForm(harness.element)
+    typeInto(field(), 'Archive')
+    await submitForm()
 
-    expect(harness.element.querySelector('.library-modal__error')?.textContent).toBe(
-      'Could not create the folder (quota exceeded).',
-    )
+    expect(dialog().textContent).toContain('Could not create the folder (quota exceeded).')
+    // The message is wired to the field it describes, so it is read with the field.
+    expect(field().getAttribute('aria-invalid')).toBe('true')
     expect(onClose).not.toHaveBeenCalled()
-    expect(nameInput(harness.element).value).toBe('Archive')
-    expect(button(harness.element, '.library-modal__submit').disabled).toBe(false)
+    expect(field().value).toBe('Archive')
+    expect(action('Create').disabled).toBe(false)
   })
 
   it('cancels without creating anything', () => {
     const onCreate = vi.fn()
     const onClose = vi.fn()
-    const harness = renderModal({ onCreate, onClose })
+    renderModal({ onCreate, onClose })
 
-    click(button(harness.element, '.library-modal__cancel'))
+    click(action('Cancel'))
 
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(onCreate).not.toHaveBeenCalled()

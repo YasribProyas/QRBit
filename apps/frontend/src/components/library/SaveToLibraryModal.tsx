@@ -19,10 +19,9 @@
  */
 
 import { useState } from 'react'
-import { FolderPicker } from './FolderNode'
-import type { LibraryFolder } from './FolderNode'
-import { ITEM_TYPE_ICONS } from './LibraryItemRow'
-import type { LibraryItemType } from './LibraryItemRow'
+import { FolderPicker } from './FolderPicker'
+import { ITEM_TYPE_ICONS } from '../../lib/itemType'
+import type { LibraryFolder, LibraryItemType } from '../../lib/library'
 
 /** One session item as this dialog needs it: an id, a name and its type. */
 export interface SaveableSessionItem {

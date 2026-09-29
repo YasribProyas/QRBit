@@ -8,22 +8,30 @@
  * (D16 finding 5). `LibraryItem` stays on the receive path; merging the two models is
  * out of scope.
  *
- * **State ownership.** The panel reads and writes `store/libraryStore` directly: the
- * store is the UI's only route to IndexedDB, and it re-reads the database after every
- * write, so the list on screen is the list that was just stored. That is what makes a
- * drag, a rename and a cascade delete observable from outside the component. The page
- * keeps only the two things the panel cannot know — which dossier opens in the editor,
- * and what a brand-new dossier is made of (`onCreateFile`).
+ * **Shape.** One Panel (DESIGN.md: Raised, 1px Border, radius lg, no shadow at rest) holding
+ * flat rows — 44px minimum, one 1px division between them, and never a bordered card inside
+ * this bordered container. Every control is a Mantine primitive (`Button`, `ActionIcon`,
+ * `Menu`, `TextInput`, `Badge`): the panel used to carry thirteen hand-written `<button>`s,
+ * which is a large part of why it looked assembled from parts. Colour, radius and spacing come
+ * from `--qrbit-*` tokens or from the theme's semantic slots, so both schemes come from one
+ * set of declarations and nothing here knows which scheme it is in.
  *
- * **Ordering.** Two kinds of drag share this screen, and each index means something only inside
- * the one list it was counted against. Folders reorder among the folders that share their
- * parent (`lib/library.ts` `reorderFolder` and `siblingFolders`); this panel lists one level, so
- * its folder grips reorder the top level and a subfolder's run is never touched. Dossiers
- * reorder inside the folder whose list they are in, because their `sortOrder` is per folder. The
- * `Root` section is a bucket rather than a folder — it holds whatever no listed folder does — so
- * neither its rows nor its header get a grip: it is openable, renamable, movable and deletable,
- * but it has no order the store could honour, and the hook is never given an index counted
- * against a list the store does not have.
+ * **State ownership.** The panel reads and writes `store/libraryStore` directly: the store
+ * is the UI's only route to IndexedDB, and it re-reads the database after every write, so
+ * the list on screen is the list that was just stored. That is what makes a drag, a rename
+ * and a cascade delete observable from outside the component. The page keeps only the two
+ * things the panel cannot know — which dossier opens in the editor, and what a brand-new
+ * dossier is made of (`onCreateFile`).
+ *
+ * **Ordering.** Two kinds of drag share this screen, and each index means something only
+ * inside the one list it was counted against. Folders reorder among the folders that share
+ * their parent (`lib/library.ts` `reorderFolder` and `siblingFolders`); this panel lists one
+ * level, so its folder grips reorder the top level and a subfolder's run is never touched.
+ * Dossiers reorder inside the folder whose list they are in, because their `sortOrder` is per
+ * folder. The `Root` section is a bucket rather than a folder — it holds whatever no listed
+ * folder does — so neither its rows nor its header get a grip: it is openable, renamable,
+ * movable and deletable, but it has no order the store could honour, and the hook is never
+ * given an index counted against a list the store does not have.
  *
  * **Expansion** is "collapsed ids", not "expanded ids": a folder is open unless the user
  * collapsed it, so folders that arrive after the first render are open without the
@@ -31,23 +39,42 @@
  * It is UI state only, and nothing here writes to `localStorage`, IndexedDB or the
  * Cache API (AGENTS.md).
  *
- * Every delete is confirmed first, and the folder prompt states the cascade in numbers,
- * because `deleteFolder` takes the subtree and everything in it permanently (PLAN.md
- * §6.3) — the library never leaves the device, so there is no other copy to restore.
+ * Every delete is confirmed first, and the folder prompt states the cascade in numbers —
+ * folders, dossiers and loose items, nested included — counted by `lib/folders.ts`'s
+ * `describeDelete`, the same arithmetic `deleteFolder` runs (PLAN.md §6.3, "a folder tree
+ * dies whole"). The panel keeps no second copy of that math: the library never leaves the
+ * device, so there is no other copy to restore, and a confirmation that quotes numbers has to
+ * promise the true ones.
  */
 
 import { useCallback, useRef, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
-import { Alert, Badge, Button, Group, Loader, Stack, Text, Title } from '@mantine/core'
+import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Button,
+  Group,
+  Loader,
+  Menu,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
+import { useHover } from '@mantine/hooks'
+import {
+  IconArrowsMove,
   IconChevronDown,
   IconChevronRight,
   IconDotsVertical,
   IconFileText,
-  IconFolderFilled,
+  IconFolder,
   IconGripVertical,
   IconLock,
+  IconPencil,
   IconPlus,
+  IconTrash,
 } from '@tabler/icons-react'
 
 import { ConfirmDelete } from '../ConfirmDelete'
@@ -58,8 +85,10 @@ import { NewFolderModal } from './NewFolderModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
 import { getFirstBlockPreview, hasLockedBlocks } from '../../lib/dossier'
+import { describeDelete } from '../../lib/folders'
+import type { PendingDelete } from '../../lib/folders'
 import { ROOT_FOLDER_ID, siblingFolders } from '../../lib/library'
-import type { LibraryFile, LibraryFolder, LibraryItem } from '../../lib/library'
+import type { LibraryFile, LibraryFolder } from '../../lib/library'
 import { DEFAULT_ITEM_HEIGHT } from '../../lib/reorder'
 import { useLibraryStore } from '../../store/libraryStore'
 
@@ -92,15 +121,32 @@ interface PanelActions {
   askDeleteFolder(folder: LibraryFolder): void
 }
 
-/** The delete the user asked for. `null` in state means no dialog is open. */
-type PendingDelete = { kind: 'folder'; id: string } | { kind: 'file'; id: string }
+/** The single 1px division between rows. `--qrbit-border` divides; it is not a box. */
+const ROW_DIVISION: CSSProperties = { borderTop: '1px solid var(--qrbit-border)' }
 
-/** The words `ConfirmDelete` shows, counted from the live props. */
-interface ConfirmPrompt {
-  title: string
-  message: string
-  confirmLabel: string
+/** The Panel itself: Raised, 1px Border, radius lg, no shadow at rest. */
+const PANEL_STYLE: CSSProperties = {
+  background: 'var(--qrbit-raised)',
+  border: '1px solid var(--qrbit-border)',
+  borderRadius: 'var(--qrbit-radius-lg)',
 }
+
+/**
+ * The two-line dossier row, drawn by a `Button`.
+ *
+ * Mantine stretches and ellipsises a button label, which is right for one line and wrong for
+ * a name over a preview, so the label keeps its own wrapping and alignment. Fill, hover,
+ * radius and the focus ring stay the theme's.
+ */
+const ROW_BUTTON_STYLES = {
+  root: { minWidth: 0, height: 'auto', minHeight: 44 },
+  inner: { alignItems: 'center', width: '100%' },
+  label: { minWidth: 0, textAlign: 'left', whiteSpace: 'normal' },
+} as const
+
+// ---------------------------------------------------------------------------
+// The panel
+// ---------------------------------------------------------------------------
 
 export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) {
   const folders = useLibraryStore((state) => state.folders)
@@ -121,7 +167,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
   const [collapsedFolders, setCollapsedFolders] = useState<string[]>([])
   const [newFolderOpen, setNewFolderOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
-  /** The dossier whose "Move to…" dialog is open; `null` means none. */
+  /** The dossier whose "Move to folder" dialog is open; `null` means none. */
   const [moveRequest, setMoveRequest] = useState<LibraryFile | null>(null)
 
   // One level, in the one order the library UI uses; a dossier in a folder this panel
@@ -249,7 +295,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
     if (pendingDelete === null) return
     if (pendingDelete.kind === 'folder') {
       reportToStore(deleteFolder(pendingDelete.id))
-    } else {
+    } else if (pendingDelete.kind === 'file') {
       reportToStore(deleteFile(pendingDelete.id))
     }
     setPendingDelete(null)
@@ -257,43 +303,54 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
 
   // Derived on every render, so the numbers the user is about to act on are the numbers
   // the library has now — and a target that vanished while the question was up closes
-  // the dialog instead of quoting a subtree that is gone.
+  // the dialog instead of quoting a subtree that is gone. `describeDelete` is the only
+  // cascade arithmetic in the app: it counts what `deleteFolder` destroys.
   const deletePrompt =
-    pendingDelete === null ? null : describePendingDelete(pendingDelete, folders, files, items)
+    pendingDelete === null ? null : describeDelete(pendingDelete, folders, files, items)
 
   return (
     <WithMantine>
-      <div className="library-panel flex min-w-0 flex-col gap-3">
-        <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
+      <div className="library-panel flex min-w-0 flex-col gap-[12px]">
+        {/*
+          The heading and what it holds. Nothing sits above it as an eyebrow (a heading
+          carries its own weight), and the line under it is the subline DESIGN.md's rhythm
+          asks for, at the Body Secondary role.
+        */}
+        <Group justify="space-between" align="flex-end" wrap="nowrap" gap="md">
           <div className="min-w-0">
-            <Title order={2} size="h6" className="page__section-title library-panel__title">
-              Local Library
+            <Title order={2} className="qrbit-text-headline">
+              Library
             </Title>
-            <Text size="xs" c="dimmed">
+            <Text className="qrbit-text-body-secondary" mt="xs">
               Dossiers stored on this device
             </Text>
           </div>
           <Button
             className="library-panel__new-folder"
-            variant="light"
-            size="xs"
+            // `default`, not the accent: this panel is not the page's primary action, and
+            // DESIGN.md keeps Signal Blue for the one that is.
+            variant="default"
+            size="sm"
+            px="md"
             leftSection={<IconPlus size={16} aria-hidden="true" />}
             onClick={() => {
               setNewFolderOpen(true)
             }}
           >
-            New Folder
+            New folder
           </Button>
         </Group>
 
         {error !== null ? (
           <Alert
             className="library-panel__error"
-            color="red"
+            // The theme's own status colour rather than Mantine's default `red` ramp, so the
+            // message is Fault Red in light and a readable tint in dark.
+            color="danger"
             title="The library could not be updated"
             role="alert"
           >
-            <Text size="xs">{error}</Text>
+            {error}
           </Alert>
         ) : null}
 
@@ -306,18 +363,24 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
             wrap="nowrap"
           >
             <Loader size="sm" />
-            <Text size="sm" c="dimmed">
-              Loading your library…
-            </Text>
+            <Text className="qrbit-text-body-secondary">Loading your library…</Text>
           </Group>
         ) : (
-          <div className="library-panel__sections flex flex-col gap-3" ref={sectionListRef}>
+          <div
+            className="library-panel__sections flex min-w-0 flex-col"
+            ref={sectionListRef}
+            // The rows run edge to edge inside this Panel: each row supplies its own 10px
+            // inset (DESIGN.md's list-row padding), which is what lets the hairlines meet the
+            // border without a second bordered surface appearing inside the first.
+            style={PANEL_STYLE}
+          >
             {/*
               `Root` first, always: it is where a dossier goes when it has no folder, and
               where a dossier in a folder this panel does not list still turns up.
               Rendering it unconditionally is what keeps nothing unreachable.
             */}
             <FolderSection
+              first
               folder={null}
               files={rootFiles}
               actions={actions}
@@ -345,9 +408,12 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
             ))}
 
             {folders.length === 0 ? (
-              <p className="library-panel__empty library-panel__empty-folders rounded-lg border border-dashed border-[#D1D9E4] px-3 py-3 text-center text-xs text-[#5B6B82]">
-                Your library has no folders yet. Use “New Folder” to make one, or
-                “New file” in Root to start a dossier that is not in a folder.
+              // `.empty` is the stylesheet's dashed empty state, which is token values and
+              // radius sm — this is the one place in the panel that asks for it, because it is
+              // the one place with nothing inside it at all.
+              <p className="library-panel__empty-folders empty m-0">
+                Your library has no folders yet. Use “New folder” to make one, or “New file” in
+                Root to start a dossier that is not in a folder.
               </p>
             ) : null}
           </div>
@@ -369,6 +435,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
         {moveRequest !== null ? (
           <FolderPickerModal
             isOpen
+            purpose="move"
             folders={listedFolders}
             fileName={moveRequest.name}
             onClose={() => {
@@ -415,6 +482,16 @@ function markedRows(container: HTMLElement | null): HTMLElement[] {
   return rows
 }
 
+/** A section or a row: one hairline above (except the first), translated while it is dragged. */
+function rowStyle(first: boolean, dragOffset: number | null): CSSProperties {
+  const style: CSSProperties = first ? {} : ROW_DIVISION
+  if (dragOffset === null) return style
+  // The grabbed row rides above the list for the length of the drag: a translation and the
+  // sheet shadow, which is the only shadow this screen is allowed to show (DESIGN.md,
+  // "The Floating Only Rule").
+  return { ...style, transform: `translateY(${dragOffset}px)`, position: 'relative', zIndex: 1, boxShadow: 'var(--qrbit-shadow-sheet)' }
+}
+
 // ---------------------------------------------------------------------------
 // One section: a folder's header row and its file list
 // ---------------------------------------------------------------------------
@@ -433,6 +510,8 @@ interface FolderSectionProps {
   handleProps: ReorderHandleProps | null
   /** Pixels to translate by while this folder is the section being dragged, else `null`. */
   dragOffset: number | null
+  /** The first section draws no division above itself: it is already against the Panel edge. */
+  first?: boolean
 }
 
 function FolderSection({
@@ -443,23 +522,18 @@ function FolderSection({
   onToggleCollapsed,
   handleProps,
   dragOffset,
+  first = false,
 }: FolderSectionProps) {
   const name = folder?.name ?? 'Root'
   // The id every action in this section is about: the folder's own, or the root
   // sentinel, which the library layer accepts as a real target for a file.
   const folderId = folder?.id ?? ROOT_FOLDER_ID
-  const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(name)
-
-  const closeMenu = (): void => {
-    setMenuOpen(false)
-  }
 
   const startRename = (): void => {
     setDraftName(name)
     setRenaming(true)
-    closeMenu()
   }
 
   const commitRename = (): void => {
@@ -471,187 +545,330 @@ function FolderSection({
 
   return (
     <section
-      className="library-panel__folder rounded-lg border border-[#D1D9E4] bg-white"
+      className="library-panel__folder min-w-0"
       // The marker the panel's folder-level `useReorderDrag` measures. The whole section is the
       // row — an expanded folder's file list travels with it — while the dossier rows nested
       // inside carry the same marker for their own, separate list.
       data-reorder-item={handleProps === null ? undefined : ''}
-      style={
-        dragOffset === null
-          ? undefined
-          : { transform: `translateY(${dragOffset}px)`, position: 'relative', zIndex: 1 }
-      }
+      style={rowStyle(first, dragOffset)}
     >
-      <div className="library-panel__folder-row flex items-center gap-1.5 px-2 py-1.5">
+      <div className="library-panel__folder-row flex min-h-[44px] min-w-0 items-center gap-[4px] px-[10px]">
         {handleProps === null ? null : (
-          <button
-            {...handleProps}
+          <ReorderGrip
+            handleProps={handleProps}
+            className="library-panel__folder-grip"
             // The hook's own label gives a position in the list; with two drag lists on one
             // screen, the folder the grip belongs to is the part worth hearing.
-            aria-label={`Reorder folder ${name}`}
-            className="library-panel__folder-grip shrink-0 rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#0F172A]"
-          >
-            <IconGripVertical size={16} aria-hidden="true" />
-          </button>
+            label={`Reorder folder ${name}`}
+            dragging={dragOffset !== null}
+          />
         )}
 
-        <button
-          type="button"
-          className="library-panel__folder-toggle shrink-0 rounded p-1 text-[#5B6B82] hover:bg-slate-100"
+        <ActionIcon
+          variant="subtle"
+          size="lg"
+          className="library-panel__folder-toggle shrink-0"
           aria-expanded={!collapsed}
           aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${name}`}
           onClick={onToggleCollapsed}
         >
-          {collapsed ? <IconChevronRight size={16} aria-hidden="true" /> : <IconChevronDown size={16} aria-hidden="true" />}
-        </button>
+          {collapsed ? (
+            <IconChevronRight size={16} aria-hidden="true" />
+          ) : (
+            <IconChevronDown size={16} aria-hidden="true" />
+          )}
+        </ActionIcon>
 
         {renaming ? (
-          <form
-            className="library-panel__folder-rename flex min-w-0 flex-1 items-center gap-1.5"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault()
-              commitRename()
+          <RenameField
+            className="library-panel__folder-rename"
+            inputClassName="library-panel__folder-rename-field"
+            saveClassName="library-panel__folder-rename-save"
+            cancelClassName="library-panel__folder-rename-cancel"
+            label={`Rename ${name}`}
+            draft={draftName}
+            onDraftChange={setDraftName}
+            onCancel={() => {
+              setRenaming(false)
             }}
-          >
-            <input
-              className="library-panel__folder-rename-input desktop-sm min-w-0 flex-1 rounded border border-[#D1D9E4] px-2 py-1 text-sm"
-              type="text"
-              value={draftName}
-              aria-label={`Rename ${name}`}
-              autoFocus
-              onChange={(event) => {
-                setDraftName(event.target.value)
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') setRenaming(false)
-              }}
-            />
-            <button
-              type="submit"
-              className="library-panel__folder-rename-save text-xs font-semibold text-[#1D4ED8]"
-              disabled={draftName.trim() === ''}
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              className="library-panel__folder-rename-cancel text-xs text-[#5B6B82]"
-              onClick={() => {
-                setRenaming(false)
-              }}
-            >
-              Cancel
-            </button>
-          </form>
+            onSubmit={commitRename}
+          />
         ) : (
-          <button
-            type="button"
-            className="library-panel__folder-name flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          <Button
+            // The name does what the chevron does, on a bigger target. `aria-expanded` stays
+            // on the chevron, which is the control that owns the state.
+            className="library-panel__folder-name min-w-0 flex-1"
+            variant="subtle"
+            size="xs"
+            justify="flex-start"
+            px="xs"
+            leftSection={<IconFolder size={16} aria-hidden="true" />}
             onClick={onToggleCollapsed}
           >
-            <IconFolderFilled size={16} className="shrink-0 text-[#0F766E]" aria-hidden="true" />
-            <span className="truncate text-sm font-semibold text-[#0F172A]">{name}</span>
-          </button>
+            <span className="truncate">{name}</span>
+          </Button>
         )}
 
-        <span className="library-panel__folder-count shrink-0 font-mono text-xs text-[#5B6B82]">
+        <Text className="library-panel__folder-count qrbit-text-label shrink-0" c="dimmed">
           {files.length}
-        </span>
+        </Text>
 
         {folder === null ? null : (
-          <button
-            type="button"
-            className="library-panel__folder-menu-toggle shrink-0 rounded p-1 text-[#5B6B82] hover:bg-slate-100"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label={`Actions for ${name}`}
-            onClick={() => {
-              setMenuOpen(!menuOpen)
-            }}
-          >
-            <IconDotsVertical size={16} aria-hidden="true" />
-          </button>
+          <RowMenu
+            className="library-panel__folder-menu-toggle"
+            label={`Actions for ${name}`}
+            items={[
+              {
+                label: 'New file in this folder',
+                icon: <IconPlus size={16} aria-hidden="true" />,
+                onSelect: () => {
+                  actions.createFile(folderId)
+                },
+              },
+              {
+                label: 'Rename folder',
+                icon: <IconPencil size={16} aria-hidden="true" />,
+                onSelect: startRename,
+              },
+              {
+                label: 'Delete folder and contents',
+                icon: <IconTrash size={16} aria-hidden="true" />,
+                danger: true,
+                divider: true,
+                onSelect: () => {
+                  actions.askDeleteFolder(folder)
+                },
+              },
+            ]}
+          />
         )}
       </div>
-
-      {menuOpen ? (
-        <div className="library-panel__folder-menu flex flex-col gap-0.5 border-t border-[#D1D9E4] px-2 py-1.5" role="menu">
-          <MenuItem onClick={startRename}>Rename</MenuItem>
-          <MenuItem
-            onClick={() => {
-              closeMenu()
-              actions.createFile(folderId)
-            }}
-          >
-            New file here
-          </MenuItem>
-          <MenuItem
-            danger
-            onClick={() => {
-              closeMenu()
-              if (folder !== null) actions.askDeleteFolder(folder)
-            }}
-          >
-            Delete folder and contents
-          </MenuItem>
-        </div>
-      ) : null}
 
       {folder === null ? (
         // The bucket needs a line of its own: it is reachable precisely because dossiers can
         // live where this one-level panel does not list them.
-        <p className="library-panel__folder-hint px-2 pb-1 text-xs text-[#5B6B82]">
+        <Text
+          className="library-panel__folder-hint qrbit-text-body-secondary"
+          px="md"
+          pb="xs"
+          fz={13}
+        >
           {collapsed ? `${files.length} dossier${files.length === 1 ? '' : 's'} hidden — ` : ''}
           Dossiers that are not in a folder listed here.
-        </p>
+        </Text>
       ) : null}
 
       {collapsed ? null : (
-        <div className="border-t border-[#EEF2F6] px-2 py-2">
-          {folder === null ? (
-            <FileList
-              files={files}
-              folderId={folderId}
-              actions={actions}
-              reorderable={false}
-              emptyHint="Nothing here — every dossier is inside a folder you can see."
-            />
-          ) : (
-            <FileList
-              files={files}
-              folderId={folderId}
-              actions={actions}
-              reorderable
-              emptyHint={`No dossiers in ${name} yet.`}
-            />
-          )}
+        <div className="px-[10px] pb-[12px] pt-[4px]">
+          {/*
+            Root is a bucket across several folders, so its rows are listed but not reordered:
+            one index cannot describe several `sortOrder` runs.
+          */}
+          <FileList
+            files={files}
+            folderId={folderId}
+            actions={actions}
+            reorderable={folder !== null}
+            emptyHint={
+              folder === null
+                ? 'Nothing here — every dossier is inside a folder you can see.'
+                : `No dossiers in ${name} yet.`
+            }
+          />
         </div>
       )}
     </section>
   )
 }
 
-/** One line of a `role="menu"` list. A plain button: a menu entry is an imperative action. */
-function MenuItem({
-  children,
-  onClick,
-  danger = false,
-}: {
-  children: ReactNode
-  onClick: () => void
-  danger?: boolean
-}) {
+// ---------------------------------------------------------------------------
+// Inline rename, and the row's menu and grip
+// ---------------------------------------------------------------------------
+
+interface RenameFieldProps {
+  /** The folder or dossier being renamed, in the field's accessible name. */
+  label: string
+  draft: string
+  onDraftChange(value: string): void
+  onSubmit(): void
+  onCancel(): void
+  className: string
+  inputClassName: string
+  saveClassName: string
+  cancelClassName: string
+}
+
+/**
+ * The inline rename, spelled once.
+ *
+ * A folder row and a dossier row both need this and were keeping two copies — which is how
+ * one of them ended up with a save control that could be pressed while empty. The rule lives
+ * here: a trimmed empty name cannot be submitted, Escape abandons the edit, and the field
+ * keeps the focus it was given.
+ */
+function RenameField({
+  label,
+  draft,
+  onDraftChange,
+  onSubmit,
+  onCancel,
+  className,
+  inputClassName,
+  saveClassName,
+  cancelClassName,
+}: RenameFieldProps) {
   return (
-    <button
-      type="button"
-      role="menuitem"
-      className={`library-panel__menu-item rounded px-2 py-1.5 text-left text-xs font-medium tactile-btn hover:bg-slate-100 ${
-        danger ? 'library-panel__menu-item--danger text-[#DC2626]' : 'text-[#0F172A]'
-      }`}
-      onClick={onClick}
+    <form
+      className={`flex min-w-0 flex-1 items-center gap-[8px] py-[8px] ${className}`}
+      onSubmit={(event: FormEvent) => {
+        event.preventDefault()
+        onSubmit()
+      }}
     >
+      <TextInput
+        className={`${inputClassName} min-w-0 flex-1`}
+        size="xs"
+        type="text"
+        value={draft}
+        aria-label={label}
+        autoFocus
+        onChange={(event) => {
+          onDraftChange(event.target.value)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onCancel()
+        }}
+      />
+      <Button
+        type="submit"
+        size="xs"
+        color="signal"
+        disabled={draft.trim() === ''}
+        className={saveClassName}
+      >
+        Save
+      </Button>
+      <Button
+        type="button"
+        size="xs"
+        variant="subtle"
+        className={cancelClassName}
+        onClick={onCancel}
+      >
+        Cancel
+      </Button>
+    </form>
+  )
+}
+
+/**
+ * The drag handle, which is also the keyboard handle (D16.3).
+ *
+ * DESIGN.md's "Invisible Is Not Quiet" rule is the reason this is its own component: the grip
+ * used to be `#94A3B8` on the page — 2.28:1, which is why it read as a smudge rather than a
+ * handle. At rest it is `--qrbit-ink-muted` (5.41:1 on Raised in light, 6.19:1 in dark), on
+ * hover `--qrbit-ink` (18.72 / 14.21), `grab`/`grabbing` to say what a press does, and the
+ * global 2px `:focus-visible` ring for the keyboard path. Hover is read through
+ * `useHover`'s ref because a component that owns no stylesheet cannot write a `:hover` rule.
+ */
+function ReorderGrip({
+  handleProps,
+  label,
+  dragging,
+  className,
+}: {
+  handleProps: ReorderHandleProps
+  label: string
+  dragging: boolean
+  /** Which list this grip belongs to: `library-panel__folder-grip` or `library-panel__grip`. */
+  className: string
+}) {
+  const { hovered, ref } = useHover<HTMLButtonElement>()
+
+  return (
+    <ActionIcon
+      ref={ref}
+      {...handleProps}
+      // The hook's own label is positional ("item 2 of 5"); naming the row is the part a
+      // screen with two drag lists needs.
+      aria-label={label}
+      variant="subtle"
+      size="lg"
+      className={`${className} shrink-0`}
+      style={{
+        ...handleProps.style,
+        cursor: dragging ? 'grabbing' : 'grab',
+        color: hovered ? 'var(--qrbit-ink)' : 'var(--qrbit-ink-muted)',
+      }}
+    >
+      <IconGripVertical size={16} aria-hidden="true" />
+    </ActionIcon>
+  )
+}
+
+/** One entry of a row menu. */
+interface RowMenuItem {
+  label: string
+  icon: ReactNode
+  onSelect: () => void
+  /** Draws the division above this entry — used to separate the destructive answer. */
+  divider?: boolean
+  /** Fault Red, and the consequence in the words: this entry opens a confirmation. */
+  danger?: boolean
+}
+
+/**
+ * The `···` menu every row has, spelled once.
+ *
+ * Folder and dossier rows used to hand-roll two nearly identical inline menus, which is how
+ * one said "Move to…" and the other said nothing about moving, and how a menu entry became a
+ * `<button role="menuitem">` with the role pasted onto it. Mantine's `Menu` owns the open
+ * state, the `menu`/`menuitem` roles, the Escape and click-outside close, and the focus ring;
+ * a row only says what its actions are.
+ */
+function RowMenu({ label, items, className }: { label: string; items: RowMenuItem[]; className: string }) {
+  return (
+    <Menu position="bottom-end" offset={4}>
+      <Menu.Target>
+        <ActionIcon variant="subtle" size="lg" className={className} aria-label={label}>
+          <IconDotsVertical size={16} aria-hidden="true" />
+        </ActionIcon>
+      </Menu.Target>
+
+      <Menu.Dropdown>
+        {items.map((item) => (
+          <FragmentRow key={item.label} divider={item.divider === true}>
+            <Menu.Item
+              // `danger` resolves through the theme's Fault Red ramp, which is scheme-aware:
+              // #B4232A as text on the dark canvas would be 2.53:1, so a bare token cannot be
+              // written here.
+              color={item.danger === true ? 'danger' : undefined}
+              leftSection={item.icon}
+              onClick={item.onSelect}
+            >
+              {item.label}
+            </Menu.Item>
+          </FragmentRow>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
+  )
+}
+
+/** The division that separates a destructive entry from the constructive ones above it. */
+function FragmentRow({
+  divider,
+  children,
+}: {
+  divider: boolean
+  children: ReactNode
+}) {
+  if (!divider) return <>{children}</>
+  return (
+    <>
+      <Menu.Divider />
       {children}
-    </button>
+    </>
   )
 }
 
@@ -678,27 +895,35 @@ function FileList({ files, folderId, actions, reorderable, emptyHint }: FileList
         the dossier lands in the folder the user is looking at rather than whichever one
         the page happened to remember.
       */}
-      <button
-        type="button"
-        className="library-panel__new-file flex items-center gap-1 self-start rounded px-1 py-0.5 text-xs font-semibold text-[#1D4ED8] hover:bg-blue-50"
+      <Button
+        className="library-panel__new-file"
+        variant="subtle"
+        size="xs"
+        w="fit-content"
+        leftSection={<IconPlus size={16} aria-hidden="true" />}
         onClick={() => {
           actions.createFile(folderId)
         }}
       >
-        <IconPlus size={14} aria-hidden="true" />
         New file
-      </button>
+      </Button>
 
       {files.length === 0 ? (
-        <p className="library-panel__empty library-panel__empty-folder px-1 py-2 text-xs text-[#5B6B82]">
+        <p className="library-panel__empty-folder qrbit-text-body-secondary m-0 px-[10px] py-[8px]">
           {emptyHint}
         </p>
       ) : reorderable ? (
         <ReorderableFileList files={files} folderId={folderId} actions={actions} />
       ) : (
-        <ul className="library-panel__files m-0 flex list-none flex-col gap-1.5 p-0">
+        <ul className="library-panel__files m-0 flex list-none flex-col p-0">
           {files.map((file) => (
-            <FileRow key={file.id} file={file} actions={actions} handleProps={null} dragOffset={null} />
+            <FileRow
+              key={file.id}
+              file={file}
+              actions={actions}
+              handleProps={null}
+              dragOffset={null}
+            />
           ))}
         </ul>
       )}
@@ -736,7 +961,7 @@ function ReorderableFileList({
   })
 
   return (
-    <ul className="library-panel__files m-0 flex list-none flex-col gap-1.5 p-0">
+    <ul className="library-panel__files m-0 flex list-none flex-col p-0">
       {files.map((file, index) => (
         <FileRow
           key={file.id}
@@ -764,21 +989,15 @@ interface FileRowProps {
 }
 
 function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
-  const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(file.name)
 
   const preview = getFirstBlockPreview(file)
   const encrypted = hasLockedBlocks(file)
 
-  const closeMenu = (): void => {
-    setMenuOpen(false)
-  }
-
   const startRename = (): void => {
     setDraftName(file.name)
     setRenaming(true)
-    closeMenu()
   }
 
   const commitRename = (): void => {
@@ -790,139 +1009,108 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
 
   return (
     <li
-      className="library-panel__file rounded-md border border-[#D1D9E4] bg-white"
+      className="library-panel__file flex min-h-[44px] min-w-0 items-center gap-[4px] px-[10px]"
       // The marker `useReorderDrag` measures to find a row's pitch (see its module comment).
       data-reorder-item={handleProps === null ? undefined : ''}
-      style={
-        dragOffset === null
-          ? undefined
-          : { transform: `translateY(${dragOffset}px)`, position: 'relative', zIndex: 1 }
-      }
+      style={rowStyle(false, dragOffset)}
     >
-      <div className="flex items-center gap-1.5 py-1 pr-1">
-        {handleProps === null ? null : (
-          <button
-            {...handleProps}
-            className="library-panel__grip shrink-0 rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#0F172A]"
-          >
-            <IconGripVertical size={16} aria-hidden="true" />
-          </button>
-        )}
+      {handleProps === null ? null : (
+        <ReorderGrip
+          handleProps={handleProps}
+          className="library-panel__grip"
+          label={`Reorder dossier ${file.name}`}
+          dragging={dragOffset !== null}
+        />
+      )}
 
-        {renaming ? (
-          <form
-            className="library-panel__file-rename flex min-w-0 flex-1 items-center gap-1.5"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault()
-              commitRename()
-            }}
-          >
-            <input
-              className="library-panel__file-rename-input desktop-sm min-w-0 flex-1 rounded border border-[#D1D9E4] px-2 py-1 text-sm"
-              type="text"
-              value={draftName}
-              aria-label={`Rename ${file.name}`}
-              autoFocus
-              onChange={(event) => {
-                setDraftName(event.target.value)
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') setRenaming(false)
-              }}
-            />
-            <button
-              type="submit"
-              className="library-panel__file-rename-save text-xs font-semibold text-[#1D4ED8]"
-              disabled={draftName.trim() === ''}
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              className="library-panel__file-rename-cancel text-xs text-[#5B6B82]"
-              onClick={() => {
-                setRenaming(false)
-              }}
-            >
-              Cancel
-            </button>
-          </form>
-        ) : (
-          // The whole row (minus the grip and the menu) opens the editor.
-          <button
-            type="button"
-            className="library-panel__file-open flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-slate-50"
-            onClick={() => {
-              actions.openFile(file)
-            }}
-          >
-            <IconFileText size={16} className="shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-1.5">
-                <span className="library-panel__file-name truncate text-sm font-medium text-[#0F172A]">
-                  {file.name}
-                </span>
-                {encrypted ? (
-                  <Badge
-                    className="library-panel__encrypted-badge"
-                    size="xs"
-                    variant="light"
-                    color="shield"
-                    leftSection={<IconLock size={10} aria-hidden="true" />}
-                  >
-                    Encrypted
-                  </Badge>
-                ) : null}
-              </span>
-              <span className="library-panel__file-preview block truncate text-xs text-[#5B6B82]">
-                {preview}
-              </span>
-            </span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          className="library-panel__file-menu-toggle shrink-0 rounded p-1 text-[#5B6B82] hover:bg-slate-100"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          aria-label={`Actions for ${file.name}`}
+      {renaming ? (
+        <RenameField
+          className="library-panel__file-rename"
+          inputClassName="library-panel__file-rename-field"
+          saveClassName="library-panel__file-rename-save"
+          cancelClassName="library-panel__file-rename-cancel"
+          label={`Rename ${file.name}`}
+          draft={draftName}
+          onDraftChange={setDraftName}
+          onCancel={() => {
+            setRenaming(false)
+          }}
+          onSubmit={commitRename}
+        />
+      ) : (
+        // The whole row (minus the grip and the menu) opens the editor.
+        <Button
+          className="library-panel__file-open min-w-0 flex-1"
+          variant="subtle"
+          size="sm"
+          justify="flex-start"
+          px="xs"
+          styles={ROW_BUTTON_STYLES}
+          leftSection={<IconFileText size={16} aria-hidden="true" />}
+          aria-label={`Open ${file.name}`}
           onClick={() => {
-            setMenuOpen(!menuOpen)
+            actions.openFile(file)
           }}
         >
-          <IconDotsVertical size={16} aria-hidden="true" />
-        </button>
-      </div>
+          <span className="block min-w-0">
+            <span className="flex items-center gap-[8px]">
+              <span className="library-panel__file-name truncate">{file.name}</span>
+              {encrypted ? (
+                <Badge
+                  className="library-panel__encrypted-badge"
+                  // Locked Rust: the one colour the product reserves for encryption state,
+                  // wearing a word as well as a glyph (DESIGN.md, "Badges and Chips"). It used
+                  // to ask for a `shield` colour, which the theme never defined.
+                  color="locked"
+                  variant="light"
+                  size="sm"
+                  radius="full"
+                  leftSection={<IconLock size={14} aria-hidden="true" />}
+                >
+                  Encrypted
+                </Badge>
+              ) : null}
+            </span>
+            <span className="library-panel__file-preview qrbit-text-body-secondary block truncate">
+              {preview}
+            </span>
+          </span>
+        </Button>
+      )}
 
-      {menuOpen ? (
-        <div className="library-panel__file-menu flex flex-col gap-0.5 border-t border-[#EEF2F6] px-1 py-1.5" role="menu">
-          <MenuItem onClick={startRename}>Rename</MenuItem>
-          <MenuItem
-            onClick={() => {
-              closeMenu()
+      <RowMenu
+        className="library-panel__file-menu-toggle"
+        label={`Actions for ${file.name}`}
+        items={[
+          {
+            label: 'Rename dossier',
+            icon: <IconPencil size={16} aria-hidden="true" />,
+            onSelect: startRename,
+          },
+          {
+            label: 'Move to folder',
+            icon: <IconArrowsMove size={16} aria-hidden="true" />,
+            onSelect: () => {
               actions.askMoveFile(file)
-            }}
-          >
-            Move to…
-          </MenuItem>
-          <MenuItem
-            danger
-            onClick={() => {
-              closeMenu()
+            },
+          },
+          {
+            label: 'Delete dossier',
+            icon: <IconTrash size={16} aria-hidden="true" />,
+            danger: true,
+            divider: true,
+            onSelect: () => {
               actions.askDeleteFile(file)
-            }}
-          >
-            Delete
-          </MenuItem>
-        </div>
-      ) : null}
+            },
+          },
+        ]}
+      />
     </li>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Pure helpers — the arithmetic the prompts and the store calls depend on
+// The store calls
 // ---------------------------------------------------------------------------
 
 /**
@@ -934,94 +1122,4 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
  */
 function reportToStore(operation: Promise<unknown>): void {
   void operation.catch(() => undefined)
-}
-
-/** What one folder delete costs, counted over the flat lists the store hands down. */
-interface DeleteCost {
-  folders: number
-  files: number
-  items: number
-}
-
-/**
- * Counts the subtree a folder delete takes with it.
- *
- * `deleteFolder` walks the same parent links in IndexedDB — "a folder tree dies whole"
- * (PLAN.md §6.3), because a dossier whose folder is gone would be unreachable — so the
- * warning can only be honest if it counts the same way. The folder itself is included:
- * it is destroyed too. Dossiers and legacy loose items are both counted, because both
- * really do go.
- */
-function deleteCost(
-  folders: LibraryFolder[],
-  files: LibraryFile[],
-  items: LibraryItem[],
-  folderId: string,
-): DeleteCost {
-  /*
-   * A Set's iterator visits values added during iteration, so widening `doomed` in place
-   * walks the whole tree without a queue of its own. The `has` guard is what makes a
-   * malformed cycle in the stored parent links terminate instead of looping forever.
-   */
-  const doomed = new Set<string>([folderId])
-  for (const ancestor of doomed) {
-    for (const folder of folders) {
-      if (folder.parentId === ancestor && !doomed.has(folder.id)) doomed.add(folder.id)
-    }
-  }
-
-  let fileCount = 0
-  for (const file of files) {
-    if (doomed.has(file.folderId)) fileCount += 1
-  }
-  let itemCount = 0
-  for (const item of items) {
-    if (doomed.has(item.folderId)) itemCount += 1
-  }
-
-  return { folders: doomed.size, files: fileCount, items: itemCount }
-}
-
-/** "2 folders", "1 dossier", "no items" — how the cascade warning is read. */
-function countNouns(count: number, noun: string): string {
-  if (count === 0) return `no ${noun}s`
-  return `${count} ${noun}${count === 1 ? '' : 's'}`
-}
-
-/**
- * The prompt for a pending delete, read from the live store state.
- *
- * `null` means the target is gone, which drops the dialog rather than letting it quote
- * a dossier or a subtree that no longer exists.
- */
-function describePendingDelete(
-  request: PendingDelete,
-  folders: LibraryFolder[],
-  files: LibraryFile[],
-  items: LibraryItem[],
-): ConfirmPrompt | null {
-  if (request.kind === 'file') {
-    const file = files.find((candidate) => candidate.id === request.id)
-    if (file === undefined) return null
-    return {
-      title: `Delete “${file.name}”?`,
-      message:
-        `“${file.name}” and its ${countNouns(file.blocks.length, 'block')} will be permanently ` +
-        'deleted from this device. This cannot be undone.',
-      confirmLabel: 'Delete dossier permanently',
-    }
-  }
-
-  const folder = folders.find((candidate) => candidate.id === request.id)
-  if (folder === undefined) return null
-
-  const impact = deleteCost(folders, files, items, folder.id)
-  return {
-    title: `Delete “${folder.name}”?`,
-    message:
-      `This permanently deletes ${countNouns(impact.folders, 'folder')}, ` +
-      `${countNouns(impact.files, 'dossier')} and ${countNouns(impact.items, 'item')} — ` +
-      `“${folder.name}” and every folder inside it. This cannot be undone.`,
-    confirmLabel: 'Delete folder and contents permanently',
-  }
 }

@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SaveToLibraryModal } from './SaveToLibraryModal'
 import type { SaveToLibraryModalProps, SaveableSessionItem } from './SaveToLibraryModal'
-import type { LibraryFolder } from './FolderNode'
+import type { LibraryFolder } from '../../lib/library'
 
 const folders: LibraryFolder[] = [
   { id: 'f1', name: 'Uni Stuff', parentId: null, createdAt: 1, updatedAt: 1 },

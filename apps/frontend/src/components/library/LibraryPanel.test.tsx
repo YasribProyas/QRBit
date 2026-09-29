@@ -13,6 +13,11 @@
  * and still offers its `+ New file`, and a folder delete states the cascade it is about
  * to run and runs nothing until the answer is given.
  *
+ * **Menus and dialogs float.** The row menus are one Mantine `Menu` and the dialogs are
+ * Mantine `Modal`s, so both render through a Portal into `document.body` and mount on the
+ * next frame: `openMenu` and the dialog helpers read the document, and `settle()` is the
+ * frame they need. A row's menu is reached by its label, which is the part the user reads.
+ *
  * **The drag harness.** `useReorderDrag` is pointer-based and jsdom 30 has neither the
  * `PointerEvent` constructor nor pointer capture, so this file does the three things Lane
  * A's harness does before driving anything: a `PointerEvent` subclass of `MouseEvent`
@@ -233,6 +238,15 @@ async function waitFor(condition: () => boolean, description: string): Promise<v
   throw new Error(`timed out waiting for ${description}`)
 }
 
+/** The frame Mantine's portal/transition needs before a dropdown or dialog is in the DOM. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(null))
+    })
+  })
+}
+
 // ---------------------------------------------------------------------------
 // DOM reading helpers
 // ---------------------------------------------------------------------------
@@ -330,17 +344,25 @@ async function clickAndSettle(node: HTMLElement): Promise<void> {
   })
 }
 
-/** Opens the menu belonging to `scope` (a folder section or a dossier row) and reads it. */
-function openMenu(scope: HTMLElement): void {
+/** Opens the menu belonging to `scope` (a folder section or a dossier row) and waits for it. */
+async function openMenu(scope: HTMLElement): Promise<void> {
   const toggle = scope.querySelector<HTMLButtonElement>(
     '.library-panel__file-menu-toggle, .library-panel__folder-menu-toggle',
   )
   if (toggle === null) throw new Error('test bug: this row has no menu')
   click(toggle)
+  await settle()
 }
 
-function menuItem(scope: HTMLElement, label: string): HTMLButtonElement {
-  for (const item of scope.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) {
+/**
+ * The open menu's entry with this label.
+ *
+ * Read from the document because Mantine portals the dropdown, and addressed by its label
+ * because the label is what the panel promises the action is: "Rename folder", "Delete
+ * folder and contents", "Move to folder", "Delete dossier".
+ */
+function menuItem(label: string): HTMLButtonElement {
+  for (const item of document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) {
     if (item.textContent === label) return item
   }
   throw new Error(`test bug: no menu item labelled ${label}`)
@@ -361,22 +383,36 @@ function inputIn(scope: HTMLElement, selector: string, what: string): HTMLInputE
   return field
 }
 
-/** A button of the open confirmation dialog, by its exact label. */
+/** The open dialog: a Mantine `Modal` portals into the document, not into the panel. */
+function dialog(): HTMLElement {
+  const node = document.querySelector('[role="dialog"]')
+  if (!(node instanceof HTMLElement)) throw new Error('test bug: no dialog open')
+  return node
+}
+
+/** A button of the open dialog, by its exact label. */
 function dialogButton(label: string): HTMLButtonElement {
-  const dialog = panel().querySelector<HTMLElement>('.confirm-delete')
-  if (dialog === null) throw new Error('test bug: no confirmation open')
-  for (const node of dialog.querySelectorAll<HTMLButtonElement>('button')) {
+  for (const node of dialog().querySelectorAll<HTMLButtonElement>('button')) {
     if (node.textContent === label) return node
   }
   throw new Error(`test bug: no dialog button labelled ${label}`)
 }
 
+/**
+ * The dialog's title and body, read the way a screen reader does: through the ids the
+ * dialog points its `aria-labelledby` and `aria-describedby` at.
+ *
+ * The description is the dialog's body region, so it also contains the two control labels;
+ * the assertions below ask what it says, not that it says nothing else.
+ */
 function dialogText(): { title: string; message: string } {
-  const dialog = panel().querySelector<HTMLElement>('.confirm-delete')
-  if (dialog === null) throw new Error('test bug: no confirmation open')
+  const node = dialog()
+  const titleId = node.getAttribute('aria-labelledby')
+  const bodyId = node.getAttribute('aria-describedby')
+  if (titleId === null || bodyId === null) throw new Error('test bug: unlabelled dialog')
   return {
-    title: dialog.querySelector('.confirm-delete__title')?.textContent ?? '',
-    message: dialog.querySelector('.confirm-delete__message')?.textContent ?? '',
+    title: document.getElementById(titleId)?.textContent ?? '',
+    message: document.getElementById(bodyId)?.textContent ?? '',
   }
 }
 
@@ -603,8 +639,16 @@ describe('LibraryPanel — what the panel lists', () => {
         id: 'b-locked',
         type: 'locked',
         label: 'Root keyphrase',
-        content: 'sys_x94#kK99!Alpha2',
+        // A real stored tuple, because that is the only thing the badge may mean: `isLocked`
+        // is the lock *intent*, and `hasLockedBlocks` answers with `lockedTupleOf` — a row
+        // wearing the flag with plaintext in it gets no badge and says "Not encrypted"
+        // instead (PLAN.md §6.2, §14).
         isLocked: true,
+        lockedData: {
+          ciphertext: new Uint8Array(32).fill(7),
+          iv: new Uint8Array(12).fill(1),
+          salt: new Uint8Array(16).fill(2),
+        },
       },
     ])
     await loadLibrary()
@@ -746,12 +790,12 @@ describe('LibraryPanel — opening and creating dossiers', () => {
   it('makes a folder at Root through the modal, and lists it', async () => {
     renderPanel()
 
-    click(requireButton(panel().querySelector('.library-panel__new-folder'), 'New Folder button'))
-    const modal = panel().querySelector<HTMLElement>('.library-modal')
-    if (modal === null) throw new Error('test bug: the new-folder dialog did not open')
+    click(requireButton(panel().querySelector('.library-panel__new-folder'), 'New folder button'))
+    await settle()
 
-    typeInto(inputIn(modal, '.library-modal__input', 'folder name field'), 'Archive')
-    await clickAndSettle(requireButton(modal.querySelector('.library-modal__submit'), 'create button'))
+    const modal = dialog()
+    typeInto(inputIn(modal, 'input[type="text"]', 'folder name field'), 'Archive')
+    await clickAndSettle(dialogButton('Create'))
 
     expect(calls.createFolder).toEqual([['Archive', null]])
     await waitFor(() => hasSection('Archive'), 'Archive on screen')
@@ -1079,10 +1123,10 @@ describe('LibraryPanel — the folder menu', () => {
 
     renderPanel()
     const section = folderSection('Vault')
-    openMenu(section)
-    click(menuItem(section, 'Rename'))
+    await openMenu(section)
+    click(menuItem('Rename folder'))
 
-    typeInto(inputIn(section, '.library-panel__folder-rename-input', 'rename field'), 'Working keys')
+    typeInto(inputIn(section, 'input[type="text"]', 'rename field'), 'Working keys')
     await clickAndSettle(requireButton(section.querySelector('.library-panel__folder-rename-save'), 'rename save'))
 
     expect(calls.renameFolder).toEqual([[vault.id, 'Working keys']])
@@ -1090,7 +1134,7 @@ describe('LibraryPanel — the folder menu', () => {
     expect((await getFolders()).map((folder) => folder.name)).toEqual(['Working keys'])
   })
 
-  it('makes a dossier in this folder from "New file here"', async () => {
+  it('makes a dossier in this folder from “New file in this folder”', async () => {
     const vault = await seedFolder('Vault')
     await loadLibrary()
 
@@ -1102,8 +1146,8 @@ describe('LibraryPanel — the folder menu', () => {
     })
 
     const section = folderSection('Vault')
-    openMenu(section)
-    click(menuItem(section, 'New file here'))
+    await openMenu(section)
+    click(menuItem('New file in this folder'))
 
     expect(askedFor).toEqual([vault.id])
     expect(sectionNamed('Vault').files).toEqual([])
@@ -1120,8 +1164,8 @@ describe('LibraryPanel — the folder menu', () => {
 
     renderPanel()
     const section = folderSection('Vault')
-    openMenu(section)
-    click(menuItem(section, 'Delete folder and contents'))
+    await openMenu(section)
+    click(menuItem('Delete folder and contents'))
 
     const prompt = dialogText()
     expect(prompt.title).toContain('Vault')
@@ -1154,8 +1198,8 @@ describe('LibraryPanel — the folder menu', () => {
 
     renderPanel()
     const section = folderSection('Vault')
-    openMenu(section)
-    click(menuItem(section, 'Delete folder and contents'))
+    await openMenu(section)
+    click(menuItem('Delete folder and contents'))
     await clickAndSettle(dialogButton('Cancel'))
 
     expect(calls.deleteFolder).toEqual([])
@@ -1206,10 +1250,10 @@ describe('LibraryPanel — the dossier menu', () => {
 
     renderPanel()
     const row = fileRow('Alpha')
-    openMenu(row)
-    click(menuItem(row, 'Rename'))
+    await openMenu(row)
+    click(menuItem('Rename dossier'))
 
-    typeInto(inputIn(row, '.library-panel__file-rename-input', 'rename field'), '  Gateway keys  ')
+    typeInto(inputIn(row, 'input[type="text"]', 'rename field'), '  Gateway keys  ')
     await clickAndSettle(requireButton(row.querySelector('.library-panel__file-rename-save'), 'rename save'))
 
     expect(calls.updateFile).toEqual([[alpha.id, { name: 'Gateway keys' }]])
@@ -1224,10 +1268,10 @@ describe('LibraryPanel — the dossier menu', () => {
 
     renderPanel()
     const row = fileRow('Alpha')
-    openMenu(row)
-    click(menuItem(row, 'Rename'))
+    await openMenu(row)
+    click(menuItem('Rename dossier'))
 
-    typeInto(inputIn(row, '.library-panel__file-rename-input', 'rename field'), '   ')
+    typeInto(inputIn(row, 'input[type="text"]', 'rename field'), '   ')
     const save = requireButton(row.querySelector('.library-panel__file-rename-save'), 'rename save')
     expect(save.disabled).toBe(true)
 
@@ -1245,20 +1289,21 @@ describe('LibraryPanel — the dossier menu', () => {
 
     renderPanel()
     const row = fileRow('Alpha')
-    openMenu(row)
-    click(menuItem(row, 'Move to…'))
+    await openMenu(row)
+    click(menuItem('Move to folder'))
+    await settle()
 
-    const modal = panel().querySelector<HTMLElement>('.fixed.inset-0')
-    if (modal === null) throw new Error('test bug: the folder picker did not open')
-    const option = [...modal.querySelectorAll<HTMLButtonElement>('button')].find((node) =>
+    const picker = dialog()
+    const option = [...picker.querySelectorAll<HTMLButtonElement>('button')].find((node) =>
       node.textContent?.includes('Notes'),
     )
     if (option === undefined) throw new Error('test bug: the picker does not offer Notes')
     click(option)
-    const confirm = [...modal.querySelectorAll<HTMLButtonElement>('button')].find(
-      (node) => node.textContent === 'Save File',
-    )
-    if (confirm === undefined) throw new Error('test bug: the picker has no confirm button')
+
+    // The dialog says what it is doing to the dossier the panel opened it for: a move, not a
+    // save, and named after the dossier in the question above the list.
+    expect(picker.textContent).toContain('Move “Alpha” into:')
+    const confirm = dialogButton('Move dossier')
     await clickAndSettle(confirm)
 
     expect(calls.moveFile).toEqual([[alpha.id, notes.id]])
@@ -1266,7 +1311,7 @@ describe('LibraryPanel — the dossier menu', () => {
     expect(sectionNamed('Vault').files).toEqual([])
     expect((await getFilesInFolder(notes.id)).map((file) => file.id)).toEqual([alpha.id])
     // The picker closed with the choice, instead of staying open as if nothing happened.
-    expect(panel().querySelector('.fixed.inset-0')).toBe(null)
+    expect(document.querySelector('[role="dialog"]')).toBe(null)
   })
 
   it('deletes a dossier only after the confirmation, and says which dossier it is', async () => {
@@ -1280,8 +1325,8 @@ describe('LibraryPanel — the dossier menu', () => {
 
     renderPanel()
     const row = fileRow('Alpha')
-    openMenu(row)
-    click(menuItem(row, 'Delete'))
+    await openMenu(row)
+    click(menuItem('Delete dossier'))
 
     const prompt = dialogText()
     expect(prompt.title).toContain('Alpha')
@@ -1303,8 +1348,8 @@ describe('LibraryPanel — the dossier menu', () => {
 
     renderPanel()
     const row = fileRow('Alpha')
-    openMenu(row)
-    click(menuItem(row, 'Delete'))
+    await openMenu(row)
+    click(menuItem('Delete dossier'))
     await clickAndSettle(dialogButton('Cancel'))
 
     expect(calls.deleteFile).toEqual([])

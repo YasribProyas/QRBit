@@ -34,10 +34,10 @@ import {
 import type { ItemsApi } from './SessionBoard'
 import { LockedItemComposeModal } from './LockedItemComposeModal'
 import type { LockedItemInput } from './LockedItemComposeModal'
-import { FolderPicker } from '../library/FolderNode'
+import { FolderPicker } from '../library/FolderPicker'
 import { itemsInFolder } from '../../lib/folders'
-import { ITEM_TYPE_ICONS } from '../library/LibraryItemRow'
-import type { LibraryItem } from '../library/LibraryItemRow'
+import { ITEM_TYPE_ICONS } from '../../lib/itemType'
+import type { LibraryItem } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import { fileBlocksToLibraryItems } from '../../lib/dossier'
 

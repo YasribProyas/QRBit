@@ -9,19 +9,23 @@
  *   - the root has two spellings (`null` and `lib/library.ts`'s sentinel id) and an item
  *     whose folder row no longer exists belongs to the root rather than vanishing;
  *   - the cascade count a delete confirmation quotes walks the same parent links
- *     `deleteFolder` does (PLAN.md §6.3), including the malformed-cycle case — a warning
- *     that hangs the page on corrupted stored data is worse than one that is wrong.
+ *     `deleteFolder` does (PLAN.md §6.3), counting dossiers and loose items as well as
+ *     folders, including the malformed-cycle case — a warning that hangs the page on
+ *     corrupted stored data is worse than one that is wrong;
+ *   - `childFolders` orders siblings deterministically (it came from `FolderNode.tsx`
+ *     together with the tree picker that uses it).
  */
 
 import { describe, expect, it } from 'vitest'
 
 import {
+  childFolders,
   describeDelete,
   folderDeleteImpact,
   itemsInFolder,
   type PendingDelete,
 } from './folders'
-import type { LibraryFolder, LibraryItem } from './library'
+import type { LibraryFile, LibraryFolder, LibraryItem } from './library'
 
 const folders: LibraryFolder[] = [
   { id: 'f1', name: 'Uni Stuff', parentId: null, createdAt: 1, updatedAt: 1 },
@@ -69,6 +73,21 @@ describe('itemsInFolder', () => {
   })
 })
 
+describe('childFolders', () => {
+  it('returns the direct children in name order, whatever order the store used', () => {
+    const tree: LibraryFolder[] = [
+      { id: 'z', name: 'zeta', parentId: null, createdAt: 1, updatedAt: 1 },
+      { id: 'a', name: 'Alpha', parentId: null, createdAt: 1, updatedAt: 1 },
+      { id: 'child', name: 'Nested', parentId: 'a', createdAt: 1, updatedAt: 1 },
+    ]
+
+    // Case-insensitive, so `zeta` does not outrank `Alpha` on a byte comparison, and
+    // locale-free, so two devices cannot disagree about what the tree looks like.
+    expect(childFolders(tree, null).map((folder) => folder.id)).toEqual(['a', 'z'])
+    expect(childFolders(tree, 'a').map((folder) => folder.id)).toEqual(['child'])
+  })
+})
+
 describe('folderDeleteImpact', () => {
   const nested: LibraryFolder[] = [
     { id: 'a', name: 'A', parentId: null, createdAt: 1, updatedAt: 1 },
@@ -83,11 +102,46 @@ describe('folderDeleteImpact', () => {
     { ...BASE, id: 'i4', folderId: 'root', name: 'Loose', content: 'r', updatedAt: 1 },
   ]
 
+  /** A dossier at each depth, plus one that lives outside the doomed subtree. */
+  function dossier(id: string, folderId: string): LibraryFile {
+    return {
+      id,
+      folderId,
+      name: id,
+      createdAt: 1,
+      updatedAt: 1,
+      blocks: [{ id: `${id}-b`, type: 'heading', content: id }],
+    }
+  }
+
+  const nestedFiles: LibraryFile[] = [
+    dossier('d1', 'a'),
+    dossier('d2', 'c'),
+    dossier('d3', 'd'),
+    dossier('d4', 'root'),
+  ]
+
   it('counts every depth and leaves the rest of the library out', () => {
-    expect(folderDeleteImpact(nested, nestedItems, 'a')).toEqual({ folders: 3, items: 2 })
-    expect(folderDeleteImpact(nested, nestedItems, 'b')).toEqual({ folders: 2, items: 1 })
-    expect(folderDeleteImpact(nested, nestedItems, 'c')).toEqual({ folders: 1, items: 1 })
-    expect(folderDeleteImpact(nested, nestedItems, 'd')).toEqual({ folders: 1, items: 1 })
+    expect(folderDeleteImpact(nested, nestedFiles, nestedItems, 'a')).toEqual({
+      folders: 3,
+      files: 2,
+      items: 2,
+    })
+    expect(folderDeleteImpact(nested, nestedFiles, nestedItems, 'b')).toEqual({
+      folders: 2,
+      files: 1,
+      items: 1,
+    })
+    expect(folderDeleteImpact(nested, nestedFiles, nestedItems, 'c')).toEqual({
+      folders: 1,
+      files: 1,
+      items: 1,
+    })
+    expect(folderDeleteImpact(nested, nestedFiles, nestedItems, 'd')).toEqual({
+      folders: 1,
+      files: 1,
+      items: 1,
+    })
   })
 
   it('survives a malformed parent cycle instead of counting forever', () => {
@@ -98,13 +152,17 @@ describe('folderDeleteImpact', () => {
       { id: 'y', name: 'Y', parentId: 'x', createdAt: 1, updatedAt: 1 },
     ]
 
-    expect(folderDeleteImpact(cyclic, [], 'x')).toEqual({ folders: 2, items: 0 })
+    expect(folderDeleteImpact(cyclic, [], [], 'x')).toEqual({ folders: 2, files: 0, items: 0 })
   })
 
   it('counts the named folder itself, because it is destroyed too', () => {
     const empty: LibraryFolder[] = [{ id: 'e', name: 'E', parentId: null, createdAt: 1, updatedAt: 1 }]
 
-    expect(folderDeleteImpact(empty, nestedItems, 'e')).toEqual({ folders: 1, items: 0 })
+    expect(folderDeleteImpact(empty, nestedFiles, nestedItems, 'e')).toEqual({
+      folders: 1,
+      files: 0,
+      items: 0,
+    })
   })
 })
 
@@ -122,38 +180,72 @@ describe('describeDelete', () => {
     { ...BASE, id: 'i4', folderId: 'root', name: 'Loose', content: 'r', updatedAt: 1 },
   ]
 
+  /** Two dossiers in the doomed subtree, one of them holding two blocks. */
+  const nestedFiles: LibraryFile[] = [
+    {
+      id: 'd1',
+      folderId: 'a',
+      name: 'Cluster keys',
+      createdAt: 1,
+      updatedAt: 1,
+      blocks: [
+        { id: 'd1-b1', type: 'heading', content: 'Cluster keys' },
+        { id: 'd1-b2', type: 'richText', content: 'notes' },
+      ],
+    },
+    { id: 'd2', folderId: 'c', name: 'Deep dossier', createdAt: 1, updatedAt: 1, blocks: [] },
+    { id: 'd3', folderId: 'd', name: 'Elsewhere', createdAt: 1, updatedAt: 1, blocks: [] },
+  ]
+
   it('names the item for an item prompt and the numbers for a folder prompt', () => {
     const item: PendingDelete = { kind: 'item', id: 'i2' }
     const folder: PendingDelete = { kind: 'folder', id: 'a' }
 
-    const itemPrompt = describeDelete(item, nested, nestedItems)
+    const itemPrompt = describeDelete(item, nested, nestedFiles, nestedItems)
     expect(itemPrompt?.title).toBe('Delete “Deep note”?')
     expect(itemPrompt?.message).toContain('“Deep note”')
     expect(itemPrompt?.confirmLabel).toContain('permanently')
 
-    const folderPrompt = describeDelete(folder, nested, nestedItems)
+    const folderPrompt = describeDelete(folder, nested, nestedFiles, nestedItems)
     expect(folderPrompt?.message).toContain('3 folders')
+    expect(folderPrompt?.message).toContain('2 dossiers')
     expect(folderPrompt?.message).toContain('2 items')
     expect(folderPrompt?.confirmLabel).toContain('Delete folder and contents')
   })
 
-  it('says so when the folder is empty, rather than implying a cascade that is not there', () => {
-    const prompt = describeDelete({ kind: 'folder', id: 'd' }, nested, nestedItems)
+  it('states a dossier prompt by the blocks the dossier loses', () => {
+    const prompt = describeDelete({ kind: 'file', id: 'd1' }, nested, nestedFiles, nestedItems)
 
-    // 'd' holds one item and no subfolder.
+    expect(prompt?.title).toBe('Delete “Cluster keys”?')
+    expect(prompt?.message).toContain('2 blocks')
+    expect(prompt?.confirmLabel).toBe('Delete dossier permanently')
+  })
+
+  it('says so when the folder is empty, rather than implying a cascade that is not there', () => {
+    const prompt = describeDelete({ kind: 'folder', id: 'd' }, nested, nestedFiles, nestedItems)
+
+    // 'd' holds one dossier, one item and no subfolder.
     expect(prompt?.message).toContain('1 folder')
+    expect(prompt?.message).toContain('1 dossier')
     expect(prompt?.message).toContain('1 item')
-    expect(prompt?.message).not.toMatch(/no folders|1 folders/)
+    expect(prompt?.message).not.toMatch(/no folders|1 folders|1 dossiers and no items/)
 
     const bare: LibraryFolder = { id: 'z', name: 'Z', parentId: null, createdAt: 1, updatedAt: 1 }
-    const emptyPrompt = describeDelete({ kind: 'folder', id: 'z' }, [...nested, bare], nestedItems)
+    const emptyPrompt = describeDelete(
+      { kind: 'folder', id: 'z' },
+      [...nested, bare],
+      nestedFiles,
+      nestedItems,
+    )
+    expect(emptyPrompt?.message).toContain('no dossiers')
     expect(emptyPrompt?.message).toContain('no items')
   })
 
   it('has nothing to say about a target that is no longer there', () => {
     const request: PendingDelete = { kind: 'folder', id: 'gone' }
 
-    expect(describeDelete(request, nested, nestedItems)).toBe(null)
-    expect(describeDelete({ kind: 'item', id: 'gone' }, nested, nestedItems)).toBe(null)
+    expect(describeDelete(request, nested, nestedFiles, nestedItems)).toBe(null)
+    expect(describeDelete({ kind: 'item', id: 'gone' }, nested, nestedFiles, nestedItems)).toBe(null)
+    expect(describeDelete({ kind: 'file', id: 'gone' }, nested, nestedFiles, nestedItems)).toBe(null)
   })
 })
