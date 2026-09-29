@@ -15,12 +15,41 @@
  *
  * The shared drawing settings are in `qrSurface.ts`; the colours are left to the renderer's
  * documented black-on-white default, for the reason recorded there.
+ *
+ * ## The link row
+ *
+ * Under the symbol is one line: the link a peer opens, and the control that puts the FULL
+ * version of it on the clipboard. The previous revision printed the whole URL as a wrapped
+ * grey paragraph, which took three lines on a phone and buried the session code in the middle
+ * of it. The row therefore clips the *front* of the URL (the origin, which the user has no way
+ * to verify anyway) and never clips the end (`?code=…`, the part a user reads back against the
+ * code on the other screen). The anchor's own text is the complete URL, so assistive tech, the
+ * page-level assertion in `Home.test.tsx` and a paste into another app all still see the whole
+ * thing — clipping here is a rendering decision, not a data one. It cannot be selected by hand,
+ * though: `styles.css` sets `user-select: none` on every `a`, which is why the blocked state
+ * points at the typed field rather than at the link.
+ *
+ * The copy control is the panel's one icon-only affordance, so it takes DESIGN.md's icon-only
+ * row: `<ActionIcon variant="subtle">`, transparent fill, Ink Secondary glyph, 44px because a
+ * thumb hits it. It was that same documented variant that shipped invisible in the light scheme,
+ * and the reason was never the component: Mantine delivers `cssVariablesResolver`'s output as an
+ * inline `<style data-mantine-styles>`, which this app's own `style-src 'self'` refuses, so the
+ * variable map never arrived and every control colour chain fell through to the white at the end
+ * of Mantine's static sheet — white glyph, white panel. That is fixed at the bridge (375df54:
+ * `applyThemeCssVariables` delivers the same map through the CSSOM, and
+ * `qrbitVariantColorResolver` points a neutral `subtle` control at `--mantine-color-dimmed`,
+ * which *is* DESIGN.md's Ink Secondary). Nothing here states a colour inline, because the
+ * component's job is to name the documented variant and let the bridge own the value.
+ *
+ * Clipboard failure is a state, not an exception: `navigator.clipboard` is absent on insecure
+ * origins and `writeText` rejects when the document is not focused, so the control says
+ * *blocked* and points at the typed fallback rather than showing a checkmark that never happened.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { toCanvas } from 'qrcode'
-import { ActionIcon, Button, Group, Loader, Stack, Text } from '@mantine/core'
+import { ActionIcon, Group, Loader, Stack, Text } from '@mantine/core'
 import { IconAlertTriangle, IconCheck, IconCopy, IconRefresh } from '@tabler/icons-react'
 
 import { buildSessionUrl } from '../config'
@@ -39,9 +68,9 @@ export interface TacticalQRCodeProps {
   onRegenerate?: () => void
   /** Rendered width in CSS pixels. DESIGN.md's resting band for the pairing panel is 195–240. */
   size?: number
-  /** Show the caption, the code as text and the code's own controls under the symbol. */
+  /** Show the link row — the address the symbol carries, and the controls under it. */
   showLabel?: boolean
-  /** Hide the copy/regenerate controls: the caller renders the code without them. */
+  /** Hide the copy/regenerate controls: the caller renders the link without them. */
   interactive?: boolean
 }
 
@@ -52,9 +81,10 @@ type DrawState = 'drawing' | 'ready' | 'error'
  * The light plate behind the code.
  *
  * `--qrbit-signal-subtle` is the one documented surface that does NOT flip under
- * `[data-theme='dark']`, so the well stays light on a near-black page instead of inverting
+ * `[data-theme='dark']`, so the plate stays light on a near-black page instead of inverting
  * with the panel behind it (`--qrbit-raised` does exactly that, which is why it is not used
- * here). The symbol itself brings its own white quiet zone.
+ * here — DESIGN.md's "Raised well" cannot be honoured literally in the dark scheme, because a
+ * scanner reads luminance: see this lane's report). The symbol brings its own white quiet zone.
  */
 const WELL_STYLE = {
   background: 'var(--qrbit-signal-subtle)',
@@ -66,13 +96,80 @@ const WELL_STYLE = {
 type CopyState = 'idle' | 'copied' | 'blocked'
 
 /**
- * What the copy control says it did. The blocked wording names the recovery, because the
- * code is printed next to the button and can be selected and copied by hand.
+ * The copy control's accessible name, per state. The name changes with the outcome so the
+ * control describes what it will do (or just did) rather than sitting on a fixed label the
+ * user cannot tell the difference between.
  */
 const COPY_LABEL: Record<CopyState, string> = {
-  idle: 'Copy the session link',
+  idle: 'Copy the full session link',
   copied: 'Session link copied',
-  blocked: 'This browser blocked the copy — select the code and copy it yourself',
+  blocked: 'Copy blocked by this browser',
+}
+
+/**
+ * The line under the row, shown only while it has something to say. `blocked` names the
+ * recovery that still works — the code is legible on this screen and the typed field is under
+ * the hairline — because the link itself cannot be dragged over by hand.
+ */
+const COPY_STATUS: Record<Exclude<CopyState, 'idle'>, string> = {
+  copied: 'The full link is on your clipboard.',
+  blocked: 'This browser blocked the copy. Type the code into the field below instead.',
+}
+
+/**
+ * The link row's inset: a Sunken plate with a hairline, which is what DESIGN.md reserves
+ * `--qrbit-sunken` for (code wells and insets) and what makes the row read as a field rather
+ * than as a sentence on the panel.
+ */
+const LINK_ROW_STYLE = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--qrbit-space-xs)',
+  width: '100%',
+  padding: 'var(--qrbit-space-xs) var(--qrbit-space-xs) var(--qrbit-space-xs) var(--qrbit-space-sm)',
+  background: 'var(--qrbit-sunken)',
+  border: '1px solid var(--qrbit-border)',
+  borderRadius: 'var(--qrbit-radius-sm)',
+  minWidth: 0,
+} as const
+
+/** The anchor: one line, shrinks to whatever the row has left, clips rather than wraps. */
+const LINK_STYLE = {
+  display: 'flex',
+  minWidth: 0,
+  flex: '1 1 auto',
+  alignItems: 'center',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textDecoration: 'underline',
+  textUnderlineOffset: '0.15em',
+} as const
+
+/** The clipped front of the URL. `text-overflow` only works on a block with `overflow: hidden`. */
+const LINK_HEAD_STYLE = {
+  display: 'block',
+  minWidth: 0,
+  flex: '0 1 auto',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const
+
+/** The end of the URL — the code. Never truncated, so it is always readable by eye. */
+const LINK_TAIL_STYLE = { display: 'block', flex: 'none', whiteSpace: 'nowrap' } as const
+
+/**
+ * Splits a link into the part that may be clipped and the part that may not.
+ *
+ * `head + tail` is always the exact input, which is what keeps the DOM text — and the
+ * page-level assertion that the full URL is on screen — true at every width.
+ */
+function splitLink(url: string): { head: string; tail: string } {
+  const query = url.indexOf('?')
+  if (query >= 0) return { head: url.slice(0, query), tail: url.slice(query) }
+  const path = url.lastIndexOf('/')
+  if (path >= 0) return { head: url.slice(0, path), tail: url.slice(path) }
+  return { head: url, tail: '' }
 }
 
 export function TacticalQRCode({
@@ -90,6 +187,12 @@ export function TacticalQRCode({
   /** The URL the symbol carries — a real session URL, or nothing. */
   const payload = sessionUrl ?? (pairingCode ? buildSessionUrl(pairingCode) : null)
   const code = pairingCode ?? null
+
+  /**
+   * The link row's two halves: the origin may clip, `?code=…` may not. Derived from the
+   * payload, so the address the row shows and the address the symbol carries are one fact.
+   */
+  const link = useMemo(() => splitLink(payload ?? ''), [payload])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -194,28 +297,42 @@ export function TacticalQRCode({
             ) : null}
             {state === 'error' ? (
               <Text className="qrbit-text-body-secondary" c="danger" ta="center" w="min(100%, 22ch)">
-                This browser cannot draw the code. Use the text below.
+                This browser cannot draw the code. Use the link below.
               </Text>
             ) : null}
           </div>
         </div>
 
         {showLabel ? (
-          <Stack align="center" gap="xs" className="tactical-qr__label">
-            <Text className="qrbit-text-body-secondary" c="dimmed" ta="center" maw="34ch">
-              Scan this with the other device’s camera, or open the link it carries.
-            </Text>
-
-            <Group justify="center" gap="xs" wrap="wrap">
-              {/* The code is data a user may read back or type, so it is set as data. */}
-              <Text className="qrbit-text-data" component="span">
-                {code ?? payload}
-              </Text>
+          <Stack gap="xs" className="tactical-qr__label" w="100%">
+            {/*
+              One line: the link, clipped at the front, and the control that copies the whole
+              thing. The code is the tail, so clipping can never hide what a user checks by eye.
+            */}
+            <div className="tactical-qr__link-row" style={LINK_ROW_STYLE}>
+              <a
+                className="tactical-qr__link qrbit-text-data"
+                href={payload}
+                title={payload}
+                style={LINK_STYLE}
+              >
+                <span className="tactical-qr__link-head" style={LINK_HEAD_STYLE}>
+                  {link.head}
+                </span>
+                <span className="tactical-qr__link-code" style={LINK_TAIL_STYLE}>
+                  {link.tail}
+                </span>
+              </a>
 
               {interactive ? (
                 <ActionIcon
+                  // DESIGN.md's icon-only row: quiet fill, Ink Secondary glyph. 44px
+                  // (`size="xl"`) because this is a thumb target on the phone held over the
+                  // other device, which outranks the table's 32px box.
+                  className="tactical-qr__copy"
                   variant="subtle"
-                  size="lg"
+                  size="xl"
+                  flex="none"
                   aria-label={COPY_LABEL[copy]}
                   onClick={handleCopy}
                 >
@@ -230,16 +347,34 @@ export function TacticalQRCode({
               ) : null}
 
               {interactive && onRegenerate ? (
-                <Button
-                  variant="default"
-                  size="sm"
-                  leftSection={<IconRefresh size={16} aria-hidden="true" />}
+                <ActionIcon
+                  className="tactical-qr__regenerate"
+                  variant="subtle"
+                  size="xl"
+                  flex="none"
+                  aria-label="Start a new pairing code"
                   onClick={onRegenerate}
                 >
-                  New code
-                </Button>
+                  <IconRefresh size={18} aria-hidden="true" />
+                </ActionIcon>
               ) : null}
-            </Group>
+            </div>
+
+            {/*
+              The copy outcome, in words, in a live region. Rendered only while it has something
+              to say, so the resting panel carries no status line the session could not verify.
+            */}
+            {copy === 'idle' ? null : (
+              <Text
+                component="span"
+                className="tactical-qr__copy-status qrbit-text-body-secondary"
+                c={copy === 'blocked' ? 'danger' : undefined}
+                role="status"
+                aria-live="polite"
+              >
+                {COPY_STATUS[copy]}
+              </Text>
+            )}
           </Stack>
         ) : null}
       </Stack>

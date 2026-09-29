@@ -39,12 +39,15 @@ function newDossierBlocks(): FileBlock[] {
 }
 
 /**
- * Home screen (PLAN.md §7, §16 Phase 5/6, ORCHESTRATION.md D13 and D16).
+ * Home screen (PLAN.md §7, §16 Phase 5/6, ORCHESTRATION.md D13, D16 and D17).
  *
  * Home is the host: it connects to the signaling server for its minted code on mount, so
  * the QR is visible and joinable the moment the app opens, with no tap in between. The
  * shell it renders is the two-panel desktop surface (D16) — `LibraryPanel` on the left,
- * the QR panel on the right, one column on a phone.
+ * the QR panel on the right — and below the desktop breakpoint the library leaves the flow
+ * entirely and opens from the header, so the QR is the only thing on a phone's screen
+ * (D17). Which of those two the viewport gets is `HomeView`'s decision, not this page's:
+ * Home hands the panel in as one node and the shell places it.
  *
  * This page owns the surfaces the store cannot: which dossier is open in the editor,
  * whether the camera is up, and which session view replaces the shell once a peer
@@ -262,7 +265,7 @@ export function Home() {
     )
   }
 
-  // 6. DEFAULT HOME VIEW — the two-panel shell: library left, QR right (D16)
+  // 6. DEFAULT HOME VIEW — the pairing shell: library left (or in the drawer), QR right
   return (
     <HomeView
       pairingCode={session.sessionCode}

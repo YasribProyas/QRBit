@@ -19,10 +19,17 @@
  * `hooks/useSession.test.tsx`. What replaces the old page tests is asserted through the
  * library panel that is now on screen: a dossier row opens the editor, `+ New file` writes
  * into the folder whose list it heads (the `folders[0]?.id || 'f-1'` fallback is dead, so a
- * test seeds two folders and proves the second one is the one that gets the dossier),
- * `Scan & Send`
- * belongs to the QR panel rather than the header, and the header's Settings control
- * navigates.
+ * test seeds two folders and proves the second one is the one that gets the dossier), and the
+ * header's Settings control navigates.
+ *
+ * D17 moved the scan action again: it is the floating icon-only control at the bottom-left of
+ * the shell, so it is found by its accessible name (`scanControl` below) rather than by the
+ * words it used to carry, and the claim these tests still make is that there is exactly one of
+ * it and that it is not in the header. The desktop split these tests run against is the two-
+ * panel one: `Home.test.tsx`'s jsdom `matchMedia` stub answers every query with `matches:
+ * false`, which is the desktop side of DESIGN.md's 1024px breakpoint. The phone half of that
+ * split — the library behind a hamburger, no stacked column — is pinned in
+ * `components/HomeView.test.tsx`, where the stub is per-test.
  */
 
 import 'fake-indexeddb/auto'
@@ -384,6 +391,21 @@ function buttonIn(scope: HTMLElement, selector: string, what: string): HTMLButto
 }
 
 /**
+ * The one scan control, by the name it gives itself.
+ *
+ * The control is icon-only (D17), so `textContent` is not a handle for it. Failing loudly here
+ * is the point: a screen with two controls that open the camera, or one with none, is a
+ * different claim about the page than the one these tests make.
+ */
+function scanControl(element: HTMLElement): HTMLButtonElement {
+  const found = [
+    ...element.querySelectorAll<HTMLButtonElement>('button[aria-label="Scan and send"]'),
+  ]
+  expect(found, 'exactly one control named Scan and send').toHaveLength(1)
+  return found[0] as HTMLButtonElement
+}
+
+/**
  * The dossier row's `···` menu entry, opening the menu first.
  *
  * Mantine renders `Menu.Dropdown` through a portal on `document.body`, so the items are NOT
@@ -517,14 +539,16 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
     expect(useLibraryStore.getState().error).toBe(null)
   })
 
-  it('opens the camera scanner from Scan & Send, and only then (PLAN.md §16 Phase 6)', async () => {
+  it('opens the camera scanner from the scan control, and only then (PLAN.md §16 Phase 6)', async () => {
     const element = renderHome()
     await settle()
 
-    const scan = [...element.querySelectorAll('button')].find((candidate) =>
-      candidate.textContent?.includes('Scan & Send'),
-    )
-    if (!scan) throw new Error('test bug: no Scan & Send button')
+    /*
+     * D17 replaced the in-panel `Scan & Send` button with a floating icon-only control, so the
+     * control is found by the name it gives itself rather than by a text node it no longer has.
+     * The behaviour under test is unchanged: the camera is closed until this is pressed.
+     */
+    const scan = scanControl(element)
 
     expect(scan.disabled).toBe(false)
     expect(element.querySelector('.qr-scanner-stub')).toBe(null)
@@ -538,23 +562,27 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
 })
 
 /*
+ * D16 took `Scan & Send` out of the header and gave it to the panel whose action it is; D17
+ * moved that same action onto the floating icon-only control, which is neither in the header
+ * nor in the panel's flow. What both revisions pin is the count and the location: exactly one
+ * way to open the camera from this screen, and it is not chrome.
+ *
  * D16 behaviour changes 2 and 3, at page level: the folder a new dossier lands in is the
  * folder whose list the `+ New file` row heads. This is the test that pins the removal of
  * `folders[0]?.id || 'f-1'` — the first version wrote whichever folder happened to be
  * first, and fell back to a mock id that no longer exists anywhere.
  */
-describe('Home — the top bar (ORCHESTRATION D16 behaviour change 1)', () => {
-  it('carries Settings, which navigates, and exactly one Scan & Send — in the QR panel', async () => {
+describe('Home — the top bar (ORCHESTRATION D16 behaviour change 1, D17)', () => {
+  it('carries Settings, which navigates, and exactly one scan control — not in the header', async () => {
     const element = renderHome()
     await settle()
 
-    const scanButtons = [...element.querySelectorAll<HTMLButtonElement>('button')].filter(
-      (candidate) => candidate.textContent?.includes('Scan & Send') === true,
-    )
-    expect(scanButtons).toHaveLength(1)
-    // The one Scan & Send belongs to the panel whose action it is, not to the header.
-    expect(scanButtons[0]?.closest('.home__qr-panel')).not.toBe(null)
-    expect(scanButtons[0]?.closest('header')).toBe(null)
+    const scan = scanControl(element)
+    // The one scan control is the floating button, so it belongs to the shell rather than to
+    // the panel it pairs with — and it is still not chrome in the header.
+    expect(scan.closest('header')).toBe(null)
+    expect(scan.closest('.home__pairing-panel')).toBe(null)
+    expect(scan.closest('.home__fab-band')).not.toBe(null)
 
     const settings = element.querySelector<HTMLElement>('.home__settings')
     if (!settings) throw new Error('test bug: no Settings control in the header')
@@ -882,7 +910,7 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
     expect(element.querySelector('.home__qr-error')).toBe(null)
   })
 
-  it('offers the typed-code fallback next to Scan & Send (PLAN.md §16 Phase 6)', async () => {
+  it('offers the typed-code fallback beside the pairing surface (PLAN.md §16 Phase 6)', async () => {
     const element = renderHome()
     await settle()
 

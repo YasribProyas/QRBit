@@ -102,11 +102,22 @@ function ManualCodeEntryForm({ onSubmit }: ManualCodeEntryProps) {
       >
         Have a code instead? Type it in
       </Text>
-      <Group align="stretch" gap="sm" wrap="nowrap" className="manual-code__row">
+      <Group
+        align="stretch"
+        justify="space-between"
+        gap="sm"
+        wrap="nowrap"
+        className="manual-code__row"
+      >
         <TextInput
           id={inputId}
           size="md"
+          // Sized to what it holds: eight characters. `flex-1` still lets it give width back on
+          // a narrow phone, and `min-w-0` is what lets it do so without pushing the submit out of
+          // the row. A code field stretched across the whole panel reads as a display of a value,
+          // not as a place to type one — which is the thing this row was accused of.
           className="min-w-0 flex-1"
+          maw="12rem"
           // The input element carries the class the pairing tests select, so the styling
           // hook and the test hook are the same node.
           classNames={{ input: 'manual-code__input' }}
