@@ -91,6 +91,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import {
   ActionIcon,
   Alert,
+  Badge,
   Burger,
   Button,
   Drawer,
@@ -321,6 +322,21 @@ export function HomeView({
             <Text className="qrbit-text-display" component="h1">
               QRBit
             </Text>
+            <Badge
+              variant="outline"
+              color="signal"
+              size="sm"
+              radius="sm"
+              className="hidden sm:inline-flex"
+              style={{
+                letterSpacing: '0.08em',
+                fontFamily: 'var(--qrbit-font-mono)',
+                textTransform: 'uppercase',
+                borderWidth: '1px',
+              }}
+            >
+              P2P Air-Drop
+            </Badge>
           </Group>
 
           <Group gap="xs" wrap="nowrap" align="center">

@@ -59,6 +59,7 @@ export function ThemeToggle(): ReactElement {
   return (
     <Tooltip label={description} withArrow>
       <ActionIcon
+        className="tactile-btn"
         // DESIGN.md's icon-only row: quiet fill, ink-secondary, 32px box. Mantine's
         // ActionIcon steps are 28 / 34 / 44, so `lg` (34px) is the nearest step to 32 —
         // which is why the control height is not itself a token (see theme.ts).

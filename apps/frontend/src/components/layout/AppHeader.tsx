@@ -24,7 +24,7 @@
  * Sunken surface, which steps with the scheme.
  */
 
-import { Burger, Button, Group, Text, Tooltip } from '@mantine/core'
+import { Badge, Burger, Button, Group, Text, Tooltip } from '@mantine/core'
 import { IconLogout, IconSettings } from '@tabler/icons-react'
 import type { ReactElement } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -109,6 +109,21 @@ export function AppHeader({
               >
                 QRBit
               </Text>
+              <Badge
+                variant="outline"
+                color="signal"
+                size="sm"
+                radius="sm"
+                className="hidden sm:inline-flex"
+                style={{
+                  letterSpacing: '0.08em',
+                  fontFamily: 'var(--qrbit-font-mono)',
+                  textTransform: 'uppercase',
+                  borderWidth: '1px',
+                }}
+              >
+                P2P Air-Drop
+              </Badge>
             </Group>
           </Link>
         </Group>

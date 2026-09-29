@@ -77,6 +77,7 @@ const PANEL_STYLES: Record<'root', CSSProperties> = {
   root: {
     backgroundColor: 'var(--qrbit-raised)',
     border: '1px solid var(--qrbit-border)',
+    boxShadow: '0 1px 0 rgba(255, 255, 255, 0.05) inset, var(--qrbit-shadow-sheet)',
   },
 }
 
@@ -300,7 +301,7 @@ export function Settings(): ReactElement {
               <Button
                 variant="default"
                 size="sm"
-                className={THUMB_TARGET}
+                className={`${THUMB_TARGET} tactile-btn`}
                 leftSection={<IconDownload size={16} aria-hidden="true" />}
                 onClick={() => {
                   setExporting(true)

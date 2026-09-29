@@ -211,6 +211,7 @@ const VIEWFINDER_STYLE: CSSProperties = {
   inset: '18%',
   border: '2px solid var(--qrbit-signal)',
   borderRadius: 'var(--qrbit-radius-md)',
+  boxShadow: '0 0 12px color-mix(in srgb, var(--qrbit-signal) 40%, transparent)',
   pointerEvents: 'none',
 }
 
@@ -476,7 +477,7 @@ export function QRScanner({
           )}
 
           <Button
-            className="qr-scanner__cancel"
+            className="qr-scanner__cancel tactile-btn"
             variant="default"
             size="md"
             w="100%"
