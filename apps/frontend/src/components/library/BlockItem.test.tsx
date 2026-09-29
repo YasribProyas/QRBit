@@ -104,6 +104,13 @@ const WITH_DIVIDER: FileBlock[] = [
 interface HarnessProps {
   blocks: FileBlock[]
   mode?: 'edit' | 'sender' | 'receiver'
+  /**
+   * Fed straight through to the row, because the status pill only renders for the two session
+   * modes -- and without this the whole `renderStatusPill` path was untested, which is how a
+   * sender could claim "Delivered" for 1,000 green tests.
+   */
+  transferStatus?: 'pending' | 'in_progress' | 'sent' | 'error'
+  transferProgress?: number
   onMove?(from: number, to: number): void
   onUpdate?(id: string, changes: Partial<FileBlock>): void
   onMoveUp?(index: number): void
@@ -130,6 +137,8 @@ function Harness(props: HarnessProps): ReactNode {
           index={index}
           totalBlocks={rows.length}
           mode={props.mode ?? 'edit'}
+          transferStatus={props.transferStatus}
+          transferProgress={props.transferProgress}
           onUpdate={(id, changes) => {
             // The same reducer the editor runs: the row is controlled, so what it announces
             // is what comes back down as props.
@@ -1048,3 +1057,41 @@ function buttonByLabelOrAbsent(label: string): HTMLButtonElement | null {
     ) ?? null
   )
 }
+
+describe('BlockItem — the status pill names which side it is reporting', () => {
+  const text = (): string => container?.textContent ?? ''
+
+  it('says "Sent" on the sender, where complete means handed to the data channel', () => {
+    mount({ blocks: [heading('b-1', 'Alpha')], mode: 'sender', transferStatus: 'sent' })
+
+    expect(text()).toContain('Sent')
+    // The over-claim this replaces: a sender reporting the PEER's action as its own fact.
+    expect(text()).not.toContain('Delivered')
+  })
+
+  it('says "Delivered" on the receiver, where complete arrives from the wire', () => {
+    mount({ blocks: [heading('b-1', 'Alpha')], mode: 'receiver', transferStatus: 'sent' })
+
+    expect(text()).toContain('Delivered')
+  })
+
+  it('says "Not sent" for a failed sender row', () => {
+    mount({ blocks: [heading('b-1', 'Alpha')], mode: 'sender', transferStatus: 'error' })
+
+    expect(text()).toContain('Not sent')
+    expect(text()).not.toContain('Not delivered')
+  })
+
+  it('says "Not delivered" for a failed receiver row', () => {
+    mount({ blocks: [heading('b-1', 'Alpha')], mode: 'receiver', transferStatus: 'error' })
+
+    expect(text()).toContain('Not delivered')
+  })
+
+  it('renders no status pill in the editor, where nothing was transferred', () => {
+    mount({ blocks: [heading('b-1', 'Alpha')], mode: 'edit', transferStatus: 'sent' })
+
+    expect(text()).not.toContain('Sent')
+    expect(text()).not.toContain('Delivered')
+  })
+})

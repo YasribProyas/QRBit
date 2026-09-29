@@ -384,6 +384,18 @@ export function BlockItem({
     if (mode !== 'sender' && mode !== 'receiver') return null
     if (transferStatus === undefined) return null
 
+    /*
+     * The two sides mean different things by the same state, and the word has to say which one
+     * happened. On the RECEIVER, `complete` arrives from the wire: the bytes came in, decrypted,
+     * and passed the frame check -- "Delivered" is literally true. On the SENDER, `complete` is
+     * what the send pump sets when it has handed the last frame to the data channel
+     * (`useSession.ts` even creates text items already marked `complete`), which is not evidence
+     * that the other device got anything. Claiming "Delivered" from the sender's seat reports a
+     * peer's action as our own fact -- the same over-claim D14's copy was corrected for.
+     */
+    const completedWord = mode === 'sender' ? 'Sent' : 'Delivered'
+    const failedWord = mode === 'sender' ? 'Not sent' : 'Not delivered'
+
     if (transferStatus === 'pending') {
       return (
         <Badge variant="light" color="gray" radius="full" leftSection={<IconClock size={12} aria-hidden="true" />}>
@@ -414,7 +426,7 @@ export function BlockItem({
           leftSection={<IconX size={12} aria-hidden="true" />}
           data-transfer-error="true"
         >
-          Not delivered
+          {failedWord}
         </Badge>
       )
     }
@@ -422,12 +434,13 @@ export function BlockItem({
     return (
       <Badge
         variant="light"
-        // Verified Green: "a completed transfer" (DESIGN.md, Status). Delivered is a completion.
+        // Verified Green: "a completed transfer" (DESIGN.md, Status). Completion on this side is
+        // the hand-off (sender) or the arrival (receiver) -- see `completedWord` above.
         color="success"
         radius="full"
         leftSection={<IconCircleCheck size={12} aria-hidden="true" />}
       >
-        Delivered
+        {completedWord}
       </Badge>
     )
   }
