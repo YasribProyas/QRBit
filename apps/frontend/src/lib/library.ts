@@ -22,6 +22,7 @@
 import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb'
 
 import type { FileItem, ImageItem, SessionItem } from '../store/sessionStore'
+import { moveIndex, needsRenumber, nextSortOrder, SORT_ORDER_GAP } from './reorder'
 
 // ---------------------------------------------------------------------------
 // Data model (PLAN.md §6.1)
@@ -84,6 +85,19 @@ export interface LibraryFile {
   createdAt: number
   updatedAt: number
   blocks: FileBlock[]
+  /**
+   * The file's position within its folder, for drag-reordering (ORCHESTRATION D16).
+   *
+   * Gap-based, not dense: `reorderFile` writes the midpoint of the two new neighbours
+   * (see `lib/reorder.ts`), so a reorder rewrites one record instead of the whole run.
+   * Library data, not session data — this is allowed to be persisted (AGENTS.md).
+   *
+   * Absent means "never ordered": such a file reads *after* every file in the folder that
+   * has one, which is what puts a newly created dossier at the end of its list, and what
+   * keeps dossiers written before this field existed in their old createdAt order. The
+   * first reorder of a folder materialises values for the whole run.
+   */
+  sortOrder?: number
 }
 
 export type LibraryItemType = 'text' | 'richtext' | 'image' | 'file' | 'locked'
@@ -1034,7 +1048,7 @@ export function parseFile(value: unknown): LibraryFile {
   const rawBlocks = value['blocks']
   const blocks: FileBlock[] = Array.isArray(rawBlocks) ? rawBlocks.map(parseBlock) : []
 
-  return {
+  const file: LibraryFile = {
     id,
     folderId,
     name,
@@ -1042,21 +1056,59 @@ export function parseFile(value: unknown): LibraryFile {
     updatedAt,
     blocks,
   }
+
+  // `sortOrder` is the one optional field a file may carry, and it is read strictly:
+  // anything that is neither absent/null nor a whole number the ordering arithmetic can
+  // survive is garbage, so it is rejected here rather than silently dropping the file to
+  // the end of the list. Negative positions are valid — a row dragged above a run that
+  // starts at 0 pushes it down, and the run is renumbered before it can overflow.
+  const rawSortOrder = value['sortOrder']
+  if (rawSortOrder !== undefined && rawSortOrder !== null) {
+    if (typeof rawSortOrder !== 'number' || !Number.isSafeInteger(rawSortOrder)) {
+      throw new Error(`library: a file needs an integer "sortOrder" (got ${JSON.stringify(rawSortOrder)})`)
+    }
+    file.sortOrder = rawSortOrder
+  }
+
+  return file
 }
 
-/** All files in the library, most recently updated first. */
+/**
+ * The one order files are ever read in: drag order first, then age, then id.
+ *
+ * `updatedAt` deliberately plays no part — a rename or an edit must not teleport a row the
+ * user put somewhere by hand. The tiebreak is total (`id` is unique), so the same set of
+ * records always reads back in the same sequence: nothing jitters between two renders.
+ *
+ * A file with no `sortOrder` sorts after every file that has one, then among the unscored
+ * by `createdAt` and `id` (see `LibraryFile.sortOrder`).
+ */
+function compareFiles(a: LibraryFile, b: LibraryFile): number {
+  const left = a.sortOrder
+  const right = b.sortOrder
+  if (left === undefined || right === undefined) {
+    if (left !== undefined) return -1
+    if (right !== undefined) return 1
+  } else if (left !== right) {
+    return left < right ? -1 : 1
+  }
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
+  return compareNames(a.id, b.id)
+}
+
+/** Every file in the library, in the order the library shows them (see `compareFiles`). */
 export async function getFiles(): Promise<LibraryFile[]> {
   const db = await getDatabase()
   const files = (await db.getAll('files')).map(parseFile)
-  return files.sort((a, b) => b.updatedAt - a.updatedAt || compareNames(a.name, b.name))
+  return files.sort(compareFiles)
 }
 
-/** The files directly in `folderId`, most recently updated first. */
+/** The files directly in `folderId`, in the order the library shows them (see `compareFiles`). */
 export async function getFilesInFolder(folderId: string): Promise<LibraryFile[]> {
   const target = requireId(folderId, 'getFilesInFolder')
   const db = await getDatabase()
   const files = (await db.getAllFromIndex('files', 'folderId', target)).map(parseFile)
-  return files.sort((a, b) => b.updatedAt - a.updatedAt || compareNames(a.name, b.name))
+  return files.sort(compareFiles)
 }
 
 /** `undefined` for an id with no file. */
@@ -1134,6 +1186,13 @@ export async function deleteFile(id: string): Promise<void> {
   await tx.done
 }
 
+/**
+ * Moves a file to another folder and places it at the END of that folder's order.
+ *
+ * Without a `sortOrder` write here, a moved file would keep the position it had in the
+ * folder it left and could land in the middle of the destination list — or, if its old
+ * neighbours were ordered and the destination was not, jump to its top.
+ */
 export async function moveFile(id: string, targetFolderId: string): Promise<void> {
   const fileId = requireId(id, 'moveFile')
   const target = requireId(targetFolderId, 'moveFile')
@@ -1144,8 +1203,139 @@ export async function moveFile(id: string, targetFolderId: string): Promise<void
   const existing = await store.get(fileId)
   if (existing === undefined) throw new Error(`library: no file with id "${fileId}"`)
 
-  await store.put(parseFile({ ...existing, folderId: target, updatedAt: Date.now() }))
+  const moved = parseFile({ ...existing, folderId: target, updatedAt: Date.now() })
+  const siblings = (await store.index('folderId').getAll(target))
+    .map(parseFile)
+    .filter((file) => file.id !== fileId)
+    .sort(compareFiles)
+
+  const end = endSortOrder(siblings)
+  if (end === null) {
+    // The destination run cannot accept an appended position (something in it is not
+    // ordered yet): rewrite it, with the moved file last.
+    for (const file of withRenumberedOrder([...siblings, moved])) {
+      await store.put(file)
+    }
+  } else {
+    await store.put({ ...moved, sortOrder: end })
+  }
   await tx.done
+}
+
+/**
+ * Moves a file to a new position inside the folder that already holds it
+ * (ORCHESTRATION D16.1/D16.3 — the persisted half of a drag or an arrow-key press).
+ *
+ * `targetIndex` is the index the file should end up at *in the list as it reads now*,
+ * including the file itself, which is the same convention `lib/reorder.ts` `moveIndex`
+ * uses and the same one `onMove(from, to)` hands the UI. Pass `folderId` when the caller
+ * knows which folder it was showing: it is checked against what is stored, because an
+ * index counted against another folder's list would move the wrong row.
+ *
+ * `updatedAt` is left alone: a reorder is not an edit, and a row must not look freshly
+ * modified because someone dragged its grip. In the common case one record is written —
+ * the midpoint of its new neighbours — and the rest of the folder is untouched. The whole
+ * sibling run is rewritten only when the gap has collapsed (`nextSortOrder` says
+ * `RENUMBER_REQUIRED`), when a sibling carries no `sortOrder` yet, or when the run would
+ * overflow the safe integer range; then every file in the folder gets a fresh
+ * `SORT_ORDER_GAP` spacing in one transaction.
+ */
+export async function reorderFile(id: string, targetIndex: number, folderId?: string): Promise<void> {
+  const fileId = requireId(id, 'reorderFile')
+  if (typeof targetIndex !== 'number' || !Number.isInteger(targetIndex) || targetIndex < 0) {
+    throw new Error(`library: reorderFile needs a non-negative integer index (got ${JSON.stringify(targetIndex)})`)
+  }
+  const folder = folderId === undefined ? undefined : requireId(folderId, 'reorderFile')
+
+  const db = await getDatabase()
+  const tx = db.transaction(['folders', 'items', 'files'], 'readwrite')
+  const store = tx.objectStore('files')
+  const existing = await store.get(fileId)
+  if (existing === undefined) throw new Error(`library: no file with id "${fileId}"`)
+
+  const moved = parseFile(existing)
+  if (folder !== undefined && moved.folderId !== folder) {
+    throw new Error(
+      `library: reorderFile was given folder "${folder}" but file "${fileId}" lives in "${moved.folderId}"`,
+    )
+  }
+  await requireFolder(tx, moved.folderId)
+
+  const ordered = (await store.index('folderId').getAll(moved.folderId)).map(parseFile).sort(compareFiles)
+  const from = ordered.findIndex((file) => file.id === fileId)
+  if (targetIndex >= ordered.length) {
+    throw new Error(
+      `library: reorderFile index ${targetIndex} is out of range for ${ordered.length} files in folder "${moved.folderId}"`,
+    )
+  }
+  if (from === targetIndex) {
+    // Dropped where it was: not an error, and not a write.
+    await tx.done
+    return
+  }
+
+  const siblings = ordered.filter((file) => file.id !== fileId)
+  const positions = sortOrdersOf(siblings)
+  if (positions !== null) {
+    const value = nextSortOrder(positions, targetIndex, moved.sortOrder)
+    if (!needsRenumber(value)) {
+      if (value !== moved.sortOrder) {
+        await store.put({ ...moved, sortOrder: value })
+      }
+      await tx.done
+      return
+    }
+  }
+
+  for (const file of withRenumberedOrder(moveIndex(ordered, from, targetIndex))) {
+    await store.put(file)
+  }
+  await tx.done
+}
+
+/**
+ * The position that lands a record after `siblings`, which must already be in display
+ * order, or `null` when the run has to be renumbered instead: a sibling carries no
+ * `sortOrder`, the values do not ascend (a hand-edited or half-migrated folder, which the
+ * read order cannot be trusted to reflect), or the appended gap would leave the safe
+ * integer range.
+ */
+function endSortOrder(siblings: readonly LibraryFile[]): number | null {
+  let previous: number | null = null
+  for (const sibling of siblings) {
+    const position = sibling.sortOrder
+    if (typeof position !== 'number') return null
+    if (previous !== null && position <= previous) return null
+    previous = position
+  }
+  if (previous === null) return SORT_ORDER_GAP
+  const appended = previous + SORT_ORDER_GAP
+  return Number.isSafeInteger(appended) ? appended : null
+}
+
+/**
+ * The run's `sortOrder` values in display order, or `null` when a file carries none.
+ *
+ * `null` means the gap rule has nothing to work between, so the caller renumbers.
+ */
+function sortOrdersOf(ordered: readonly LibraryFile[]): number[] | null {
+  const positions: number[] = []
+  for (const file of ordered) {
+    if (typeof file.sortOrder !== 'number') return null
+    positions.push(file.sortOrder)
+  }
+  return positions
+}
+
+/**
+ * The same records, renumbered to `SORT_ORDER_GAP` spacing in the order given.
+ *
+ * The fallback both `reorderFile` and `moveFile` take when a single gap-based write is not
+ * possible. It is a fresh full-gap run rather than a compaction, so the next hundred
+ * drags in that folder each cost one write again.
+ */
+function withRenumberedOrder(ordered: readonly LibraryFile[]): LibraryFile[] {
+  return ordered.map((file, index) => ({ ...file, sortOrder: (index + 1) * SORT_ORDER_GAP }))
 }
 
 // ---------------------------------------------------------------------------

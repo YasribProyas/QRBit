@@ -62,7 +62,18 @@ export interface LibraryState {
   saveFile(file: LibraryFile): Promise<void>
   updateFile(id: string, patch: Partial<LibraryFile>): Promise<void>
   deleteFile(id: string): Promise<void>
+  /** Moves a file to another folder, landing it at the END of that folder's order. */
   moveFile(id: string, targetFolderId: string): Promise<void>
+  /**
+   * Persists a reorder within the file's own folder (ORCHESTRATION D16.1/D16.3): the
+   * `onMove(from, to)` of a drag or an arrow-key press both end here.
+   *
+   * `targetIndex` is the row's index in the list as it currently reads — the same
+   * convention `moveIndex` and `useReorderDrag` use — and `folderId` is the folder the
+   * caller was showing, checked against what is stored. See `lib/library.ts` `reorderFile`.
+   */
+  reorderFile(id: string, targetIndex: number, folderId?: string): Promise<void>
+  /** The folder's files, in the order the library reads them (`sortOrder`, then age, then id). */
   filesIn(folderId: string): LibraryFile[]
 
   // Legacy/loose item CRUD
@@ -180,6 +191,11 @@ export const useLibraryStore = create<LibraryState>()((set, get) => {
     moveFile: (id, targetFolderId) =>
       writeThenSync(async () => {
         await library.moveFile(id, targetFolderId)
+      }),
+
+    reorderFile: (id, targetIndex, folderId) =>
+      writeThenSync(async () => {
+        await library.reorderFile(id, targetIndex, folderId)
       }),
 
     filesIn: (folderId) => get().files.filter((file) => file.folderId === folderId),

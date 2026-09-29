@@ -34,7 +34,9 @@ import {
   isItemCorrupt,
   moveFile,
   moveItem,
+  parseFile,
   renameFolder,
+  reorderFile,
   ROOT_FOLDER_ID,
   saveFile,
   saveFolder,
@@ -52,6 +54,7 @@ import {
   type LibraryLockedItem,
   type LibraryTextItem,
 } from './library'
+import { moveIndex, SORT_ORDER_GAP } from './reorder'
 import type {
   FileItem,
   ImageItem,
@@ -1332,6 +1335,371 @@ describe('files and blocks (dossier system)', () => {
     expect(folders.length).toBeGreaterThanOrEqual(3)
     expect(files.length).toBeGreaterThanOrEqual(4)
     expect(files.some((f) => f.name === 'Uni Credentials & Keys')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// File ordering — `sortOrder`, `reorderFile`, and where `moveFile` lands
+// (ORCHESTRATION D16.1 / D16.3)
+// ---------------------------------------------------------------------------
+
+/** A dossier with only the fields the ordering tests care about filled in. */
+function dossier(overrides: Partial<LibraryFile> = {}): LibraryFile {
+  return {
+    id: globalThis.crypto.randomUUID(),
+    folderId: ROOT_FOLDER_ID,
+    name: 'dossier',
+    createdAt: NOW,
+    updatedAt: NOW,
+    blocks: [{ id: 'b-1', type: 'heading', content: 'Heading' }],
+    ...overrides,
+  }
+}
+
+async function saveDossier(overrides: Partial<LibraryFile>): Promise<LibraryFile> {
+  const file = dossier(overrides)
+  await saveFile(file)
+  return file
+}
+
+/** The ids a folder reads back in, in read order — what every assertion below is about. */
+async function idsIn(folderId: string): Promise<string[]> {
+  return (await getFilesInFolder(folderId)).map((file) => file.id)
+}
+
+describe('file ordering (sortOrder, ORCHESTRATION D16)', () => {
+  it('reads files by sortOrder ascending', async () => {
+    const folder = await createFolder('Ordered', null)
+    await saveDossier({ id: 'c-3', folderId: folder.id, sortOrder: 3000 })
+    await saveDossier({ id: 'c-1', folderId: folder.id, sortOrder: 1000, createdAt: NOW + 5 })
+    await saveDossier({ id: 'c-2', folderId: folder.id, sortOrder: 2000, createdAt: NOW + 9 })
+
+    expect(await idsIn(folder.id)).toEqual(['c-1', 'c-2', 'c-3'])
+    expect((await getFiles()).map((file) => file.id)).toEqual(['c-1', 'c-2', 'c-3'])
+  })
+
+  it('reads an unordered library oldest-first, and the same way every time', async () => {
+    const folder = await createFolder('Legacy', null)
+    // Written out of order on purpose: insertion order is not the read order.
+    await saveDossier({ id: 'u-2', folderId: folder.id, createdAt: NOW + 10 })
+    await saveDossier({ id: 'u-1', folderId: folder.id, createdAt: NOW })
+    await saveDossier({ id: 'u-3', folderId: folder.id, createdAt: NOW + 20 })
+
+    const first = await idsIn(folder.id)
+    expect(first).toEqual(['u-1', 'u-2', 'u-3'])
+    expect(await idsIn(folder.id)).toEqual(first)
+    expect(await idsIn(folder.id)).toEqual(first)
+  })
+
+  it('splits an equal sortOrder by createdAt, then by id', async () => {
+    const folder = await createFolder('Tied', null)
+    await saveDossier({ id: 'x-2', folderId: folder.id, sortOrder: 1000, createdAt: NOW + 5 })
+    await saveDossier({ id: 'x-1', folderId: folder.id, sortOrder: 1000, createdAt: NOW + 5 })
+    await saveDossier({ id: 'x-3', folderId: folder.id, sortOrder: 1000, createdAt: NOW + 1 })
+
+    expect(await idsIn(folder.id)).toEqual(['x-3', 'x-1', 'x-2'])
+  })
+
+  it('reads a file with no sortOrder after every file that has one', async () => {
+    const folder = await createFolder('Mixed', null)
+    // Older than the ordered rows, and still last: an unscored row is "not ordered yet",
+    // which is what puts a freshly created dossier at the end of its folder.
+    await saveDossier({ id: 'v-old', folderId: folder.id, createdAt: NOW - 10_000 })
+    await saveDossier({ id: 'v-scored', folderId: folder.id, createdAt: NOW, sortOrder: 1000 })
+
+    expect(await idsIn(folder.id)).toEqual(['v-scored', 'v-old'])
+  })
+
+  it('never orders by updatedAt, so a rename cannot teleport a row', async () => {
+    const folder = await createFolder('Renamed', null)
+    await saveDossier({ id: 'q-1', folderId: folder.id, sortOrder: 1000 })
+    await saveDossier({ id: 'q-2', folderId: folder.id, sortOrder: 2000 })
+
+    await updateFile('q-2', { name: 'Edited last, still last' })
+    expect(await idsIn(folder.id)).toEqual(['q-1', 'q-2'])
+
+    await updateFile('q-1', { name: 'Edited first, still first' })
+    expect(await idsIn(folder.id)).toEqual(['q-1', 'q-2'])
+
+    // Same again with nothing ordered at all (the createdAt tiebreak, not an edit stamp).
+    const legacy = await createFolder('Legacy rename', null)
+    await saveDossier({ id: 'w-1', folderId: legacy.id, createdAt: NOW })
+    await saveDossier({ id: 'w-2', folderId: legacy.id, createdAt: NOW + 1 })
+    await updateFile('w-2', { name: 'Touched' })
+    expect(await idsIn(legacy.id)).toEqual(['w-1', 'w-2'])
+  })
+
+  it('validates sortOrder on the record and drops it when a whole file is rewritten without one', async () => {
+    const folder = await createFolder('Parse', null)
+
+    expect(parseFile(dossier({ folderId: folder.id, sortOrder: 7 })).sortOrder).toBe(7)
+    expect(parseFile(dossier({ folderId: folder.id })).sortOrder).toBeUndefined()
+    // A stored `null` (a hand-written record meaning "absent") is not garbage.
+    expect(parseFile({ ...dossier({ folderId: folder.id }), sortOrder: null }).sortOrder).toBeUndefined()
+
+    for (const bad of ['1000', Number.NaN, 1.5, Number.POSITIVE_INFINITY, -0.5, {}, true, []]) {
+      expect(() => parseFile({ ...dossier({ folderId: folder.id }), sortOrder: bad })).toThrow(
+        /library: a file needs an integer "sortOrder"/,
+      )
+    }
+
+    // Negative positions are storable: a row dragged above a run that starts at 0 pushes
+    // it down, and the run is only rewritten when that would leave the safe range.
+    expect(parseFile(dossier({ folderId: folder.id, sortOrder: -1000 })).sortOrder).toBe(-1000)
+
+    await saveDossier({ id: 'p-1', folderId: folder.id, sortOrder: 1500 })
+    expect((await getFile('p-1'))?.sortOrder).toBe(1500)
+
+    // A partial update keeps the position; a whole-file write is the caller's position.
+    await updateFile('p-1', { name: 'Renamed' })
+    expect((await getFile('p-1'))?.sortOrder).toBe(1500)
+    await updateFile('p-1', { sortOrder: 300 })
+    expect((await getFile('p-1'))?.sortOrder).toBe(300)
+    await saveFile(dossier({ id: 'p-1', folderId: folder.id }))
+    expect((await getFile('p-1'))?.sortOrder).toBeUndefined()
+  })
+
+  it('lands exactly where moveIndex says it should, in both directions', async () => {
+    const folder = await createFolder('Run', null)
+    let current = ['r-1', 'r-2', 'r-3', 'r-4']
+    for (const [position, id] of current.entries()) {
+      await saveDossier({ id, folderId: folder.id, sortOrder: (position + 1) * SORT_ORDER_GAP })
+    }
+
+    // `reorderFile`'s `targetIndex` and `moveIndex`'s `to` are the same number, which is
+    // the whole point of one shared convention: the index the row ends up at.
+    const moves: ReadonlyArray<readonly [string, number]> = [
+      ['r-1', 3],
+      ['r-4', 0],
+      ['r-2', 2],
+      ['r-3', 3],
+      ['r-1', 1],
+      ['r-2', 0],
+    ]
+    for (const [id, to] of moves) {
+      const from = current.indexOf(id)
+      await reorderFile(id, to, folder.id)
+      current = moveIndex(current, from, to)
+      expect(await idsIn(folder.id)).toEqual(current)
+    }
+  })
+
+  it('rewrites only the moved record once the folder is ordered', async () => {
+    const folder = await createFolder('Single write', null)
+    await saveDossier({ id: 'a', folderId: folder.id, sortOrder: 1000, updatedAt: 111 })
+    await saveDossier({ id: 'b', folderId: folder.id, sortOrder: 2000, updatedAt: 222 })
+    await saveDossier({ id: 'c', folderId: folder.id, sortOrder: 3000, updatedAt: 333 })
+
+    await reorderFile('c', 0, folder.id)
+
+    const after = await getFilesInFolder(folder.id)
+    expect(after.map((file) => file.id)).toEqual(['c', 'a', 'b'])
+    expect(after.map((file) => file.sortOrder)).toEqual([0, 1000, 2000])
+    // The two neighbours were neither rewritten nor restamped.
+    expect(after.find((file) => file.id === 'a')).toEqual(
+      expect.objectContaining({ sortOrder: 1000, updatedAt: 111 }),
+    )
+    expect(after.find((file) => file.id === 'b')).toEqual(
+      expect.objectContaining({ sortOrder: 2000, updatedAt: 222 }),
+    )
+  })
+
+  it('does not restamp updatedAt for a reorder', async () => {
+    const folder = await createFolder('Stamped', null)
+    await saveDossier({ id: 's-1', folderId: folder.id, sortOrder: 1000, updatedAt: 42 })
+    await saveDossier({ id: 's-2', folderId: folder.id, sortOrder: 2000, updatedAt: 43 })
+
+    await reorderFile('s-2', 0, folder.id)
+
+    const moved = await getFile('s-2')
+    expect(moved?.updatedAt).toBe(43)
+    expect(moved?.sortOrder).toBe(0)
+  })
+
+  it('gives the whole run a position on the first reorder of an unordered folder', async () => {
+    const folder = await createFolder('Legacy', null)
+    await saveDossier({ id: 'l-1', folderId: folder.id, createdAt: NOW })
+    await saveDossier({ id: 'l-2', folderId: folder.id, createdAt: NOW + 1 })
+    await saveDossier({ id: 'l-3', folderId: folder.id, createdAt: NOW + 2 })
+
+    await reorderFile('l-3', 0)
+
+    const after = await getFilesInFolder(folder.id)
+    expect(after.map((file) => file.id)).toEqual(['l-3', 'l-1', 'l-2'])
+    expect(after.map((file) => file.sortOrder)).toEqual([
+      SORT_ORDER_GAP,
+      2 * SORT_ORDER_GAP,
+      3 * SORT_ORDER_GAP,
+    ])
+  })
+
+  it('renumbers the run when the gap around the target index has collapsed', async () => {
+    const folder = await createFolder('Tight', null)
+    await saveDossier({ id: 't-1', folderId: folder.id, sortOrder: 1000, createdAt: NOW })
+    await saveDossier({ id: 't-2', folderId: folder.id, sortOrder: 1001, createdAt: NOW + 1 })
+    await saveDossier({ id: 't-3', folderId: folder.id, sortOrder: 1002, createdAt: NOW + 2 })
+
+    await reorderFile('t-1', 1)
+
+    const after = await getFilesInFolder(folder.id)
+    expect(after.map((file) => file.id)).toEqual(['t-2', 't-1', 't-3'])
+    expect(after.map((file) => file.sortOrder)).toEqual([1000, 2000, 3000])
+  })
+
+  it('repairs duplicated positions by renumbering rather than writing another duplicate', async () => {
+    const folder = await createFolder('Duplicated', null)
+    await saveDossier({ id: 'd-1', folderId: folder.id, sortOrder: 1000, createdAt: NOW })
+    await saveDossier({ id: 'd-2', folderId: folder.id, sortOrder: 1000, createdAt: NOW + 1 })
+    await saveDossier({ id: 'd-3', folderId: folder.id, sortOrder: 2000, createdAt: NOW + 2 })
+
+    // `d-3` cannot be inserted between two rows that share a position.
+    await reorderFile('d-3', 1, folder.id)
+
+    const after = await getFilesInFolder(folder.id)
+    expect(after.map((file) => file.id)).toEqual(['d-1', 'd-3', 'd-2'])
+    expect(after.map((file) => file.sortOrder)).toEqual([1000, 2000, 3000])
+  })
+
+  it('writes nothing when the row is dropped back where it was', async () => {
+    const folder = await createFolder('No-op', null)
+    await saveDossier({ id: 'n-1', folderId: folder.id, createdAt: NOW })
+    await saveDossier({ id: 'n-2', folderId: folder.id, createdAt: NOW + 1 })
+
+    await reorderFile('n-1', 0, folder.id)
+
+    const after = await getFilesInFolder(folder.id)
+    expect(after.map((file) => file.id)).toEqual(['n-1', 'n-2'])
+    // No materialised positions either: the folder is exactly as it was.
+    expect(after.map((file) => file.sortOrder)).toEqual([undefined, undefined])
+  })
+
+  it('keeps a file and its blocks intact through a renumber', async () => {
+    const folder = await createFolder('Blocks', null)
+    const other = await createFolder('Blocks other', null)
+    const blocks: FileBlock[] = [
+      { id: 'b-1', type: 'locked', label: 'Key', content: 'secret', isLocked: true, password: 'pass' },
+      { id: 'b-2', type: 'shortText', label: 'Host', value: '10.0.0.1' },
+      { id: 'b-3', type: 'divider' },
+    ]
+    await saveDossier({ id: 'k-1', folderId: folder.id, blocks, createdAt: NOW })
+    await saveDossier({ id: 'k-2', folderId: folder.id, createdAt: NOW + 1 })
+    await saveDossier({ id: 'k-3', folderId: other.id, createdAt: NOW + 2 })
+
+    const before = await getFile('k-1')
+    await reorderFile('k-1', 1, folder.id)
+
+    expect((await getFile('k-1'))?.blocks).toEqual(before?.blocks)
+    expect(await idsIn(folder.id)).toEqual(['k-2', 'k-1'])
+    // Another folder is untouched by this reorder.
+    expect(await idsIn(other.id)).toEqual(['k-3'])
+  })
+
+  it('reorders files in the virtual root folder', async () => {
+    await saveDossier({ id: 'root-1', folderId: ROOT_FOLDER_ID, sortOrder: 1000 })
+    await saveDossier({ id: 'root-2', folderId: ROOT_FOLDER_ID, sortOrder: 2000 })
+
+    await reorderFile('root-2', 0, ROOT_FOLDER_ID)
+
+    expect(await idsIn(ROOT_FOLDER_ID)).toEqual(['root-2', 'root-1'])
+  })
+
+  it('refuses an id, an index, or a folder it was not given', async () => {
+    const folder = await createFolder('Guard', null)
+    const other = await createFolder('Other', null)
+    await saveDossier({ id: 'g-1', folderId: folder.id })
+    await saveDossier({ id: 'g-2', folderId: folder.id })
+
+    await expect(reorderFile('g-1', 2, folder.id)).rejects.toThrow(/out of range for 2 files/)
+    await expect(reorderFile('g-1', 5)).rejects.toThrow(/out of range for 2 files/)
+    await expect(reorderFile('g-1', -1)).rejects.toThrow(/non-negative integer index/)
+    await expect(reorderFile('g-1', 1.5)).rejects.toThrow(/non-negative integer index/)
+    await expect(reorderFile('g-1', Number.NaN)).rejects.toThrow(/non-negative integer index/)
+    await expect(reorderFile('missing', 0)).rejects.toThrow(/library: no file with id "missing"/)
+    await expect(reorderFile('', 0)).rejects.toThrow(/library: reorderFile needs a non-empty id/)
+    await expect(reorderFile('g-1', 0, '  ')).rejects.toThrow(/non-empty id/)
+    await expect(reorderFile('g-1', 0, other.id)).rejects.toThrow(/was given folder/)
+
+    // A rejected reorder leaves the folder alone.
+    expect(await idsIn(folder.id)).toEqual(['g-1', 'g-2'])
+  })
+})
+
+describe('moveFile lands a file at the end (ORCHESTRATION D16)', () => {
+  it('appends to a folder that is already ordered, leaving its rows alone', async () => {
+    const source = await createFolder('From', null)
+    const destination = await createFolder('To', null)
+    await saveDossier({ id: 'f-1', folderId: destination.id, sortOrder: 1000, updatedAt: 111 })
+    await saveDossier({ id: 'f-2', folderId: destination.id, sortOrder: 2000, updatedAt: 222 })
+    await saveDossier({ id: 'f-3', folderId: source.id, sortOrder: 5000 })
+
+    await moveFile('f-3', destination.id)
+
+    const after = await getFilesInFolder(destination.id)
+    expect(after.map((file) => file.id)).toEqual(['f-1', 'f-2', 'f-3'])
+    expect(after.map((file) => file.sortOrder)).toEqual([1000, 2000, 3000])
+    expect(after.find((file) => file.id === 'f-1')).toEqual(
+      expect.objectContaining({ sortOrder: 1000, updatedAt: 111 }),
+    )
+    expect(await idsIn(source.id)).toEqual([])
+  })
+
+  it('renumbers an unordered destination so a moved file cannot jump to its top', async () => {
+    const source = await createFolder('From', null)
+    const destination = await createFolder('To', null)
+    await saveDossier({ id: 'h-1', folderId: destination.id, createdAt: NOW })
+    await saveDossier({ id: 'h-2', folderId: destination.id, createdAt: NOW + 1 })
+    // An ordered row moving into an unordered folder: its old position would sort it above
+    // both of them, so the destination run is materialised with the move last.
+    await saveDossier({ id: 'h-3', folderId: source.id, sortOrder: 1000 })
+
+    await moveFile('h-3', destination.id)
+
+    const after = await getFilesInFolder(destination.id)
+    expect(after.map((file) => file.id)).toEqual(['h-1', 'h-2', 'h-3'])
+    expect(after.map((file) => file.sortOrder)).toEqual([1000, 2000, 3000])
+  })
+
+  it('gives a file moved into an empty folder the first gap', async () => {
+    const source = await createFolder('From', null)
+    const destination = await createFolder('Empty', null)
+    await saveDossier({ id: 'z-1', folderId: source.id, sortOrder: 700 })
+
+    await moveFile('z-1', destination.id)
+
+    expect((await getFile('z-1'))?.sortOrder).toBe(SORT_ORDER_GAP)
+    expect(await idsIn(destination.id)).toEqual(['z-1'])
+  })
+
+  it('appends to the root, and leaves the rest of the source folder in order', async () => {
+    const source = await createFolder('From', null)
+    await saveDossier({ id: 'y-1', folderId: source.id, sortOrder: 1000, createdAt: NOW })
+    await saveDossier({ id: 'y-2', folderId: source.id, sortOrder: 2000, createdAt: NOW + 1 })
+    await saveDossier({ id: 'y-3', folderId: source.id, sortOrder: 3000, createdAt: NOW + 2 })
+    await saveDossier({ id: 'y-0', folderId: ROOT_FOLDER_ID, sortOrder: 1000 })
+
+    await moveFile('y-2', ROOT_FOLDER_ID)
+
+    expect(await idsIn(source.id)).toEqual(['y-1', 'y-3'])
+    expect(await idsIn(ROOT_FOLDER_ID)).toEqual(['y-0', 'y-2'])
+    expect((await getFile('y-2'))?.folderId).toBe(ROOT_FOLDER_ID)
+  })
+})
+
+describe('a new file has no sortOrder, which reads as the end of its folder', () => {
+  it('leaves the field absent and lands last', async () => {
+    const folder = await createFolder('Fresh', null)
+    await saveDossier({ id: 'n-first', folderId: folder.id, sortOrder: 1000 })
+    await saveDossier({ id: 'n-second', folderId: folder.id, sortOrder: 2000 })
+
+    const created = await createFile('Fresh dossier', folder.id)
+
+    expect(created.sortOrder).toBeUndefined()
+    expect(await idsIn(folder.id)).toEqual(['n-first', 'n-second', created.id])
+
+    // Once it is dragged, it gets a position like any other row.
+    await reorderFile(created.id, 0, folder.id)
+    expect((await getFile(created.id))?.sortOrder).toBeDefined()
+    expect(await idsIn(folder.id)).toEqual([created.id, 'n-first', 'n-second'])
   })
 })
 
