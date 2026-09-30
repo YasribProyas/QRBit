@@ -429,7 +429,7 @@ export function HomeView({
 
           {isMobileShell ? null : (
             <aside
-              className="home__library min-h-0 lg:col-start-1 lg:row-start-1 lg:overflow-y-auto"
+              className="home__library library-variant-bezel min-h-0 lg:col-start-1 lg:row-start-1 lg:overflow-y-auto"
               aria-label="Local library"
             >
               {library}
