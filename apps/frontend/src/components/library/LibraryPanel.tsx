@@ -172,14 +172,13 @@ const ROW_ICON_SIZE = 16
 const ROW_PADDING_X = '10px'
 
 /**
- * The leading inset of a contained row: the Panel's own row padding plus one
- * `--qrbit-space-xxl` step (32px) of ownership.
+ * The leading inset of a contained row: aligns the dossier grip handle directly under the
+ * folder grip handle (10px container padding + 34px chevron box + 8px gap = 52px).
  *
- * 32 rather than 8 or 12 because a container row carries two leading controls (the disclosure
- * chevron and the grip) and a dossier row carries one, so the indent has to pay for the extra
- * control before it starts being an indent at all — see the module comment for the columns.
+ * Sized with `--qrbit-space-xxl` (32px) + 20px (or `ROW_PADDING_X` 10px + 32px + 10px) = 52px,
+ * which maintains exact column alignment with the folder grip while preserving the token contract.
  */
-const CONTAINED_INSET_X = `calc(${ROW_PADDING_X} + var(--qrbit-space-xxl))`
+const CONTAINED_INSET_X = `calc(${ROW_PADDING_X} + var(--qrbit-space-xxl) + 10px)`
 
 /**
  * The box an `ActionIcon size="lg"` occupies: the nearest step to DESIGN.md's 32px icon-only
@@ -217,6 +216,7 @@ const PANEL_STYLE: CSSProperties = {
   background: 'var(--qrbit-raised)',
   border: '1px solid var(--qrbit-border)',
   borderRadius: 'var(--qrbit-radius-lg)',
+  overflow: 'clip',
 }
 
 /**
@@ -228,9 +228,17 @@ const PANEL_STYLE: CSSProperties = {
  * so the button only has to keep its own minimum.
  */
 const ROW_BUTTON_STYLES = {
-  root: { minWidth: 0, height: 'auto', minHeight: ROW_MIN_HEIGHT },
+  root: {
+    minWidth: 0,
+    height: 'auto',
+    minHeight: ROW_MIN_HEIGHT,
+    paddingBlock: '6px',
+    paddingInline: 'var(--qrbit-space-xs)',
+    transition: 'background-color 150ms ease',
+  },
   inner: { alignItems: 'center', width: '100%' },
-  label: { minWidth: 0, textAlign: 'left', whiteSpace: 'normal' },
+  label: { minWidth: 0, textAlign: 'left', whiteSpace: 'normal', width: '100%' },
+  section: { marginInlineEnd: 'var(--qrbit-space-sm)' },
 } as const
 
 /**
@@ -447,7 +455,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
             variant="default"
             size="sm"
             px="md"
-            leftSection={<IconPlus size={16} aria-hidden="true" />}
+            leftSection={<IconPlus size={16} stroke={1.6} aria-hidden="true" />}
             onClick={() => {
               setNewFolderOpen(true)
             }}
@@ -702,11 +710,12 @@ function FolderSection({
           aria-expanded={!collapsed}
           aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${name}`}
           onClick={onToggleCollapsed}
+          style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
         >
           {collapsed ? (
-            <IconChevronRight size={ROW_ICON_SIZE} aria-hidden="true" />
+            <IconChevronRight size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />
           ) : (
-            <IconChevronDown size={ROW_ICON_SIZE} aria-hidden="true" />
+            <IconChevronDown size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />
           )}
         </ActionIcon>
 
@@ -748,6 +757,7 @@ function FolderSection({
             size="xs"
             justify="flex-start"
             px="xs"
+            style={{ transition: 'background-color 150ms ease' }}
             // Root's explanation used to be a line of its own inside the section, which is the
             // void the owner pointed at. The sentence is still there, on the control it
             // describes, and the empty state says it out loud when it is the truth.
@@ -767,6 +777,7 @@ function FolderSection({
           size="lg"
           className="library-panel__new-file shrink-0"
           aria-label={`New file in ${name}`}
+          style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
           onClick={(event) => {
             // The row owns no click handler of its own — the chevron and the label are the two
             // controls that collapse a folder, and this plus sits in the same row after them — so
@@ -777,7 +788,7 @@ function FolderSection({
             actions.createFile(folderId)
           }}
         >
-          <IconPlus size={ROW_ICON_SIZE} aria-hidden="true" />
+          <IconPlus size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />
         </ActionIcon>
 
         {folder === null ? null : (
@@ -787,21 +798,21 @@ function FolderSection({
             items={[
               {
                 label: 'New file in this folder',
-                icon: <IconPlus size={ROW_ICON_SIZE} aria-hidden="true" />,
+                icon: <IconPlus size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />,
                 onSelect: () => {
                   actions.createFile(folderId)
                 },
               },
               {
                 label: 'Rename folder',
-                icon: <IconPencil size={ROW_ICON_SIZE} aria-hidden="true" />,
+                icon: <IconPencil size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />,
                 onSelect: startRename,
               },
               {
                 // The cascade in the entry itself, counted by `lib/folders.ts`: the confirmation
                 // is not the first place the user learns what else dies with the folder.
                 label: actions.folderDeleteLabel(folder),
-                icon: <IconTrash size={ROW_ICON_SIZE} aria-hidden="true" />,
+                icon: <IconTrash size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />,
                 danger: true,
                 divider: true,
                 onSelect: () => {
@@ -948,9 +959,10 @@ function ReorderGrip({
         ...handleProps.style,
         cursor: dragging ? 'grabbing' : 'grab',
         color: hovered ? 'var(--qrbit-ink)' : 'var(--qrbit-ink-muted)',
+        transition: 'color 150ms ease, background-color 150ms ease',
       }}
     >
-      <IconGripVertical size={16} aria-hidden="true" />
+      <IconGripVertical size={16} stroke={1.5} aria-hidden="true" />
     </ActionIcon>
   )
 }
@@ -1004,8 +1016,14 @@ function RowMenu({ label, items, className }: { label: string; items: RowMenuIte
   return (
     <Menu position="bottom-end" offset={4}>
       <Menu.Target>
-        <ActionIcon variant="subtle" size="lg" className={className} aria-label={label}>
-          <IconDotsVertical size={16} aria-hidden="true" />
+        <ActionIcon
+          variant="subtle"
+          size="lg"
+          className={className}
+          aria-label={label}
+          style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
+        >
+          <IconDotsVertical size={16} stroke={1.6} aria-hidden="true" />
         </ActionIcon>
       </Menu.Target>
 
@@ -1226,7 +1244,14 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
           justify="flex-start"
           px="xs"
           styles={ROW_BUTTON_STYLES}
-          leftSection={<IconFileText size={ROW_ICON_SIZE} aria-hidden="true" />}
+          leftSection={
+            <IconFileText
+              size={ROW_ICON_SIZE}
+              stroke={1.5}
+              style={{ color: 'var(--qrbit-ink-muted)', flexShrink: 0 }}
+              aria-hidden="true"
+            />
+          }
           aria-label={`Open ${file.name}`}
           onClick={() => {
             actions.openFile(file)
@@ -1261,8 +1286,18 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
                   // its automatic minimum size is 0, so on a long dossier name it *was* constrained
                   // and it *did* clip, to "ENCRYPT…". A status badge that reads "ENCRY" is worse
                   // than no badge: the word is the claim. The name carries that trade instead.
-                  style={{ flex: 'none', whiteSpace: 'nowrap' }}
-                  leftSection={<IconLock size={14} aria-hidden="true" />}
+                  style={{
+                    flex: 'none',
+                    whiteSpace: 'nowrap',
+                    fontFamily: 'var(--qrbit-font-mono)',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    letterSpacing: '0.06em',
+                    textTransform: 'uppercase',
+                    height: '20px',
+                    paddingInline: '7px',
+                  }}
+                  leftSection={<IconLock size={11} stroke={1.8} aria-hidden="true" />}
                 >
                   Encrypted
                 </Badge>
@@ -1281,19 +1316,19 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
         items={[
           {
             label: 'Rename dossier',
-            icon: <IconPencil size={16} aria-hidden="true" />,
+            icon: <IconPencil size={16} stroke={1.6} aria-hidden="true" />,
             onSelect: startRename,
           },
           {
             label: 'Move to folder',
-            icon: <IconArrowsMove size={16} aria-hidden="true" />,
+            icon: <IconArrowsMove size={16} stroke={1.6} aria-hidden="true" />,
             onSelect: () => {
               actions.askMoveFile(file)
             },
           },
           {
             label: 'Delete dossier',
-            icon: <IconTrash size={16} aria-hidden="true" />,
+            icon: <IconTrash size={16} stroke={1.6} aria-hidden="true" />,
             danger: true,
             divider: true,
             onSelect: () => {

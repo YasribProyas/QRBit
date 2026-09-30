@@ -154,7 +154,7 @@ export function AppHeader({
                 variant="default"
                 size="sm"
                 className={THUMB_TARGET}
-                leftSection={<IconLogout size={16} aria-hidden="true" />}
+                leftSection={<IconLogout size={16} stroke={1.6} aria-hidden="true" />}
                 onClick={() => {
                   session.abort()
                   navigate('/')
@@ -179,7 +179,7 @@ export function AppHeader({
             variant="subtle"
             color="gray"
             size="sm"
-            leftSection={<IconSettings size={16} aria-hidden="true" />}
+            leftSection={<IconSettings size={16} stroke={1.6} aria-hidden="true" />}
           >
             Settings
           </Button>

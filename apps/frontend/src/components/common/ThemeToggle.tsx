@@ -66,9 +66,10 @@ export function ThemeToggle(): ReactElement {
         variant="subtle"
         size="lg"
         aria-label={description}
+        style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
         onClick={() => setColorScheme(next)}
       >
-        <Icon size={18} aria-hidden />
+        <Icon size={18} stroke={1.6} aria-hidden />
       </ActionIcon>
     </Tooltip>
   )

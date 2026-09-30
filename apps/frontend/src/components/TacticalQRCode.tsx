@@ -397,11 +397,11 @@ export function TacticalQRCode({
                   onClick={handleCopy}
                 >
                   {copy === 'copied' ? (
-                    <IconCheck size={18} aria-hidden="true" />
+                    <IconCheck size={18} stroke={1.6} aria-hidden="true" />
                   ) : copy === 'blocked' ? (
-                    <IconAlertTriangle size={18} aria-hidden="true" />
+                    <IconAlertTriangle size={18} stroke={1.6} aria-hidden="true" />
                   ) : (
-                    <IconCopy size={18} aria-hidden="true" />
+                    <IconCopy size={18} stroke={1.6} aria-hidden="true" />
                   )}
                 </ActionIcon>
               ) : null}
@@ -415,7 +415,7 @@ export function TacticalQRCode({
                   aria-label="Start a new pairing code"
                   onClick={onRegenerate}
                 >
-                  <IconRefresh size={18} aria-hidden="true" />
+                  <IconRefresh size={18} stroke={1.6} aria-hidden="true" />
                 </ActionIcon>
               ) : null}
             </div>

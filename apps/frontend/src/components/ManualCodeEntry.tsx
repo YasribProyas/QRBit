@@ -141,7 +141,7 @@ function ManualCodeEntryForm({ onSubmit }: ManualCodeEntryProps) {
           size="md"
           color="signal"
           style={{ height: '48px', flexShrink: 0 }}
-          rightSection={<IconArrowRight size={18} aria-hidden="true" />}
+          rightSection={<IconArrowRight size={18} stroke={1.6} aria-hidden="true" />}
         >
           Join session
         </Button>
