@@ -94,6 +94,8 @@ import {
   IconChevronRight,
   IconDotsVertical,
   IconFileText,
+  IconFolder,
+  IconFolderOpen,
   IconGripVertical,
   IconLock,
   IconPencil,
@@ -691,34 +693,8 @@ function FolderSection({
     >
       <div className="library-panel__folder-row flex min-w-0 items-center" style={CONTAINER_ROW}>
         {/*
-          The container row, in its order: chevron, grip, label, count, plus, menu.
-
-          The chevron leads because it is the mark that says *this row has contents*, and it is
-          the only mark of that kind in the panel — no contained row has one — and it comes
-          before the grip because collapsing is the more common press. Where a real control is
-          absent (Root has no grip: its dossiers are ordered in several different folders, so one
-          index would be a lie) the column is still reserved, empty and `aria-hidden`, so every
-          container's label starts in the same column and Root reads as a sibling folder rather
-          than as another dossier. The old `IconFolder` on the label is gone: the chevron and the
-          "8 dossiers" count say what the glyph said, and each icon in this cluster costs the
-          label a control's width out of a 320px panel.
+          The container row: grip, folder button (with folder icon), collapse toggle beside it, count, plus, menu.
         */}
-        <ActionIcon
-          variant="subtle"
-          size="lg"
-          className="library-panel__folder-toggle shrink-0"
-          aria-expanded={!collapsed}
-          aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${name}`}
-          onClick={onToggleCollapsed}
-          style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
-        >
-          {collapsed ? (
-            <IconChevronRight size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />
-          ) : (
-            <IconChevronDown size={ROW_ICON_SIZE} stroke={1.6} aria-hidden="true" />
-          )}
-        </ActionIcon>
-
         {handleProps === null ? (
           <GripSlot className="library-panel__folder-rail" />
         ) : (
@@ -752,12 +728,29 @@ function FolderSection({
             // on the chevron, which is the control that owns the state. The container's label
             // wears the Title role (see the span): heavier than what it contains, by weight and
             // not by hue.
-            className="library-panel__folder-name min-w-0 flex-1"
+            className="library-panel__folder-name min-w-0"
             variant="subtle"
             size="xs"
             justify="flex-start"
             px="xs"
             style={{ transition: 'background-color 150ms ease' }}
+            leftSection={
+              collapsed ? (
+                <IconFolder
+                  size={ROW_ICON_SIZE}
+                  stroke={1.6}
+                  style={{ color: 'var(--qrbit-ink-muted)', flexShrink: 0 }}
+                  aria-hidden="true"
+                />
+              ) : (
+                <IconFolderOpen
+                  size={ROW_ICON_SIZE}
+                  stroke={1.6}
+                  style={{ color: 'var(--qrbit-ink-muted)', flexShrink: 0 }}
+                  aria-hidden="true"
+                />
+              )
+            }
             // Root's explanation used to be a line of its own inside the section, which is the
             // void the owner pointed at. The sentence is still there, on the control it
             // describes, and the empty state says it out loud when it is the truth.
@@ -768,7 +761,25 @@ function FolderSection({
           </Button>
         )}
 
-        <Text className="library-panel__folder-count qrbit-text-label shrink-0" c="dimmed">
+        {renaming ? null : (
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            className="library-panel__folder-toggle shrink-0"
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${name}`}
+            onClick={onToggleCollapsed}
+            style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
+          >
+            {collapsed ? (
+              <IconChevronRight size={14} stroke={1.6} aria-hidden="true" />
+            ) : (
+              <IconChevronDown size={14} stroke={1.6} aria-hidden="true" />
+            )}
+          </ActionIcon>
+        )}
+
+        <Text className="library-panel__folder-count qrbit-text-label shrink-0 ml-auto" c="dimmed">
           {plural(files.length, 'dossier')}
         </Text>
 

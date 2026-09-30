@@ -1349,24 +1349,23 @@ describe('LibraryPanel — container and contained', () => {
     return [...section.querySelectorAll<HTMLElement>('.library-panel__file')]
   }
 
-  it('leads a container row with the chevron, then the grip, then the label', async () => {
+  it('leads a container row with the grip, then the label with its folder icon, then the collapse toggle beside it', async () => {
     await seedTwoFolders()
 
     renderPanel()
 
     const vault = folderSection('Vault')
-    // Chevron first, then the drag handle, then the name: collapse is the more common press, and
-    // the disclosure is the only mark that says *this row has contents*.
-    expect(headerPosition(vault, 'library-panel__folder-toggle')).toBeGreaterThanOrEqual(0)
-    expect(headerPosition(vault, 'library-panel__folder-toggle')).toBeLessThan(
-      headerPosition(vault, 'library-panel__folder-grip'),
-    )
+    // Grip first, then the folder name button (with folder icon), then the collapse chevron beside the folder name.
+    expect(headerPosition(vault, 'library-panel__folder-grip')).toBeGreaterThanOrEqual(0)
     expect(headerPosition(vault, 'library-panel__folder-grip')).toBeLessThan(
       headerPosition(vault, 'library-panel__folder-name'),
     )
-    // The two controls that create and command the folder are at the right end, the plus before
-    // the menu, and the count between the label and them.
     expect(headerPosition(vault, 'library-panel__folder-name')).toBeLessThan(
+      headerPosition(vault, 'library-panel__folder-toggle'),
+    )
+    // The two controls that create and command the folder are at the right end, the plus before
+    // the menu, and the count between the label/toggle and them.
+    expect(headerPosition(vault, 'library-panel__folder-toggle')).toBeLessThan(
       headerPosition(vault, 'library-panel__new-file'),
     )
     expect(headerPosition(vault, 'library-panel__new-file')).toBeLessThan(
