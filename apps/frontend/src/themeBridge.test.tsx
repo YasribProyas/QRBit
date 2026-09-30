@@ -307,8 +307,8 @@ function labelColour(element: HTMLElement, varName: string, model: ReadonlyMap<s
 
 /** DESIGN.md's surfaces, per scheme: what a control sits on and what it sits in. */
 const SURFACE = {
-  light: { raised: '#ffffff', canvas: '#f4f6f9', sunken: '#eaeef4', selected: '#e8eefc' },
-  dark: { raised: '#171f2c', canvas: '#0e1420', sunken: '#0a1017', selected: '#1d2a3d' },
+  light: { raised: '#ffffff', canvas: '#e6e6e3', sunken: '#edece9', selected: '#f4f3f0' },
+  dark: { raised: '#161c28', canvas: '#0a0e17', sunken: '#0a0f18', selected: '#1d2a3d' },
 } as const
 
 const mounts: Root[] = []
@@ -671,7 +671,7 @@ describe('every slot a variant this app ships consumes resolves in both schemes'
       ['--mantine-color-default-hover', SURFACE.dark.selected, 'surface'],
       ['--mantine-color-text', '#e9eef6', 'text'],
       ['--mantine-color-default-color', '#e9eef6', 'text'],
-      ['--mantine-color-dimmed', '#b4c0d0', 'text'],
+      ['--mantine-color-dimmed', '#9ca3af', 'text'],
       ['--mantine-color-default-border', '#5f7391', 'line'],
     ]
     for (const [name, documented, kind] of expectations) {
@@ -754,7 +754,7 @@ describe('every slot a variant this app ships consumes resolves in both schemes'
       // decision (or a `vars={{ dropdown }}` on the component) rather than a bridge mapping, and
       // it is reported rather than hidden behind a threshold this value cannot pass.
       expect(hex(border.value), `${scheme} dropdown edge`).toBe(
-        scheme === 'light' ? SURFACE.light.selected : '#26313f',
+        scheme === 'light' ? SURFACE.light.selected : '#1f2937',
       )
       expect(
         contrast(border.value, 'var(--mantine-color-body)', model),

@@ -222,28 +222,28 @@ function statusRamp(base: string): MantineColorsTuple {
  */
 const darkRamp: MantineColorsTuple = [
   '#e9eef6', // ink
-  '#b4c0d0', // ink-secondary
-  '#8fa0b4', // ink-muted
+  '#9ca3af', // ink-secondary
+  '#6b7280', // ink-muted
   '#5f7391', // border-strong
-  '#26313f', // border
+  '#1f2937', // border
   '#1d2a3d', // selected
-  '#171f2c', // raised
-  '#0e1420', // canvas
-  '#0a1017', // sunken
+  '#161c28', // raised
+  '#0a0e17', // canvas
+  '#0a0f18', // sunken
   '#060a0f',
 ]
 
 /** The same argument for the light scheme: `gray-6` is `dimmed`, `gray-4` a control's border. */
 const grayRamp: MantineColorsTuple = [
-  '#f4f6f9', // canvas
-  '#eaeef4', // sunken
-  '#e8eefc', // selected
-  '#dde3eb', // border
-  '#78889c', // border-strong
-  '#5c6b82', // ink-muted
-  '#44546a', // ink-secondary
-  '#2a3648',
-  '#0b1220', // ink
+  '#e6e6e3', // canvas
+  '#edece9', // sunken
+  '#f4f3f0', // selected
+  '#e4e3df', // border
+  '#d6d5d0', // border-strong
+  '#8e8e89', // ink-muted
+  '#5c5c58', // ink-secondary
+  '#2a2a2a', // action
+  '#141414', // ink
   '#060a12',
 ]
 
@@ -342,6 +342,13 @@ function qrbitVariantColorResolver(input: VariantColorsResolverInput): VariantCo
     }
   }
 
+  if (input.variant === 'filled' && input.color === 'warning') {
+    return {
+      ...colors,
+      color: 'var(--mantine-color-black)',
+    }
+  }
+
   // The bare-name leak above, for every other variant.
   if (semantic !== undefined && colors.color === input.color) {
     return { ...colors, color: semantic }
@@ -358,9 +365,9 @@ export const theme = createTheme({
   primaryShade: 6,
   colors: {
     signal: signalRamp,
-    success: statusRamp('#0e7a5f'),
-    warning: statusRamp('#b45309'),
-    danger: statusRamp('#b4232a'),
+    success: statusRamp('#0e8a5f'),
+    warning: statusRamp('#e5a016'),
+    danger: statusRamp('#d93f3f'),
     locked: statusRamp('#9a3412'),
     dark: darkRamp,
     gray: grayRamp,

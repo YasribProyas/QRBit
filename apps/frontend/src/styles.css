@@ -65,19 +65,19 @@
   color-scheme: light;
 
   /* Surfaces */
-  --qrbit-canvas: #F4F6F9;
+  --qrbit-canvas: #E6E6E3;
   --qrbit-raised: #FFFFFF;
-  --qrbit-sunken: #EAEEF4;
-  --qrbit-selected: #E8EEFC;
+  --qrbit-sunken: #EDECE9;
+  --qrbit-selected: #F4F3F0;
 
   /* Ink */
-  --qrbit-ink: #0B1220;
-  --qrbit-ink-secondary: #44546A;
-  --qrbit-ink-muted: #5C6B82;
+  --qrbit-ink: #141414;
+  --qrbit-ink-secondary: #5C5C58;
+  --qrbit-ink-muted: #8E8E89;
 
   /* Lines: `border` divides, `border-strong` outlines a control the user must find */
-  --qrbit-border: #DDE3EB;
-  --qrbit-border-strong: #78889C;
+  --qrbit-border: #E4E3DF;
+  --qrbit-border-strong: #D6D5D0;
 
   /* One accent, and the tint that fills a selected row or a focus ring's background */
   --qrbit-signal: #1D4ED8;
@@ -85,9 +85,9 @@
   --qrbit-signal-subtle: #E8EEFC;
 
   /* Status. Each one means the word it is named after and nothing else. */
-  --qrbit-success: #0E7A5F;
-  --qrbit-warning: #B45309;
-  --qrbit-danger: #B4232A;
+  --qrbit-success: #0E8A5F;
+  --qrbit-warning: #E5A016;
+  --qrbit-danger: #D93F3F;
   --qrbit-locked: #9A3412;
 
   /* Elevation: two shadows for the whole product (DESIGN.md, "The Offset-and-Blur Rule") */
@@ -155,16 +155,16 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --qrbit-canvas: #0E1420;
-  --qrbit-raised: #171F2C;
-  --qrbit-sunken: #0A1017;
+  --qrbit-canvas: #0A0E17;
+  --qrbit-raised: #161C28;
+  --qrbit-sunken: #0A0F18;
   --qrbit-selected: #1D2A3D;
 
   --qrbit-ink: #E9EEF6;
-  --qrbit-ink-secondary: #B4C0D0;
-  --qrbit-ink-muted: #8FA0B4;
+  --qrbit-ink-secondary: #9CA3AF;
+  --qrbit-ink-muted: #6B7280;
 
-  --qrbit-border: #26313F;
+  --qrbit-border: #1F2937;
   --qrbit-border-strong: #5F7391;
 
   --qrbit-shadow-sheet: 0 0 0 1px var(--qrbit-border);

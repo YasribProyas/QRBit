@@ -1,33 +1,51 @@
 ---
-name: QRBit
+name: QRBit — Spark Pixel Admin
 description: "Scan a QR code. Files appear. No login. No cloud. No trace."
 colors:
   signal: "#1D4ED8"
   signal-deep: "#1E40AF"
   signal-subtle: "#E8EEFC"
-  success: "#0E7A5F"
-  warning: "#B45309"
-  danger: "#B4232A"
+  success: "#0E8A5F"
+  warning: "#E5A016"
+  danger: "#D93F3F"
   locked: "#9A3412"
-  light-canvas: "#F4F6F9"
+  light-canvas: "#E6E6E3"
   light-raised: "#FFFFFF"
-  light-sunken: "#EAEEF4"
-  light-selected: "#E8EEFC"
-  light-ink: "#0B1220"
-  light-ink-secondary: "#44546A"
-  light-ink-muted: "#5C6B82"
-  light-border: "#DDE3EB"
-  light-border-strong: "#78889C"
-  dark-canvas: "#0E1420"
-  dark-raised: "#171F2C"
-  dark-sunken: "#0A1017"
+  light-sunken: "#EDECE9"
+  light-selected: "#F4F3F0"
+  light-ink: "#141414"
+  light-ink-secondary: "#5C5C58"
+  light-ink-muted: "#8E8E89"
+  light-border: "#E4E3DF"
+  light-border-strong: "#D6D5D0"
+  dark-canvas: "#0A0E17"
+  dark-raised: "#161C28"
+  dark-sunken: "#0A0F18"
   dark-selected: "#1D2A3D"
   dark-ink: "#E9EEF6"
-  dark-ink-secondary: "#B4C0D0"
-  dark-ink-muted: "#8FA0B4"
-  dark-border: "#26313F"
+  dark-ink-secondary: "#9CA3AF"
+  dark-ink-muted: "#6B7280"
+  dark-border: "#1F2937"
   dark-border-strong: "#5F7391"
   dark-link: "#93B4FF"
+  canvas: "#E6E6E3"
+  surface: "#FFFFFF"
+  surface-muted: "#F4F3F0"
+  surface-sunken: "#EDECE9"
+  border: "#E4E3DF"
+  border-strong: "#D6D5D0"
+  divider: "#E9E8E4"
+  primary: "#2A2A2A"
+  action: "#2A2A2A"
+  action-hover: "#141414"
+  ink: "#111111"
+  neutral-status: "#8E8E89"
+  neutral-bg: "#F1F0ED"
+  chart-series-primary: "#111111"
+  chart-series-secondary: "#DCDCD8"
+  chart-cell-empty: "#F0F0EE"
+  chart-gridline: "#D9D8D3"
+  chart-crosshair: "#141414"
 typography:
   display:
     fontFamily: "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
@@ -198,15 +216,15 @@ Every value in the design system is declared in this document and in `styles.css
 
 | Token Name | Light Value | Dark Value | Role & Usage |
 |---|---|---|---|
-| `canvas` | `#F4F6F9` | `#0E1420` | Root background; calm neutral backdrop |
-| `raised` | `#FFFFFF` | `#171F2C` | Panels, cards, and modal surfaces |
-| `sunken` | `#EAEEF4` | `#0A1017` | Insets, code wells, chips, and tactile slots |
-| `selected` | `#E8EEFC` | `#1D2A3D` | Active selection, pressed fills, subtle highlights |
-| `ink` | `#0B1220` | `#E9EEF6` | Primary high-contrast text and glyphs (WCAG AAA) |
-| `ink-secondary`| `#44546A` | `#B4C0D0` | Subtitles, supporting copy, helper text |
-| `ink-muted` | `#5C6B82` | `#8FA0B4` | Placeholders, inactive icons, subtle dividers |
-| `border` | `#DDE3EB` | `#26313F` | Section hairlines, structural dividers |
-| `border-strong`| `#78889C` | `#5F7391` | High-visibility control boundaries, input outlines |
+| `canvas` | `#E6E6E3` | `#0A0E17` | Root background; warm neutral in light, deep tactical in dark |
+| `raised` | `#FFFFFF` | `#161C28` | Panels, cards, and modal surfaces |
+| `sunken` | `#EDECE9` | `#0A0F18` | Insets, code wells, chips, and tactile slots |
+| `selected` | `#F4F3F0` | `#1D2A3D` | Active selection, pressed fills, subtle highlights |
+| `ink` | `#141414` | `#E9EEF6` | Primary high-contrast text and glyphs (WCAG AAA) |
+| `ink-secondary`| `#5C5C58` | `#9CA3AF` | Subtitles, supporting copy, helper text |
+| `ink-muted` | `#8E8E89` | `#6B7280` | Placeholders, inactive icons, subtle dividers |
+| `border` | `#E4E3DF` | `#1F2937` | Section hairlines, structural dividers |
+| `border-strong`| `#D6D5D0` | `#5F7391` | High-visibility control boundaries, input outlines |
 
 ### Accent & Status Tokens (Scheme-Independent)
 
@@ -215,9 +233,9 @@ Every value in the design system is declared in this document and in `styles.css
 | `signal` | `#1D4ED8` | Primary affirmative action (Send, Confirm, Join, Save) |
 | `signal-deep`| `#1E40AF` | Pressed active state of `signal` |
 | `signal-subtle`| `#E8EEFC`| Inset plates, light badge fills, QR luminance field |
-| `success` | `#0E7A5F` | Completed transfer, matched safety phrase, saved state |
-| `warning` | `#B45309` | Unsaved draft, transfer in-flight, cap threshold |
-| `danger` | `#B4232A` | Fault, transfer failed, destructive deletion |
+| `success` | `#0E8A5F` | Completed transfer, matched safety phrase, saved state |
+| `warning` | `#E5A016` | Unsaved draft, transfer in-flight, cap threshold |
+| `danger` | `#D93F3F` | Fault, transfer failed, destructive deletion |
 | `locked` | `#9A3412` | Double-encrypted ciphertext vault item / locked block |
 | `dark-link` | `#93B4FF` | Hyperlink color on dark canvas for high legibility |
 
