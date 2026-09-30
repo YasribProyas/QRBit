@@ -117,7 +117,6 @@ function ManualCodeEntryForm({ onSubmit }: ManualCodeEntryProps) {
           // the row. A code field stretched across the whole panel reads as a display of a value,
           // not as a place to type one — which is the thing this row was accused of.
           className="min-w-0 flex-1"
-          maw="12rem"
           // The input element carries the class the pairing tests select, so the styling
           // hook and the test hook are the same node.
           classNames={{ input: 'manual-code__input' }}

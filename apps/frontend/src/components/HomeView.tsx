@@ -163,36 +163,6 @@ const THUMB_TARGET = 'max-md:min-h-11!'
  */
 const QR_SIZE = 220
 
-/**
- * One corner of the panel's reticle: 12px of 2px signal on the two edges that face the corner.
- *
- * The 2px inset is the whole point and it is not cosmetic. The panel's content starts at its `lg`
- * (16px) padding edge, so a mark that spans 2px→14px from the border stays inside the padding band
- * with 2px to spare and cannot intersect what it frames. The `space-sm` (8px) inset it replaces put
- * the arms at 8px→20px — 4px past the content edge — and measured in a browser at 1440×900 that made
- * four real collisions: the status sentence crossed the top-right mark, and the typed fallback's
- * hairline plus its `Join session` button crossed both bottom marks. DESIGN.md's "it is the
- * product's signature geometry, and it appears on exactly that panel" is a claim about the marks
- * framing the panel's content, so the arithmetic that keeps them out of the content belongs to the
- * mark. The lengths are DESIGN's spacing steps: `xxs` in, `md` along each edge, 2px wide.
- */
-function reticle(corner: 'top' | 'bottom', side: 'left' | 'right'): CSSProperties {
-  const edge = { position: 'absolute', pointerEvents: 'none' } as const
-  const inset = { [corner]: 'var(--qrbit-space-xxs)', [side]: 'var(--qrbit-space-xxs)' }
-  const width = side === 'left' ? 'borderLeftWidth' : 'borderRightWidth'
-  const height = corner === 'top' ? 'borderTopWidth' : 'borderBottomWidth'
-  return {
-    ...edge,
-    ...inset,
-    width: 'var(--qrbit-space-md)',
-    height: 'var(--qrbit-space-md)',
-    borderStyle: 'solid',
-    borderColor: 'var(--qrbit-signal)',
-    boxShadow: '0 0 5px color-mix(in srgb, var(--qrbit-signal) 35%, transparent)',
-    [width]: 2,
-    [height]: 2,
-  }
-}
 
 /**
  * The band the floating scan control is pinned inside.
@@ -366,7 +336,7 @@ export function HomeView({
             className="home__qr-panel flex min-h-0 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
             aria-label="Pair and send"
           >
-            <Stack gap="md" mx="auto" maw="min(100%, 28rem)" w="100%">
+            <Stack gap="md" w="100%" className="flex-1 min-h-0">
               <div className="home__pairing-heading">
                 <Title order={2} className="qrbit-text-headline">
                   Pair another device
@@ -403,14 +373,9 @@ export function HomeView({
 
               <Paper
                 p="lg"
-                className="home__pairing-panel relative flex flex-col items-center"
-                style={PANEL_STYLE}
+                className="home__pairing-panel relative flex flex-col flex-1 items-center justify-between"
+                style={{ ...PANEL_STYLE, minHeight: 0 }}
               >
-                <span aria-hidden="true" style={reticle('top', 'left')} />
-                <span aria-hidden="true" style={reticle('top', 'right')} />
-                <span aria-hidden="true" style={reticle('bottom', 'left')} />
-                <span aria-hidden="true" style={reticle('bottom', 'right')} />
-
                 {pairingCode !== null ? (
                   <div className="session-qr flex w-full flex-col items-center">
                     <Group
@@ -455,7 +420,7 @@ export function HomeView({
 
                 <div className="variant-pixel-divider" />
 
-                <div className="variant-sunken-dock w-full">
+                <div className="home__manual-fallback variant-sunken-dock w-full mt-auto">
                   <ManualCodeEntry onSubmit={onJoinCode} />
                 </div>
               </Paper>
