@@ -75,6 +75,7 @@ export function AppHeader({
     (session.phase === 'connecting' || session.phase === 'pairing' || session.phase === 'active')
 
   return (
+
     <header className="app-header" style={{ width: '100%' }}>
       <Group justify="space-between" gap="md" wrap="nowrap" align="center">
         {/* Left: the way home, and the library drawer when this screen has one. */}
@@ -185,6 +186,7 @@ export function AppHeader({
         </Group>
       </Group>
     </header>
+
   )
 }
 
