@@ -366,22 +366,7 @@ export function HomeView({
             className="home__qr-panel flex min-h-0 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
             aria-label="Pair and send"
           >
-            {/*
-              `mx="auto"` centres the block horizontally inside a wide column; it is deliberately
-              NOT vertically centred. The two panel headings are peers -- the owner asked for this
-              heading "like the Local Library heading" -- and peers share a top line. With
-              `m="auto"` the left heading sat at ~80px and this one at ~253px, a 173px offset that
-              read as a layout that had not finished, in both the empty state and a full library.
-              Leftover space now goes to the bottom of both columns equally, which is calm; an
-              unaligned pair of headings is not.
-            */}
             <Stack gap="md" mx="auto" maw="min(100%, 28rem)" w="100%">
-              {/*
-                The panel's title, at the same two roles as `Local Library` / `Dossiers stored
-                on this device`: Headline for the title, Body Secondary for the subline, and more
-                space above the title than below it. A headline, not an eyebrow — there is
-                deliberately nothing small and uppercase above it.
-              */}
               <div className="home__pairing-heading">
                 <Title order={2} className="qrbit-text-headline">
                   Pair another device
@@ -399,7 +384,6 @@ export function HomeView({
                   title="Could not reach the signaling server"
                 >
                   <Stack gap="sm">
-                    {/* The runtime's own words, verbatim, as data. */}
                     <Text className="qrbit-text-data" c="danger" w="min(100%, 40ch)">
                       {errorMessage}
                     </Text>
@@ -417,10 +401,6 @@ export function HomeView({
                 </Alert>
               ) : null}
 
-              {/*
-                The pairing panel. Raised, bordered, flat — never shadowed at rest (DESIGN.md,
-                "The Floating Only Rule"); the reticle corners are the only geometry it owns.
-              */}
               <Paper
                 p="lg"
                 className="home__pairing-panel relative flex flex-col items-center"
@@ -433,20 +413,6 @@ export function HomeView({
 
                 {pairingCode !== null ? (
                   <div className="session-qr flex w-full flex-col items-center">
-                    {/*
-                      Status dot + line. Both are statements the session has actually earned: a
-                      published code means this device is joined as host and waiting (D15). The
-                      dot is the only "liveness" mark here — it is a host marker, not a claim
-                      that a peer is connected, because nothing in the session says so yet.
-                    */}
-                    {/*
-                      `align="flex-start"` plus the dot's own top inset: the dot is a flex item,
-                      so a centred alignment against a two-line sentence parks it in the middle
-                      of the block — which is what read as "the dot sits alone on the left of the
-                      second line". The inset is written in `em` of the *text's* line box
-                      (1.5em, the Body role) less the dot's height (DESIGN's `space-sm`), halved,
-                      so the dot rides on the first line wherever the sentence breaks.
-                    */}
                     <Group
                       align="flex-start"
                       gap="sm"
@@ -460,10 +426,6 @@ export function HomeView({
                         className="home__status-dot animate-beacon-ping size-2 flex-none rounded-full"
                         style={{
                           background: 'var(--qrbit-signal)',
-                          // The dot never moves; the sentence gives way. `flex-none` is a utility
-                          // and utilities are not loaded in a component test, so the pair is
-                          // stated inline as well — the contract is that the dot is not a shrink
-                          // candidate and the text owns all of the wrapping.
                           flexShrink: 0,
                           marginTop: 'calc((1.5em - var(--qrbit-space-sm)) / 2)',
                         }}
@@ -491,16 +453,9 @@ export function HomeView({
                   </Group>
                 )}
 
-                {/* Manual pairing fallback, under a hairline (DESIGN.md's pairing panel). */}
-                <div
-                  className="home__manual-fallback"
-                  style={{
-                    width: '100%',
-                    marginTop: 'var(--qrbit-space-md)',
-                    paddingTop: 'var(--qrbit-space-md)',
-                    borderTop: '1px solid var(--qrbit-border)',
-                  }}
-                >
+                <div className="variant-pixel-divider" />
+
+                <div className="variant-sunken-dock w-full">
                   <ManualCodeEntry onSubmit={onJoinCode} />
                 </div>
               </Paper>

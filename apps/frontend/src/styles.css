@@ -2152,3 +2152,20 @@ button {
   border: 1px solid var(--qrbit-border-strong);
   box-shadow: var(--qrbit-shadow-sheet);
 }
+
+/* ------------------------------------------------------------- signature pairing panel -- */
+.variant-pixel-divider {
+  height: 3px;
+  background-image: repeating-linear-gradient(to right, var(--qrbit-ink) 0, var(--qrbit-ink) 5px, transparent 5px, transparent 9px);
+  opacity: 0.4;
+  width: 100%;
+  margin: var(--qrbit-space-md) 0;
+}
+
+.variant-sunken-dock {
+  background: var(--qrbit-sunken);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-md);
+  padding: var(--qrbit-space-md);
+}
+
