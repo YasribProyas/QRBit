@@ -2169,4 +2169,11 @@ button {
   padding: var(--qrbit-space-md);
 }
 
+.library-variant-bezel {
+  background: var(--qrbit-selected);
+  border: 1px solid var(--qrbit-border);
+  border-radius: var(--qrbit-radius-lg);
+  padding: var(--qrbit-space-xs);
+}
+
 
