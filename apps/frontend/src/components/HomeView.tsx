@@ -187,15 +187,8 @@ const FAB_STYLE = {
   right: 'var(--qrbit-space-xl)',
   bottom: 'calc(var(--qrbit-space-xl) + env(safe-area-inset-bottom, 0px))',
   zIndex: 'var(--mantine-z-index-app)',
-  // DESIGN.md's sheet shadow: this control is genuinely above the page, which is the only
-  // reason a resting surface gets one.
-  boxShadow: 'var(--qrbit-shadow-sheet)',
-  fontFamily: 'var(--qrbit-font-mono)',
-  letterSpacing: '0.04em',
-  fontWeight: 700,
-  textTransform: 'uppercase',
-  paddingLeft: 'var(--qrbit-space-xl)',
-  paddingRight: 'var(--qrbit-space-xl)',
+  paddingLeft: '20px',
+  paddingRight: '12px',
   height: '46px',
 } as const satisfies CSSProperties
 
@@ -428,19 +421,18 @@ export function HomeView({
         */}
         {(!editor || !isMobileShell) ? (
           <div className="home__fab-band" style={FAB_BAND_STYLE}>
-            <Button
+            <button
+              type="button"
               className="home__scan home__fab tactile-btn"
-              color="signal"
-              variant="filled"
-              size="md"
-              radius="xl"
-              rightSection={<IconQrcode size={19} stroke={1.8} aria-hidden="true" />}
               aria-label="Scan QRBit"
               style={FAB_STYLE}
               onClick={onOpenScanner}
             >
-              Scan QRBit
-            </Button>
+              <span className="home__scan-text">Scan QRBit</span>
+              <span className="home__scan-glyph">
+                <IconQrcode size={30} stroke={1.7} aria-hidden="true" />
+              </span>
+            </button>
           </div>
         ) : null}
 

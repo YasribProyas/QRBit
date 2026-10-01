@@ -774,16 +774,39 @@ button {
 }
 
 .home__fab {
-  border: 1px solid color-mix(in srgb, var(--qrbit-signal-subtle) 40%, transparent);
-  box-shadow: 0 4px 14px -2px color-mix(in srgb, var(--qrbit-signal) 50%, transparent);
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--qrbit-signal);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+  box-shadow: var(--qrbit-shadow-sheet);
+  cursor: pointer;
   transition: transform 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
 }
 .home__fab:hover {
-  transform: translateY(-2px) scale(1.04);
-  box-shadow: 0 6px 20px -2px color-mix(in srgb, var(--qrbit-signal) 65%, transparent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px -2px rgba(29, 78, 216, 0.6);
 }
 .home__fab:active {
-  transform: translateY(0) scale(0.96);
+  transform: translateY(0);
+}
+
+.home__scan-text {
+  font-family: var(--qrbit-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.home__scan-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
 }
 
 .home__pairing-panel {
