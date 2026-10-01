@@ -56,7 +56,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { toCanvas } from 'qrcode'
-import { ActionIcon, Group, Loader, Stack, Text } from '@mantine/core'
+import { ActionIcon, Group, Stack, Text } from '@mantine/core'
 import { IconAlertTriangle, IconCheck, IconCopy, IconRefresh } from '@tabler/icons-react'
 
 import { buildSessionUrl } from '../config'
@@ -326,7 +326,11 @@ export function TacticalQRCode({
             />
             {state === 'drawing' ? (
               <Group gap="xs" wrap="nowrap" role="status" aria-live="polite">
-                <Loader size="sm" />
+                <span
+                  aria-hidden="true"
+                  className="animate-beacon-ping size-2 flex-none rounded-full"
+                  style={{ background: 'var(--qrbit-signal)' }}
+                />
                 <Text className="qrbit-text-body-secondary" c="dimmed">
                   Drawing code…
                 </Text>

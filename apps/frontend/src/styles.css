@@ -805,6 +805,67 @@ button {
   box-shadow: inset 0 1px 3px rgba(11, 18, 32, 0.05), 0 0 16px -4px color-mix(in srgb, var(--qrbit-signal) 25%, transparent);
 }
 
+/* ------------------------------------------------- tactical qr skeleton -- */
+@keyframes tacticalQrShimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes tacticalQrPulse {
+  0%, 100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.tactical-qr-skeleton {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.tactical-qr-skeleton__pulse {
+  animation: tacticalQrPulse 1.8s var(--ease-in-out) infinite;
+}
+
+.tactical-qr-skeleton__shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 20%,
+    color-mix(in srgb, var(--qrbit-signal) 15%, transparent) 45%,
+    color-mix(in srgb, var(--qrbit-signal-subtle) 35%, transparent) 50%,
+    color-mix(in srgb, var(--qrbit-signal) 15%, transparent) 55%,
+    transparent 80%
+  );
+  animation: tacticalQrShimmer 2.4s var(--ease-out) infinite;
+  pointer-events: none;
+}
+
+.tactical-qr-skeleton__well {
+  transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+}
+.tactical-qr-skeleton__well:hover {
+  transform: scale(1.01);
+  box-shadow: inset 0 1px 3px rgba(11, 18, 32, 0.05), 0 0 16px -4px color-mix(in srgb, var(--qrbit-signal) 25%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tactical-qr-skeleton__pulse,
+  .tactical-qr-skeleton__shimmer {
+    animation: none !important;
+  }
+}
+
+
 .manual-code__input {
   transition: border-color 150ms var(--ease-out), box-shadow 150ms var(--ease-out);
 }
@@ -2265,8 +2326,11 @@ button {
   cursor: default;
 }
 
-/* ------------------------------------------------------------- library panel typography (Technical Dossier Mono) -- */
-.library-panel .qrbit-text-headline {
+/* ------------------------------------------------------------- Technical Dossier Typography (App-Wide Design Language) -- */
+.qrbit-text-headline,
+h2.qrbit-text-headline,
+.panel__title,
+.page__section-title {
   font-family: var(--qrbit-font-mono) !important;
   font-size: 16px !important;
   font-weight: 700 !important;
@@ -2274,12 +2338,47 @@ button {
   text-transform: uppercase !important;
 }
 
-.library-panel .qrbit-text-body-secondary {
+.settings__display-title,
+.page__title {
+  font-family: var(--qrbit-font-mono) !important;
+  font-size: 22px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+}
+
+.qrbit-text-title,
+h3.qrbit-text-title {
+  font-family: var(--qrbit-font-mono) !important;
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  text-transform: uppercase !important;
+}
+
+.home__pairing-heading .qrbit-text-body-secondary,
+.library-panel .qrbit-text-body-secondary,
+.settings__subtitle,
+.settings__section-desc,
+.session-qr__status-text {
   font-family: var(--qrbit-font-mono) !important;
   font-size: 11.5px !important;
   letter-spacing: 0.03em !important;
   color: var(--qrbit-ink-secondary) !important;
   text-transform: uppercase !important;
+}
+
+.settings-section-panel {
+  background: rgba(244, 243, 240, 0.7) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid var(--qrbit-border) !important;
+  border-radius: var(--qrbit-radius-lg) !important;
+  box-shadow: 0 2px 10px -2px rgba(11, 18, 32, 0.06) !important;
+}
+
+[data-theme='dark'] .settings-section-panel {
+  background: rgba(22, 28, 40, 0.7) !important;
 }
 
 .library-panel .library-panel__folder-label {

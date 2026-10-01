@@ -289,7 +289,7 @@ describe('HomeView — the pairing panel has a title (D17 item 1)', () => {
 
     const panel = one(element, '.home__pairing-panel', 'the pairing panel')
     expect(panel.style.background).toBe('transparent')
-    expect(panel.style.border).toBe('none')
+    expect(panel.style.borderStyle || panel.style.border).toBe('none')
     // …and no third shadow: a resting surface is flat ("The Floating Only Rule").
     expect(panel.style.boxShadow).toBe('none')
   })

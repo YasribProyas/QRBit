@@ -96,7 +96,6 @@ import {
   Button,
   Drawer,
   Group,
-  Loader,
   Paper,
   Stack,
   Text,
@@ -107,6 +106,7 @@ import { IconQrcode, IconRefresh, IconSettings } from '@tabler/icons-react'
 import { Link } from 'react-router-dom'
 
 import { TacticalQRCode } from './TacticalQRCode'
+import { TacticalQRSkeleton } from './TacticalQRSkeleton'
 import { ManualCodeEntry } from './ManualCodeEntry'
 import { ThemeToggle } from './common/ThemeToggle'
 import { WithMantine } from './common/WithMantine'
@@ -400,12 +400,7 @@ export function HomeView({
                     />
                   </div>
                 ) : (
-                  <Group py="xl" gap="xs" wrap="nowrap" role="status" aria-live="polite">
-                    <Loader size="sm" />
-                    <Text className="qrbit-text-body-secondary" c="dimmed">
-                      Connecting host session…
-                    </Text>
-                  </Group>
+                  <TacticalQRSkeleton size={QR_SIZE} statusText="Connecting host session…" />
                 )}
 
                 <div className="variant-pixel-divider max-w-sm my-4" />

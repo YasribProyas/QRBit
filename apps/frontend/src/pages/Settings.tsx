@@ -233,12 +233,12 @@ export function Settings(): ReactElement {
     <AppLayout
       showVault={false}
       mainContent={
-        <Stack gap="xl">
+        <Stack gap="xl" className="settings-page">
           <Stack gap="xs">
-            <Title order={1} className="qrbit-text-display">
+            <Title order={1} className="qrbit-text-display settings__display-title">
               Settings
             </Title>
-            <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
+            <Text className="qrbit-text-body-secondary settings__subtitle" c="dimmed" maw="68ch">
               What this device is holding, how the app looks, and how to get the library onto
               another one.
             </Text>
@@ -507,13 +507,13 @@ function Section({ heading, description, children }: SectionProps): ReactElement
     .replace(/^-+|-+$/g, '')}`
 
   return (
-    <Paper component="section" aria-labelledby={headingId} radius="lg" p="lg" styles={PANEL_STYLES}>
+    <Paper component="section" aria-labelledby={headingId} radius="lg" p="lg" className="settings-section-panel" styles={PANEL_STYLES}>
       <Stack gap="lg">
         <Stack gap="xs">
           <Title order={2} id={headingId} className="qrbit-text-headline">
             {heading}
           </Title>
-          <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
+          <Text className="qrbit-text-body-secondary settings__section-desc" c="dimmed" maw="68ch">
             {description}
           </Text>
         </Stack>
