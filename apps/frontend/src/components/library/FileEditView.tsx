@@ -31,8 +31,9 @@ import {
   IconAlertCircle,
   IconArrowLeft,
   IconCheck,
-  IconFolder,
   IconFolderPlus,
+  IconLock,
+  IconLockOpen,
   IconPencil,
   IconPlus,
   IconSend,
@@ -152,6 +153,7 @@ export function FileEditView({
   const [encryptConfirm, setEncryptConfirm] = useState('')
   const [encryptError, setEncryptError] = useState<string | null>(null)
   const [isEncrypting, setIsEncrypting] = useState(false)
+  const [draftIsLocked, setDraftIsLocked] = useState(Boolean(file.isLocked))
 
   if (seededFromId !== file.id) {
     // React's "adjust state when a prop changes" during render: no effect, no frame drawn
@@ -160,6 +162,7 @@ export function FileEditView({
     setDraftName(file.name)
     setDraftBlocks(file.blocks)
     setFolderId(file.folderId)
+    setDraftIsLocked(Boolean(file.isLocked))
     setIsDirty(false)
     setIsEditingTitle(false)
     setIsLeaveDialogOpen(false)
@@ -191,10 +194,16 @@ export function FileEditView({
    * back to the ordering the screen was opened with.
    */
   const draftFile = useCallback((): LibraryFile => {
-    const draft: LibraryFile = { ...file, name: draftName, blocks: draftBlocks, folderId }
+    const draft: LibraryFile = {
+      ...file,
+      name: draftName,
+      blocks: draftBlocks,
+      folderId,
+      isLocked: draftIsLocked,
+    }
     delete draft.sortOrder
     return draft
-  }, [file, draftName, draftBlocks, folderId])
+  }, [file, draftName, draftBlocks, folderId, draftIsLocked])
 
   // --- draft mutations -----------------------------------------------------
   const commitBlocks = useCallback((update: (current: FileBlock[]) => FileBlock[]): void => {
@@ -439,10 +448,10 @@ export function FileEditView({
   }
 
   // --- folder membership ---------------------------------------------------
-  const currentFolderName =
+  const folderDisplayName =
     folderId === ROOT_FOLDER_ID
-      ? 'Library root'
-      : (folders.find((folder) => folder.id === folderId)?.name ?? 'Unfiled')
+      ? 'ROOT'
+      : (folders.find((folder) => folder.id === folderId)?.name?.toUpperCase() ?? 'ROOT')
 
   const handleFolderChoice = async (choice: FolderPickerChoice): Promise<void> => {
     setIsMoving(true)
@@ -508,7 +517,10 @@ export function FileEditView({
           {/* Editable inline title — drafts only, never a write (D16.1) */}
           <div className="min-w-0 flex-1">
             {isEditingTitle ? (
-              <Group gap="xs" wrap="nowrap">
+              <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                <span className="qrbit-text-title shrink-0 font-medium" style={{ color: 'var(--qrbit-ink-muted)' }}>
+                  {folderDisplayName}/
+                </span>
                 <TextInput
                   size="sm"
                   type="text"
@@ -544,11 +556,6 @@ export function FileEditView({
                 </ActionIcon>
               </Group>
             ) : (
-              /*
-                The heading is text and the pencil is the control. It used to be a `<div
-                onClick>` wrapping the heading, which could not be focused or reached by keyboard
-                at all — the rename path had no accessible door.
-              */
               <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
                 <Text
                   span
@@ -556,6 +563,9 @@ export function FileEditView({
                   style={{ minWidth: 0 }}
                   truncate
                 >
+                  <span className="font-medium" style={{ color: 'var(--qrbit-ink-muted)' }}>
+                    {folderDisplayName}/
+                  </span>
                   {draftName}
                 </Text>
                 <ActionIcon
@@ -568,6 +578,42 @@ export function FileEditView({
                   style={{ flex: 'none' }}
                 >
                   <IconPencil size={14} aria-hidden="true" />
+                </ActionIcon>
+                <ActionIcon
+                  variant="subtle"
+                  size="md"
+                  c="dimmed"
+                  disabled={isMoving}
+                  onClick={() => {
+                    setMoveError(null)
+                    setIsFolderPickerOpen(true)
+                  }}
+                  title="Move to folder"
+                  aria-label="Move to folder"
+                  style={{ flex: 'none' }}
+                >
+                  <IconFolderPlus size={15} aria-hidden="true" />
+                </ActionIcon>
+                <ActionIcon
+                  variant="subtle"
+                  size="md"
+                  c={draftIsLocked ? 'locked' : 'dimmed'}
+                  onClick={() => {
+                    setDraftIsLocked((prev) => !prev)
+                    setIsDirty(true)
+                  }}
+                  title={draftIsLocked ? 'Unlock dossier' : 'Lock dossier'}
+                  aria-label={draftIsLocked ? 'Unlock dossier' : 'Lock dossier'}
+                  style={{
+                    flex: 'none',
+                    color: draftIsLocked ? 'var(--qrbit-locked)' : undefined,
+                  }}
+                >
+                  {draftIsLocked ? (
+                    <IconLock size={15} aria-hidden="true" />
+                  ) : (
+                    <IconLockOpen size={15} aria-hidden="true" />
+                  )}
                 </ActionIcon>
               </Group>
             )}
@@ -662,43 +708,7 @@ export function FileEditView({
           ) : null}
         </Group>
 
-        {/* Folder membership, and the way to change it */}
-        <Group
-          justify="space-between"
-          wrap="nowrap"
-          gap="sm"
-          px="md"
-          py="xs"
-          style={{
-            backgroundColor: 'var(--qrbit-sunken)',
-            border: '1px solid var(--qrbit-border)',
-            borderRadius: 'var(--qrbit-radius-sm)',
-          }}
-        >
-          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
-            <IconFolder size={16} aria-hidden="true" style={{ flex: 'none', color: 'var(--qrbit-ink-muted)' }} />
-            <Text span className="qrbit-text-label" c="dimmed" style={{ flex: 'none' }}>
-              Folder
-            </Text>
-            <Text span className="qrbit-text-body" style={{ minWidth: 0 }} truncate>
-              {currentFolderName}
-            </Text>
-          </Group>
-          <Button
-            variant="default"
-            size="sm"
-            disabled={isMoving}
-            loading={isMoving}
-            leftSection={<IconFolderPlus size={14} aria-hidden="true" />}
-            style={{ flex: 'none' }}
-            onClick={() => {
-              setMoveError(null)
-              setIsFolderPickerOpen(true)
-            }}
-          >
-            Move to folder…
-          </Button>
-        </Group>
+
         {moveError ? (
           <p className="qrbit-text-body-secondary px-3" style={{ color: 'var(--qrbit-danger)' }} role="status">
             {moveError}
