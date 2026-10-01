@@ -2210,27 +2210,33 @@ button {
   background: rgba(22, 28, 40, 0.85);
 }
 
-.library-panel__folder-row {
+.library-panel__folder-row,
+.library-panel__file {
   cursor: pointer;
   border-radius: var(--qrbit-radius-sm);
   transition: background-color 150ms ease;
 }
 
-.library-panel__folder-row:hover {
+.library-panel__folder-row:hover,
+.library-panel__file:hover {
   background-color: var(--qrbit-sunken);
 }
 
-/* When hovering over the folder name or chevron toggle, keep the row highlight seamless with no nested box */
+/* When hovering over the inner buttons/labels, keep the row highlight seamless with no nested box */
 .library-panel__folder-row:hover .library-panel__folder-name,
-.library-panel__folder-row:hover .library-panel__folder-toggle {
+.library-panel__folder-row:hover .library-panel__folder-toggle,
+.library-panel__file:hover .library-panel__file-open {
   background-color: transparent !important;
 }
 
-/* When hovering over utility controls (drag grip, + button, 3-dots menu), exclude the folder bar highlight */
+/* When hovering over utility controls (drag grip, + button, 3-dots menu), exclude the row bar highlight */
 .library-panel__folder-row:has(.library-panel__folder-grip:hover),
 .library-panel__folder-row:has(.library-panel__new-file:hover),
 .library-panel__folder-row:has(.library-panel__folder-menu-toggle:hover),
-.library-panel__folder-row:has(.library-panel__folder-menu-toggle[aria-expanded="true"]) {
+.library-panel__folder-row:has(.library-panel__folder-menu-toggle[aria-expanded="true"]),
+.library-panel__file:has(.library-panel__grip:hover),
+.library-panel__file:has(.library-panel__file-menu-toggle:hover),
+.library-panel__file:has(.library-panel__file-menu-toggle[aria-expanded="true"]) {
   background-color: transparent;
 }
 
@@ -2247,7 +2253,8 @@ button {
   border-radius: var(--qrbit-radius-sm);
 }
 
-.library-panel__folder-rail {
+.library-panel__folder-rail,
+.library-panel__file-rail {
   cursor: default;
 }
 

@@ -1252,9 +1252,22 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
 
   return (
     <li
-      className="library-panel__file flex min-w-0 items-center"
+      className="library-panel__file flex min-w-0 items-center cursor-pointer"
       data-reorder-item={handleProps === null ? undefined : ''}
       style={{ ...CONTAINED_ROW, ...rowStyle(false, dragOffset) }}
+      onClick={(event) => {
+        if (renaming) return
+        const target = event.target as HTMLElement | null
+        if (
+          target?.closest('.library-panel__grip') ||
+          target?.closest('.library-panel__file-rail') ||
+          target?.closest('.library-panel__file-menu-toggle') ||
+          target?.closest('.library-panel__file-rename')
+        ) {
+          return
+        }
+        actions.openFile(file)
+      }}
     >
       {handleProps === null ? (
         <GripSlot className="library-panel__file-rail" />
@@ -1310,7 +1323,8 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
             />
           }
           aria-label={`Open ${file.name}`}
-          onClick={() => {
+          onClick={(event) => {
+            event.stopPropagation()
             actions.openFile(file)
           }}
         >
