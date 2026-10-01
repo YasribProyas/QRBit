@@ -490,22 +490,19 @@ describe('HomeView — the link a peer opens (D17 items 2, 3)', () => {
 })
 
 describe('HomeView — the floating scan control (D17 item 4)', () => {
-  it('is icon-only, named, and outside the panel it belongs to', () => {
+  it('is labelled "Scan QRBit" on the left of the icon, and outside the panel it belongs to', () => {
     stubViewport(1280)
     const element = renderView()
 
     const scan = one(element, '.home__scan', 'the scan control')
-    expect(scan.getAttribute('aria-label')).toBe('Scan and send')
-    expect(scan.textContent).toBe('')
+    expect(scan.getAttribute('aria-label')).toBe('Scan QRBit')
+    expect(scan.textContent).toContain('Scan QRBit')
     expect(scan.closest('.home__pairing-panel')).toBe(null)
     expect(scan.closest('.session-qr')).toBe(null)
     expect(scan.closest('.manual-code')).toBe(null)
     expect(scan.closest('header')).toBe(null)
     // The in-panel button it replaced is gone, not hidden behind it.
     expect(element.querySelectorAll('.home__scan')).toHaveLength(1)
-    expect(element.textContent).not.toContain('Scan & Send')
-    // Signal fill, the one affirmative colour, and the glyph of the thing it reads.
-    expect(scan.style.getPropertyValue('--ai-bg')).toBe('var(--mantine-color-signal-filled)')
   })
 
   it('sits in a reserved band that is the shell’s last row, at every viewport width', () => {
@@ -529,16 +526,13 @@ describe('HomeView — the floating scan control (D17 item 4)', () => {
       if (!(panels instanceof HTMLElement)) throw new Error(`test bug: no panels row at ${width}px`)
       expect(panels.classList.contains('home__panels')).toBe(true)
 
-      // Pinned inside the height the band already claimed, and lifted by the safe area on a
-      // notched phone so it never sits on the home-indicator strip.
+      // Pinned inside the height the band already claimed, at bottom-right with equal spacing.
       expect(scan.style.position).toBe('absolute')
-      expect(scan.style.left).toBe('var(--qrbit-space-lg)')
+      expect(scan.style.right).toBe('var(--qrbit-space-xl)')
       expect(scan.style.bottom).toContain('env(safe-area-inset-bottom')
       expect(band.style.height).toContain('env(safe-area-inset-bottom')
       // Above the page, below the drawer and the modals (which are `modal`/`popover` level).
       expect(scan.style.zIndex).toBe('var(--mantine-z-index-app)')
-      // 44px target.
-      expect(scan.style.getPropertyValue('--ai-size')).toBe('var(--ai-size-xl)')
     }
   })
 
@@ -619,7 +613,7 @@ describe('HomeView — the floating scan control (D17 item 4)', () => {
     const element = renderView()
 
     expect(element.textContent).not.toContain('selected')
-    expect(one(element, '.home__scan', 'the scan control').children).toHaveLength(1)
+    expect(one(element, '.home__scan', 'the scan control').textContent).toContain('Scan QRBit')
   })
 })
 

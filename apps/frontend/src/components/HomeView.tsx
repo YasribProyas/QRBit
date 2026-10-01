@@ -89,7 +89,6 @@
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
-  ActionIcon,
   Alert,
   Badge,
   Burger,
@@ -177,40 +176,27 @@ const QR_SIZE = 220
 const FAB_BAND_STYLE = {
   flex: 'none',
   position: 'relative',
-  height: 'calc(var(--qrbit-space-huge) + var(--qrbit-space-lg) + env(safe-area-inset-bottom, 0px))',
+  height: 'calc(var(--qrbit-space-huge) + var(--qrbit-space-xl) + env(safe-area-inset-bottom, 0px))',
 } as const satisfies CSSProperties
 
 /**
- * The control, pinned inside its band's box — not to the viewport.
- *
- * It used to be `position: fixed`, which made its position somebody else's problem: a fixed box is
- * resolved against the nearest ancestor that establishes a containing block (any `transform`,
- * `filter`, `backdrop-filter`, `perspective`, `will-change` or `contain`) and against the
- * *viewport* otherwise — and the viewport is not the band. Measured in a browser at 1440×900 the
- * shell (`max-width: 84rem`, centred) put its band at x=64..1376 while the fixed control stayed at
- * x=16..60, and at 1600×1000 the band started at x=139 with the control still at x=16: 123px of the
- * shell's own left gutter, outside the reserved space, on the empty page. It is in the DOM and it
- * is painted (the same measurements hit-test a signal-blue 44px box there, and its ancestor chain
- * establishes no containing block, so the transform hypothesis is ruled out by measurement, not by
- * reading) — it is just not where the layout promises it, and at those widths it is off in a margin
- * rather than under the library column it belongs to.
- *
- * `absolute` inside the band takes the dependency away entirely: the band is the shell's last
- * flex row, the shell is `h-dvh overflow-hidden` and never scrolls (each column scrolls inside
- * itself), so a control pinned to the band is on screen exactly as reliably as one pinned to the
- * viewport — and it can never be laid out outside the room reserved for it. The band's bottom edge
- * is the shell's content edge, 16px above the viewport, so the control's own `xxs` inset keeps the
- * 16px-plus-2px it had as a fixed box, and the safe-area term lifts it inside the extra height the
- * band already claimed for a home indicator.
+ * The scan control, pinned inside its band's box at the bottom right with equal spacing.
  */
 const FAB_STYLE = {
   position: 'absolute',
-  left: 'var(--qrbit-space-lg)',
-  bottom: 'calc(var(--qrbit-space-xxs) + env(safe-area-inset-bottom, 0px))',
+  right: 'var(--qrbit-space-xl)',
+  bottom: 'calc(var(--qrbit-space-xl) + env(safe-area-inset-bottom, 0px))',
   zIndex: 'var(--mantine-z-index-app)',
   // DESIGN.md's sheet shadow: this control is genuinely above the page, which is the only
   // reason a resting surface gets one.
   boxShadow: 'var(--qrbit-shadow-sheet)',
+  fontFamily: 'var(--qrbit-font-mono)',
+  letterSpacing: '0.04em',
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  paddingLeft: 'var(--qrbit-space-xl)',
+  paddingRight: 'var(--qrbit-space-xl)',
+  height: '46px',
 } as const satisfies CSSProperties
 
 /**
@@ -435,25 +421,26 @@ export function HomeView({
         </div>
 
         {/*
-          The band, and the control pinned inside it at the viewport's bottom-left.
-          `home__scan` is the same class the pairing tests reach for; the label changed because
-          the control is icon-only now, and an icon-only control without a name is a mystery
-          meatball. The glyph is `IconQrcode` — the thing the camera is being asked to read.
+          The band, and the control pinned inside it at the viewport's bottom-right.
+          `home__scan` is the action pill to scan and join/send. It features the text
+          "Scan QRBit" on the left of the QR icon, with equal, generous spacing.
           When editing on a phone, hide the band so it does not obstruct the editor surface.
         */}
         {(!editor || !isMobileShell) ? (
           <div className="home__fab-band" style={FAB_BAND_STYLE}>
-            <ActionIcon
+            <Button
               className="home__scan home__fab tactile-btn"
               color="signal"
               variant="filled"
-              size="xl"
-              aria-label="Scan and send"
+              size="md"
+              radius="xl"
+              rightSection={<IconQrcode size={19} stroke={1.8} aria-hidden="true" />}
+              aria-label="Scan QRBit"
               style={FAB_STYLE}
               onClick={onOpenScanner}
             >
-              <IconQrcode size={22} stroke={1.6} aria-hidden="true" />
-            </ActionIcon>
+              Scan QRBit
+            </Button>
           </div>
         ) : null}
 
