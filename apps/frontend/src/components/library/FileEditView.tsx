@@ -314,6 +314,19 @@ export function FileEditView({
     return true
   }
 
+  // Debounced autosave: automatically saves changes after 600ms of inactivity
+  useEffect(() => {
+    if (!isDirty || !canPersist) return
+
+    const timer = setTimeout(() => {
+      persist(draftFile())
+    }, 600)
+
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [isDirty, canPersist, draftFile])
+
   const closeEncryptPrompt = (): void => {
     setEncryptPrompt(null)
     // The password exists only while the prompt is open (PLAN.md §6.2: it is stored nowhere),
@@ -407,6 +420,11 @@ export function FileEditView({
   }
 
   const handleBackRequest = (): void => {
+    if (isDirty && canPersist) {
+      persist(draftFile())
+      onBack()
+      return
+    }
     if (isDirty) {
       setIsLeaveDialogOpen(true)
       return
