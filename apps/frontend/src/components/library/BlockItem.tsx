@@ -39,8 +39,6 @@ import {
   IconClock,
   IconCopy,
   IconDownload,
-  IconEye,
-  IconEyeOff,
   IconFile,
   IconGripVertical,
   IconKey,
@@ -141,7 +139,6 @@ export function BlockItem({
   reorderOffset = 0,
 }: BlockItemProps) {
   const [passwordInput, setPasswordInput] = useState('')
-  const [isPreview, setIsPreview] = useState(false)
   /**
    * Ids for the two caption/field pairs in the payload area. `useId` because several rows are on
    * screen at once and an `htmlFor` that pointed at the wrong one would label the wrong field.
@@ -622,25 +619,6 @@ export function BlockItem({
 
   // HEADING BLOCK (edit mode custom layout matching prototype)
   if (mode === 'edit' && block.type === 'heading') {
-    const headingGrip =
-      isReorderRow && reorderHandleProps !== undefined ? (
-        <ActionIcon
-          variant="subtle"
-          size="xs"
-          c="dimmed"
-          title={reorderHandleProps['aria-label']}
-          style={{
-            width: 14,
-            minWidth: 14,
-            height: 24,
-            padding: 0,
-          }}
-          {...reorderHandleProps}
-        >
-          <IconGripVertical size={14} aria-hidden="true" />
-        </ActionIcon>
-      ) : null
-
     return (
       <div
         className="group relative transition-colors"
@@ -653,8 +631,8 @@ export function BlockItem({
         }}
       >
         {/* Row 1: Label on left, action icons on right */}
-        <div className="flex items-center justify-between gap-2 px-3 pt-1 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: headingGrip !== null ? '22px' : '0px' }}>
+        <div className="flex items-center justify-between gap-2 px-0 pt-1 pb-0">
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '36px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -665,33 +643,21 @@ export function BlockItem({
               styles={{
                 input: {
                   color: 'var(--qrbit-ink-muted)',
-                  fontSize: '11px',
+                  fontSize: '12px',
                   fontWeight: 500,
-                  lineHeight: '1.1',
+                  lineHeight: '1.2',
                   height: 'auto',
                   padding: 0,
-                  margin: 0,
                 },
               }}
             />
           </div>
 
           <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
-            <ActionIcon
-              variant="subtle"
-              size="xs"
-              c="dimmed"
-              onClick={() => setIsPreview((v) => !v)}
-              title={isPreview ? 'Edit heading' : 'Preview heading'}
-              aria-label={isPreview ? 'Edit heading' : 'Preview heading'}
-            >
-              {isPreview ? <IconEyeOff size={14} aria-hidden="true" /> : <IconEye size={14} aria-hidden="true" />}
-            </ActionIcon>
-
             {/* Lock / Unlock Toggle Button */}
             <ActionIcon
               variant="subtle"
-              size="xs"
+              size="md"
               c={isProtected ? 'locked' : isUnprotected ? 'danger' : 'dimmed'}
               aria-label={
                 isProtected
@@ -709,107 +675,90 @@ export function BlockItem({
               }}
             >
               {isProtected ? (
-                <IconLock size={14} aria-hidden="true" />
+                <IconLock size={16} aria-hidden="true" />
               ) : isUnprotected ? (
-                <IconShieldOff size={14} aria-hidden="true" />
+                <IconShieldOff size={16} aria-hidden="true" />
               ) : (
-                <IconShieldLock size={14} aria-hidden="true" />
+                <IconShieldLock size={16} aria-hidden="true" />
               )}
             </ActionIcon>
 
             <ActionIcon
               variant="subtle"
-              size="xs"
+              size="md"
               c="dimmed"
               onClick={() => onMoveUp?.(index)}
               disabled={index === 0}
               title={`Move ${block.type} block up`}
               aria-label={`Move ${block.type} block up`}
             >
-              <IconChevronUp size={14} aria-hidden="true" />
+              <IconChevronUp size={16} aria-hidden="true" />
             </ActionIcon>
 
             <ActionIcon
               variant="subtle"
-              size="xs"
+              size="md"
               c="dimmed"
               onClick={() => onMoveDown?.(index)}
               disabled={index === totalBlocks - 1}
               title={`Move ${block.type} block down`}
               aria-label={`Move ${block.type} block down`}
             >
-              <IconChevronDown size={14} aria-hidden="true" />
+              <IconChevronDown size={16} aria-hidden="true" />
             </ActionIcon>
 
             <ActionIcon
               variant="subtle"
-              size="xs"
+              size="md"
               c="dimmed"
               onClick={() => onDuplicate?.(block.id)}
               title="Duplicate block"
               aria-label="Duplicate block"
             >
-              <IconCopy size={14} aria-hidden="true" />
+              <IconCopy size={16} aria-hidden="true" />
             </ActionIcon>
 
             <ActionIcon
               variant="subtle"
-              size="xs"
+              size="md"
               c="dimmed"
               onClick={() => onDelete?.(block.id)}
               title="Delete block"
               aria-label="Delete block"
             >
-              <IconTrash size={14} aria-hidden="true" />
+              <IconTrash size={16} aria-hidden="true" />
             </ActionIcon>
           </Group>
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
-        <div className="flex items-center gap-2 px-3 pt-0 pb-1.5">
-          {headingGrip !== null ? <span className="shrink-0">{headingGrip}</span> : null}
+        <div className="flex items-center gap-2 px-0 pt-0 pb-1">
+          {grip !== null ? <span className="shrink-0">{grip}</span> : null}
           <div className="flex-1 min-w-0">
-            {canEditPayload && !isPreview ? (
-              <TextInput
-                variant="unstyled"
-                size="md"
-                type="text"
-                value={block.content || ''}
-                onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
-                placeholder="Enter section heading..."
-                aria-label="Section heading"
-                styles={{
-                  input: {
-                    font: 'var(--qrbit-text-display)',
-                    letterSpacing: 'var(--qrbit-text-display-tracking)',
-                    fontSize: '24px',
-                    fontWeight: 700,
-                    lineHeight: '1.15',
-                    padding: 0,
-                    margin: 0,
-                    height: 'auto',
-                    border: 'none',
-                    outline: 'none',
-                    boxShadow: 'none',
-                    color: 'var(--qrbit-ink)',
-                  },
-                }}
-              />
-            ) : (
-              <Text
-                style={{
+            <TextInput
+              variant="unstyled"
+              size="md"
+              type="text"
+              value={block.content || ''}
+              onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
+              placeholder="Enter section heading..."
+              aria-label="Section heading"
+              styles={{
+                input: {
                   font: 'var(--qrbit-text-display)',
                   letterSpacing: 'var(--qrbit-text-display-tracking)',
                   fontSize: '24px',
                   fontWeight: 700,
-                  lineHeight: '1.15',
-                  margin: 0,
+                  lineHeight: '1.2',
+                  padding: 0,
+                  height: 'auto',
+                  border: 'none',
+                  outline: 'none',
+                  boxShadow: 'none',
                   color: 'var(--qrbit-ink)',
-                }}
-              >
-                {block.content || 'Heading'}
-              </Text>
-            )}
+                },
+              }}
+            />
           </div>
         </div>
 
