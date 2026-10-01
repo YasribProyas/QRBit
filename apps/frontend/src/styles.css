@@ -2223,3 +2223,39 @@ button {
 .library-panel__folder-rail {
   cursor: default;
 }
+
+/* ------------------------------------------------------------- library panel typography (Technical Dossier Mono) -- */
+.library-panel .qrbit-text-headline {
+  font-family: var(--qrbit-font-mono) !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+}
+
+.library-panel .qrbit-text-body-secondary {
+  font-family: var(--qrbit-font-mono) !important;
+  font-size: 11.5px !important;
+  letter-spacing: 0.03em !important;
+  color: var(--qrbit-ink-secondary) !important;
+  text-transform: uppercase !important;
+}
+
+.library-panel .library-panel__folder-label {
+  font-family: var(--qrbit-font-mono) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  letter-spacing: -0.01em !important;
+}
+
+.library-panel .library-panel__file-name {
+  font-family: var(--qrbit-font-ui) !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+}
+
+.library-panel .library-panel__folder-count {
+  font-family: var(--qrbit-font-mono) !important;
+  font-size: 10.5px !important;
+  letter-spacing: 0.06em !important;
+}
