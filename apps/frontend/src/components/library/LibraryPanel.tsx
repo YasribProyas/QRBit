@@ -127,10 +127,13 @@ export interface LibraryPanelProps {
    * bucket, so a dossier can be made without picking a folder first.
    */
   onCreateFile(folderId: string): void
+  /** The id of the file currently open in the editor, if any. */
+  activeFileId?: string
 }
 
 /** The actions a row can ask for, bundled so a row takes one prop instead of seven. */
 interface PanelActions {
+  activeFileId?: string
   createFile(folderId: string): void
   openFile(file: LibraryFile): void
   renameFile(file: LibraryFile, name: string): void
@@ -268,7 +271,7 @@ function cascadeLabel(impact: DeleteImpact): string {
 // The panel
 // ---------------------------------------------------------------------------
 
-export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) {
+export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: LibraryPanelProps) {
   const folders = useLibraryStore((state) => state.folders)
   const files = useLibraryStore((state) => state.files)
   const items = useLibraryStore((state) => state.items)
@@ -298,6 +301,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile }: LibraryPanelProps) 
   )
 
   const actions: PanelActions = {
+    activeFileId,
     createFile: (folderId) => {
       onCreateFile(folderId)
     },
@@ -1254,6 +1258,7 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
     <li
       className="library-panel__file flex min-w-0 items-center cursor-pointer"
       data-reorder-item={handleProps === null ? undefined : ''}
+      data-active={actions.activeFileId === file.id ? 'true' : undefined}
       style={{ ...CONTAINED_ROW, ...rowStyle(false, dragOffset) }}
       onClick={(event) => {
         if (renaming) return

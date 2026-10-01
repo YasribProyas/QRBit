@@ -185,33 +185,6 @@ export function Home() {
     )
   }
 
-  // 2. FILE EDIT VIEW (Full Dossier Editor)
-  if (editingFile) {
-    return (
-      <>
-        {sendFailure !== null ? (
-          <p
-            className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700"
-            role="alert"
-            data-send-failure="true"
-          >
-            {sendFailure}
-          </p>
-        ) : null}
-        <FileEditView
-          file={editingFile}
-          onBack={() => setEditingFile(null)}
-          onSaveFile={handleSaveFile}
-          onSendFile={async (fileToSend) => {
-            // Only open the scanner once the dossier is actually on its way: a refused Send must
-            // not walk the user away from the editor that just told them what to fix.
-            if (await handleSendFileDirectly(fileToSend)) setScanning(true)
-          }}
-          folders={folders}
-        />
-      </>
-    )
-  }
 
   // 3. SAFETY PHRASE GATE
   if (session.phase === 'pairing' && session.safetyPhrase) {
@@ -265,7 +238,7 @@ export function Home() {
     )
   }
 
-  // 6. DEFAULT HOME VIEW — the pairing shell: library left (or in the drawer), QR right
+  // 6. DEFAULT HOME VIEW — the shell: library left (or in the drawer), QR or Editor right
   return (
     <HomeView
       pairingCode={session.sessionCode}
@@ -274,8 +247,35 @@ export function Home() {
       onJoinCode={(code) => handleScan(code)}
       roleLabel={session.roleLabel}
       errorMessage={session.errorMessage}
+      editor={
+        editingFile ? (
+          <>
+            {sendFailure !== null ? (
+              <p
+                className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700"
+                role="alert"
+                data-send-failure="true"
+              >
+                {sendFailure}
+              </p>
+            ) : null}
+            <FileEditView
+              file={editingFile}
+              onBack={() => setEditingFile(null)}
+              onSaveFile={handleSaveFile}
+              onSendFile={async (fileToSend) => {
+                // Only open the scanner once the dossier is actually on its way: a refused Send must
+                // not walk the user away from the editor that just told them what to fix.
+                if (await handleSendFileDirectly(fileToSend)) setScanning(true)
+              }}
+              folders={folders}
+            />
+          </>
+        ) : undefined
+      }
       library={
         <LibraryPanel
+          activeFileId={editingFile?.id}
           onSelectFile={(file) => setEditingFile(file)}
           onCreateFile={(folderId) => handleCreateNewFile(folderId)}
         />

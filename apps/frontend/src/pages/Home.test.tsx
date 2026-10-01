@@ -489,8 +489,10 @@ describe('Home — the library (PLAN.md §7, §16 Phase 5/6)', () => {
 
     click(buttonIn(rowFor(element, 'Portal password'), '.library-panel__file-open', 'row body'))
 
-    // Home swaps the whole shell for the editor, and the dossier it opened is this one.
-    expect(element.querySelector('.library-panel')).toBe(null)
+    // Home replaces the QR panel with the editor in the main section, and the dossier it opened is this one.
+    expect(element.querySelector('.library-panel')).not.toBe(null)
+    expect(element.querySelector('.home__qr-panel')).toBe(null)
+    expect(element.querySelector('.home__editor-panel')).not.toBe(null)
     expect(element.textContent).toContain('Portal password')
   })
 
@@ -614,8 +616,10 @@ describe('Home — the folder a dossier is created in (ORCHESTRATION D16)', () =
     expect(await getFilesInFolder('f-1')).toEqual([])
     expect(useLibraryStore.getState().error).toBe(null)
 
-    // And it is the editor that came up, not a second copy of the panel.
-    expect(element.querySelector('.library-panel')).toBe(null)
+    // And it is the editor that came up in the main section, replacing the QR panel.
+    expect(element.querySelector('.library-panel')).not.toBe(null)
+    expect(element.querySelector('.home__qr-panel')).toBe(null)
+    expect(element.querySelector('.home__editor-panel')).not.toBe(null)
   })
 
   it('creates an unfiled dossier from Root when there is no folder at all', async () => {

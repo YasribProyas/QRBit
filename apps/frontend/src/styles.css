@@ -2326,6 +2326,15 @@ button {
   cursor: default;
 }
 
+.library-panel__file[data-active="true"] {
+  background-color: var(--qrbit-signal-subtle) !important;
+}
+
+.library-panel__file[data-active="true"] .library-panel__file-name {
+  color: var(--qrbit-signal) !important;
+  font-weight: 600;
+}
+
 /* ------------------------------------------------------------- Technical Dossier Typography (App-Wide Design Language) -- */
 .qrbit-text-headline,
 h2.qrbit-text-headline,
@@ -2432,6 +2441,12 @@ h3.qrbit-text-title {
 .home__panels {
   gap: 0 !important;
   height: 100%;
+}
+
+.home__editor-panel {
+  background-color: var(--qrbit-canvas);
+  height: 100%;
+  overflow-y: auto;
 }
 
 .home__library.library-variant-acrylic-monolith,

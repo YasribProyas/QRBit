@@ -458,7 +458,7 @@ export function FileEditView({
   }
 
   return (
-    <div className="flex flex-col min-h-full pb-14">
+    <div className="file-edit-view flex flex-col min-h-full pb-14">
       {/*
         Top bar: back, editable title, dirty state, Save, Send. It is sticky, so it is one of the
         few surfaces that genuinely floats above the page — it takes the sheet shadow rather than
@@ -472,9 +472,11 @@ export function FileEditView({
         used on.
       */}
       <header
-        className="px-4 py-3 flex items-center justify-between flex-wrap sticky top-0 z-30 gap-2"
+        className="file-edit-view__header px-4 py-3 flex items-center justify-between flex-wrap sticky top-0 z-30 gap-2"
         style={{
           backgroundColor: 'var(--qrbit-raised)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
           borderBottom: '1px solid var(--qrbit-border)',
           boxShadow: 'var(--qrbit-shadow-lift)',
         }}

@@ -132,6 +132,8 @@ export interface HomeViewProps {
   roleLabel?: string
   /** A signaling failure to surface, or `null`. */
   errorMessage?: string | null
+  /** Optional dossier editor to render in the main section in place of the QR panel */
+  editor?: ReactNode
 }
 
 /**
@@ -240,6 +242,7 @@ export function HomeView({
   library,
   roleLabel,
   errorMessage,
+  editor,
 }: HomeViewProps) {
   const isMobileShell = useMediaQuery(MOBILE_SHELL_QUERY, undefined, {
     getInitialValueInEffect: false,
@@ -315,102 +318,111 @@ export function HomeView({
         </header>
 
         {/*
-          Two columns at ≥ 64rem. The session panel is FIRST in the DOM, because that is the
-          order a phone reads (the QR, and nothing else — the library is a tap away in the
+          Two columns at ≥ 64rem. The session or editor panel is FIRST in the DOM, because that is the
+          order a phone reads (the QR or active editor, and nothing else — the library is a tap away in the
           header); `lg:col-start-*` puts the library in the left column on a desktop without
           reordering the markup for anybody else.
         */}
         <div className="home__panels grid min-h-0 flex-1 grid-cols-1 gap-0 lg:grid-cols-[minmax(20rem,25rem)_minmax(0,1fr)] lg:overflow-hidden">
-          <section
-            className="home__qr-panel flex min-h-0 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
-            aria-label="Pair and send"
-          >
-            <div className="home__pairing-heading w-full px-8 pt-8 pb-2 text-left">
-              <Title order={2} className="qrbit-text-headline">
-                Pair another device
-              </Title>
-              <Text className="qrbit-text-body-secondary" mt="xs">
-                Another device joins by scanning the code or typing it in
-              </Text>
-            </div>
-
-            {errorMessage ? (
-              <div className="w-full max-w-md mx-auto px-6 py-2">
-                <Alert
-                  color="danger"
-                  className="home__qr-error"
-                  role="alert"
-                  title="Could not reach the signaling server"
-                >
-                  <Stack gap="sm">
-                    <Text className="qrbit-text-data" c="danger" w="min(100%, 40ch)">
-                      {errorMessage}
-                    </Text>
-                    <div>
-                      <Button
-                        size="sm"
-                        color="danger"
-                        leftSection={<IconRefresh size={16} stroke={1.6} aria-hidden="true" />}
-                        onClick={onRegeneratePairing}
-                      >
-                        Try again
-                      </Button>
-                    </div>
-                  </Stack>
-                </Alert>
+          {editor ? (
+            <section
+              className="home__editor-panel flex min-h-0 flex-1 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
+              aria-label="Dossier editor"
+            >
+              {editor}
+            </section>
+          ) : (
+            <section
+              className="home__qr-panel flex min-h-0 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
+              aria-label="Pair and send"
+            >
+              <div className="home__pairing-heading w-full px-8 pt-8 pb-2 text-left">
+                <Title order={2} className="qrbit-text-headline">
+                  Pair another device
+                </Title>
+                <Text className="qrbit-text-body-secondary" mt="xs">
+                  Another device joins by scanning the code or typing it in
+                </Text>
               </div>
-            ) : null}
 
-            <div className="flex-1 flex flex-col items-center justify-center w-full px-6 py-4 min-h-0">
-              <div
-                className="home__pairing-panel relative flex flex-col items-center justify-center w-full max-w-md mx-auto"
-                style={{ ...PANEL_STYLE, minHeight: 0 }}
-              >
-                {pairingCode !== null ? (
-                  <div className="session-qr flex w-full flex-col items-center justify-center">
-                    <Group
-                      align="flex-start"
-                      gap="sm"
-                      wrap="nowrap"
-                      justify="center"
-                      mb="md"
-                      className="session-qr__status"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="home__status-dot animate-beacon-ping size-2 flex-none rounded-full"
-                        style={{
-                          background: 'var(--qrbit-signal)',
-                          flexShrink: 0,
-                          marginTop: 'calc((1.5em - var(--qrbit-space-sm)) / 2)',
-                        }}
-                      />
-                      <Text
-                        className="qrbit-text-body session-qr__status-text"
-                        style={{ minWidth: 0 }}
-                      >
-                        {roleLabel || 'Host — waiting for another device to scan your code'}
+              {errorMessage ? (
+                <div className="w-full max-w-md mx-auto px-6 py-2">
+                  <Alert
+                    color="danger"
+                    className="home__qr-error"
+                    role="alert"
+                    title="Could not reach the signaling server"
+                  >
+                    <Stack gap="sm">
+                      <Text className="qrbit-text-data" c="danger" w="min(100%, 40ch)">
+                        {errorMessage}
                       </Text>
-                    </Group>
+                      <div>
+                        <Button
+                          size="sm"
+                          color="danger"
+                          leftSection={<IconRefresh size={16} stroke={1.6} aria-hidden="true" />}
+                          onClick={onRegeneratePairing}
+                        >
+                          Try again
+                        </Button>
+                      </div>
+                    </Stack>
+                  </Alert>
+                </div>
+              ) : null}
 
-                    <TacticalQRCode
-                      pairingCode={pairingCode}
-                      onRegenerate={onRegeneratePairing}
-                      size={QR_SIZE}
-                    />
+              <div className="flex-1 flex flex-col items-center justify-center w-full px-6 py-4 min-h-0">
+                <div
+                  className="home__pairing-panel relative flex flex-col items-center justify-center w-full max-w-md mx-auto"
+                  style={{ ...PANEL_STYLE, minHeight: 0 }}
+                >
+                  {pairingCode !== null ? (
+                    <div className="session-qr flex w-full flex-col items-center justify-center">
+                      <Group
+                        align="flex-start"
+                        gap="sm"
+                        wrap="nowrap"
+                        justify="center"
+                        mb="md"
+                        className="session-qr__status"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="home__status-dot animate-beacon-ping size-2 flex-none rounded-full"
+                          style={{
+                            background: 'var(--qrbit-signal)',
+                            flexShrink: 0,
+                            marginTop: 'calc((1.5em - var(--qrbit-space-sm)) / 2)',
+                          }}
+                        />
+                        <Text
+                          className="qrbit-text-body session-qr__status-text"
+                          style={{ minWidth: 0 }}
+                        >
+                          {roleLabel || 'Host — waiting for another device to scan your code'}
+                        </Text>
+                      </Group>
+
+                      <TacticalQRCode
+                        pairingCode={pairingCode}
+                        onRegenerate={onRegeneratePairing}
+                        size={QR_SIZE}
+                      />
+                    </div>
+                  ) : (
+                    <TacticalQRSkeleton size={QR_SIZE} statusText="Connecting host session…" />
+                  )}
+
+                  <div className="variant-pixel-divider max-w-sm my-4" />
+
+                  <div className="home__manual-fallback variant-sunken-dock w-full max-w-sm">
+                    <ManualCodeEntry onSubmit={onJoinCode} />
                   </div>
-                ) : (
-                  <TacticalQRSkeleton size={QR_SIZE} statusText="Connecting host session…" />
-                )}
-
-                <div className="variant-pixel-divider max-w-sm my-4" />
-
-                <div className="home__manual-fallback variant-sunken-dock w-full max-w-sm">
-                  <ManualCodeEntry onSubmit={onJoinCode} />
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           {isMobileShell ? null : (
             <aside
@@ -427,20 +439,23 @@ export function HomeView({
           `home__scan` is the same class the pairing tests reach for; the label changed because
           the control is icon-only now, and an icon-only control without a name is a mystery
           meatball. The glyph is `IconQrcode` — the thing the camera is being asked to read.
+          When editing on a phone, hide the band so it does not obstruct the editor surface.
         */}
-        <div className="home__fab-band" style={FAB_BAND_STYLE}>
-          <ActionIcon
-            className="home__scan home__fab tactile-btn"
-            color="signal"
-            variant="filled"
-            size="xl"
-            aria-label="Scan and send"
-            style={FAB_STYLE}
-            onClick={onOpenScanner}
-          >
-            <IconQrcode size={22} stroke={1.6} aria-hidden="true" />
-          </ActionIcon>
-        </div>
+        {(!editor || !isMobileShell) ? (
+          <div className="home__fab-band" style={FAB_BAND_STYLE}>
+            <ActionIcon
+              className="home__scan home__fab tactile-btn"
+              color="signal"
+              variant="filled"
+              size="xl"
+              aria-label="Scan and send"
+              style={FAB_STYLE}
+              onClick={onOpenScanner}
+            >
+              <IconQrcode size={22} stroke={1.6} aria-hidden="true" />
+            </ActionIcon>
+          </div>
+        ) : null}
 
         {/*
           The phone's library, and only the phone's: at desktop widths there is no Drawer in

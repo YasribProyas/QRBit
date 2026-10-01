@@ -651,4 +651,27 @@ describe('HomeView — the hooks the pairing tests reach for', () => {
     expect(error.querySelector('button')?.textContent).toBe('Try again')
     expect(element.querySelector('.manual-code')).not.toBe(null)
   })
+
+  it('replaces the QR panel with the editor in the main section when editor is provided', () => {
+    stubViewport(1280)
+    const element = renderView({
+      editor: <div className="test-file-editor">Dossier Editor Content</div>,
+    })
+
+    expect(element.querySelector('.test-file-editor')).not.toBe(null)
+    expect(element.querySelector('.home__editor-panel')).not.toBe(null)
+    expect(element.querySelector('.home__qr-panel')).toBe(null)
+    expect(element.querySelector('.home__pairing-panel')).toBe(null)
+    expect(element.querySelector('.home__library')).not.toBe(null)
+  })
+
+  it('hides the mobile FAB band when editing a dossier on a phone', () => {
+    stubViewport(320)
+    const element = renderView({
+      editor: <div className="test-file-editor">Dossier Editor Content</div>,
+    })
+
+    expect(element.querySelector('.test-file-editor')).not.toBe(null)
+    expect(element.querySelector('.home__scan')).toBe(null)
+  })
 })
