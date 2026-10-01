@@ -2596,7 +2596,7 @@ input.qrbit-shorttext-input {
   font-family: var(--qrbit-font-ui) !important;
   font-size: 15px !important;
   font-weight: 400 !important;
-  line-height: 1.4 !important;
+  line-height: 1.2 !important;
   color: var(--qrbit-ink) !important;
   height: auto !important;
   min-height: unset !important;
@@ -2614,7 +2614,7 @@ input.qrbit-shorttext-input::placeholder {
   font-family: var(--qrbit-font-ui) !important;
   font-size: 15px !important;
   font-weight: 400 !important;
-  line-height: 1.4 !important;
+  line-height: 1.2 !important;
   color: var(--qrbit-ink-muted) !important;
   opacity: 0.5 !important;
 }

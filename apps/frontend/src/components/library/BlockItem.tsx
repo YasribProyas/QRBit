@@ -733,7 +733,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-4px' }}>
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
@@ -807,7 +807,7 @@ export function BlockItem({
                   color: 'var(--qrbit-ink-muted)',
                   fontSize: '12px',
                   fontWeight: 500,
-                  lineHeight: '1.2',
+                  lineHeight: '1.1',
                   height: 'auto',
                   padding: 0,
                   margin: 0,
@@ -895,7 +895,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Normal text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-4px' }}>
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
@@ -921,7 +921,7 @@ export function BlockItem({
                     fontFamily: 'var(--qrbit-font-ui)',
                     fontSize: '15px',
                     fontWeight: 400,
-                    lineHeight: '1.4',
+                    lineHeight: '1.2',
                     color: 'var(--qrbit-ink)',
                     padding: 0,
                     margin: 0,
