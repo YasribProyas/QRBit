@@ -2568,16 +2568,56 @@ input.qrbit-heading-input::placeholder {
   opacity: 0.35 !important;
 }
 
-.qrbit-heading-block .mantine-ActionIcon-root {
+.qrbit-heading-block .mantine-ActionIcon-root,
+.qrbit-shorttext-block .mantine-ActionIcon-root {
   color: var(--qrbit-ink-muted) !important;
+  transition: color 150ms ease, background-color 150ms ease;
 }
 
-.qrbit-heading-block .mantine-ActionIcon-root[data-status="locked"] {
+.qrbit-heading-block .mantine-ActionIcon-root:hover:not([data-disabled]),
+.qrbit-shorttext-block .mantine-ActionIcon-root:hover:not([data-disabled]) {
+  color: var(--qrbit-ink-secondary) !important;
+}
+
+.qrbit-heading-block .mantine-ActionIcon-root[data-status="locked"],
+.qrbit-shorttext-block .mantine-ActionIcon-root[data-status="locked"] {
   color: var(--qrbit-locked) !important;
 }
 
-.qrbit-heading-block .mantine-ActionIcon-root[data-status="danger"] {
+.qrbit-heading-block .mantine-ActionIcon-root[data-status="danger"],
+.qrbit-shorttext-block .mantine-ActionIcon-root[data-status="danger"] {
   color: var(--qrbit-danger) !important;
 }
+
+/* ----------------------------------------- library short text block (edit) -- */
+.qrbit-shorttext-input,
+.qrbit-shorttext-input input,
+input.qrbit-shorttext-input {
+  font-family: var(--qrbit-font-ui) !important;
+  font-size: 15px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  color: var(--qrbit-ink) !important;
+  height: auto !important;
+  min-height: unset !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.qrbit-shorttext-input::placeholder,
+.qrbit-shorttext-input input::placeholder,
+input.qrbit-shorttext-input::placeholder {
+  font-family: var(--qrbit-font-ui) !important;
+  font-size: 15px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  color: var(--qrbit-ink-muted) !important;
+  opacity: 0.5 !important;
+}
+
 
 
