@@ -28,5 +28,23 @@
   <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-  </body>
+  <!-- impeccable-live-start -->
+<script>
+  (function() {
+    if (typeof crypto !== 'undefined' && !crypto.randomUUID) {
+      crypto.randomUUID = function() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+          var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+          return v.toString(16);
+        });
+      };
+    }
+    var host = window.location.hostname || 'localhost';
+    var script = document.createElement('script');
+    script.src = 'http://' + host + ':8400/live.js?token=507a0778-f29c-4323-955e-74cf8880ea5f';
+    document.body.appendChild(script);
+  })();
+</script>
+<!-- impeccable-live-end -->
+</body>
 </html>
