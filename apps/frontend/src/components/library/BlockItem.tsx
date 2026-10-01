@@ -946,6 +946,158 @@ export function BlockItem({
     )
   }
 
+  // RICH TEXT BLOCK (edit mode custom layout matching prototype)
+  if (mode === 'edit' && block.type === 'richText') {
+    return (
+      <div
+        className="group relative transition-colors qrbit-richtext-block"
+        data-reorder-item={isReorderRow ? '' : undefined}
+        data-block-protected={isProtected ? 'true' : undefined}
+        data-block-unprotected={isUnprotected ? 'true' : undefined}
+        style={{
+          backgroundColor: 'transparent',
+          ...dragStyle,
+        }}
+      >
+        {/* Row 1: Label on left, action icons on right */}
+        <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+            <TextInput
+              variant="unstyled"
+              size="xs"
+              value={block.label || ''}
+              onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
+              placeholder="Label"
+              aria-label="Block label"
+              styles={{
+                input: {
+                  color: 'var(--qrbit-ink-muted)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  lineHeight: '1.1',
+                  height: 'auto',
+                  padding: 0,
+                  margin: 0,
+                  border: 'none',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  background: 'transparent',
+                },
+              }}
+            />
+          </div>
+
+          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+            {/* Lock / Unlock Toggle Button */}
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
+              aria-label={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              title={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              onClick={() => {
+                setLockError(null)
+                setShowLockConfigModal(true)
+              }}
+            >
+              {isProtected ? (
+                <IconLock size={16} aria-hidden="true" />
+              ) : isUnprotected ? (
+                <IconShieldOff size={16} aria-hidden="true" />
+              ) : (
+                <IconShieldLock size={16} aria-hidden="true" />
+              )}
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveUp?.(index)}
+              disabled={index === 0}
+              title={`Move ${block.type} block up`}
+              aria-label={`Move ${block.type} block up`}
+            >
+              <IconChevronUp size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveDown?.(index)}
+              disabled={index === totalBlocks - 1}
+              title={`Move ${block.type} block down`}
+              aria-label={`Move ${block.type} block down`}
+            >
+              <IconChevronDown size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDuplicate?.(block.id)}
+              title="Duplicate block"
+              aria-label="Duplicate block"
+            >
+              <IconCopy size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDelete?.(block.id)}
+              title="Delete block"
+              aria-label="Delete block"
+            >
+              <IconTrash size={16} aria-hidden="true" />
+            </ActionIcon>
+          </Group>
+        </div>
+
+        {/* Row 2: Grip on left, Textarea on right */}
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
+          {grip !== null ? (
+            <span className="shrink-0">
+              {isValidElement(grip)
+                ? cloneElement(grip as ReactElement<{ c?: string }>, {
+                    c: undefined,
+                  })
+                : grip}
+            </span>
+          ) : null}
+          <div className="flex-1 min-w-0">
+            {canEditPayload ? (
+              <Textarea
+                autosize
+                minRows={2}
+                maxRows={16}
+                className="qrbit-richtext-textarea"
+                classNames={{ input: 'qrbit-richtext-textarea' }}
+                value={block.content || ''}
+                onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
+                placeholder="Rich Text"
+                aria-label="Rich text content"
+              />
+            ) : (
+              <Text span className="qrbit-text-body-secondary" c="dimmed">
+                Encrypted note — unlock to reveal it
+              </Text>
+            )}
+          </div>
+        </div>
+
+        {renderLockModal()}
+      </div>
+    )
+  }
+
   // --- attachment display (the two blocks that carry bytes) ----------------
   const attachmentBlob = block.blob
   /**

@@ -2569,23 +2569,27 @@ input.qrbit-heading-input::placeholder {
 }
 
 .qrbit-heading-block .mantine-ActionIcon-root,
-.qrbit-shorttext-block .mantine-ActionIcon-root {
+.qrbit-shorttext-block .mantine-ActionIcon-root,
+.qrbit-richtext-block .mantine-ActionIcon-root {
   color: var(--qrbit-ink-muted) !important;
   transition: color 150ms ease, background-color 150ms ease;
 }
 
 .qrbit-heading-block .mantine-ActionIcon-root:hover:not([data-disabled]),
-.qrbit-shorttext-block .mantine-ActionIcon-root:hover:not([data-disabled]) {
+.qrbit-shorttext-block .mantine-ActionIcon-root:hover:not([data-disabled]),
+.qrbit-richtext-block .mantine-ActionIcon-root:hover:not([data-disabled]) {
   color: var(--qrbit-ink-secondary) !important;
 }
 
 .qrbit-heading-block .mantine-ActionIcon-root[data-status="locked"],
-.qrbit-shorttext-block .mantine-ActionIcon-root[data-status="locked"] {
+.qrbit-shorttext-block .mantine-ActionIcon-root[data-status="locked"],
+.qrbit-richtext-block .mantine-ActionIcon-root[data-status="locked"] {
   color: var(--qrbit-locked) !important;
 }
 
 .qrbit-heading-block .mantine-ActionIcon-root[data-status="danger"],
-.qrbit-shorttext-block .mantine-ActionIcon-root[data-status="danger"] {
+.qrbit-shorttext-block .mantine-ActionIcon-root[data-status="danger"],
+.qrbit-richtext-block .mantine-ActionIcon-root[data-status="danger"] {
   color: var(--qrbit-danger) !important;
 }
 
@@ -2618,6 +2622,41 @@ input.qrbit-shorttext-input::placeholder {
   color: var(--qrbit-ink-muted) !important;
   opacity: 0.5 !important;
 }
+
+/* ----------------------------------------- library rich text block (edit) -- */
+.qrbit-richtext-textarea,
+.qrbit-richtext-textarea textarea,
+textarea.qrbit-richtext-textarea {
+  font-family: var(--qrbit-font-ui) !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  color: var(--qrbit-ink) !important;
+  background-color: transparent !important;
+  border: 1px solid var(--qrbit-border) !important;
+  border-radius: var(--qrbit-radius-sm, 6px) !important;
+  padding: 8px 12px !important;
+  transition: border-color 150ms ease !important;
+}
+
+.qrbit-richtext-textarea:focus,
+.qrbit-richtext-textarea textarea:focus,
+textarea.qrbit-richtext-textarea:focus {
+  border-color: var(--qrbit-border-strong) !important;
+  outline: none !important;
+}
+
+.qrbit-richtext-textarea::placeholder,
+.qrbit-richtext-textarea textarea::placeholder,
+textarea.qrbit-richtext-textarea::placeholder {
+  font-family: var(--qrbit-font-ui) !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  color: var(--qrbit-ink-muted) !important;
+  opacity: 0.45 !important;
+}
+
 
 
 
