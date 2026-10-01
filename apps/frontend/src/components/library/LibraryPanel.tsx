@@ -174,13 +174,9 @@ const ROW_ICON_SIZE = 16
 const ROW_PADDING_X = '10px'
 
 /**
- * The leading inset of a contained row: aligns the dossier grip handle directly under the
- * folder grip handle (10px container padding + 34px chevron box + 8px gap = 52px).
- *
- * Sized with `--qrbit-space-xxl` (32px) + 20px (or `ROW_PADDING_X` 10px + 32px + 10px) = 52px,
- * which maintains exact column alignment with the folder grip while preserving the token contract.
+ * The leading inset of a contained row: 28px tree indentation aligned cleanly under the folder row.
  */
-const CONTAINED_INSET_X = `calc(${ROW_PADDING_X} + var(--qrbit-space-xxl) + 10px)`
+const CONTAINED_INSET_X = '28px'
 
 /**
  * The box an `ActionIcon size="lg"` occupies: the nearest step to DESIGN.md's 32px icon-only
@@ -197,12 +193,12 @@ const CONTAINER_ROW: CSSProperties = {
   gap: 'var(--qrbit-space-sm)',
 }
 
-/** A contained row: same height and same division, one step deeper in. */
+/** A contained row: 38px pitch, 28px tree indent, 6px control gap. */
 const CONTAINED_ROW: CSSProperties = {
-  minHeight: ROW_MIN_HEIGHT,
+  minHeight: 38,
   paddingInlineStart: CONTAINED_INSET_X,
   paddingInlineEnd: ROW_PADDING_X,
-  gap: 'var(--qrbit-space-sm)',
+  gap: '6px',
 }
 
 /** The line printed under an empty folder: a row's worth of text, in the contained column. */
@@ -779,9 +775,19 @@ function FolderSection({
           </ActionIcon>
         )}
 
-        <Text className="library-panel__folder-count qrbit-text-label shrink-0 ml-auto" c="dimmed">
+        <span
+          className="library-panel__folder-count qrbit-text-data shrink-0 ml-auto"
+          style={{
+            background: 'var(--qrbit-sunken)',
+            border: '1px solid var(--qrbit-border)',
+            borderRadius: 'var(--qrbit-radius-full)',
+            padding: '2px 8px',
+            fontSize: '11px',
+            color: 'var(--qrbit-ink-secondary)',
+          }}
+        >
           {plural(files.length, 'dossier')}
-        </Text>
+        </span>
 
         <ActionIcon
           variant="subtle"
@@ -1215,10 +1221,7 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
   return (
     <li
       className="library-panel__file flex min-w-0 items-center"
-      // The marker `useReorderDrag` measures to find a row's pitch (see its module comment).
       data-reorder-item={handleProps === null ? undefined : ''}
-      // A contained row: the same 44px pitch and the same single division as its container, one
-      // step deeper in, and no chevron — which is the difference the user reads.
       style={{ ...CONTAINED_ROW, ...rowStyle(false, dragOffset) }}
     >
       {handleProps === null ? (
@@ -1247,14 +1250,25 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
           onSubmit={commitRename}
         />
       ) : (
-        // The whole row (minus the grip and the menu) opens the editor.
         <Button
           className="library-panel__file-open min-w-0 flex-1"
           variant="subtle"
           size="sm"
           justify="flex-start"
           px="xs"
-          styles={ROW_BUTTON_STYLES}
+          styles={{
+            root: {
+              minWidth: 0,
+              height: 'auto',
+              minHeight: '32px',
+              paddingBlock: '4px',
+              paddingInline: 'var(--qrbit-space-xs)',
+              transition: 'background-color 150ms ease',
+            },
+            inner: { alignItems: 'center', width: '100%' },
+            label: { minWidth: 0, textAlign: 'left', whiteSpace: 'normal', width: '100%' },
+            section: { marginInlineEnd: '6px' },
+          }}
           leftSection={
             <IconFileText
               size={ROW_ICON_SIZE}
@@ -1268,55 +1282,36 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
             actions.openFile(file)
           }}
         >
-          <span className="block min-w-0">
-            <span className="flex items-center gap-[8px]">
-              {/*
-                The contained label: the Body role, lighter than the container above it, and the
-                only thing in this row allowed to lose characters. `truncate` supplies the ellipsis
-                and `min-w-0` is what lets a flex item give its width back below its own text —
-                without the pair the row has two candidates for "the thing that gets cut", which is
-                how the badge ended up reading `ENCRY…`.
-              */}
-              <span className="library-panel__file-name qrbit-text-body truncate min-w-0">
-                {file.name}
-              </span>
-              {encrypted ? (
-                <Badge
-                  className="library-panel__encrypted-badge"
-                  // Locked Rust: the one colour the product reserves for encryption state,
-                  // wearing a word as well as a glyph (DESIGN.md, "Badges and Chips"). It used
-                  // to ask for a `shield` colour, which the theme never defined.
-                  color="locked"
-                  variant="light"
-                  size="sm"
-                  radius="full"
-                  // `flex: none` and `white-space: nowrap`, both inline and both load-bearing.
-                  // A Mantine `Badge` is an `inline-grid` with `overflow: hidden`, a label column
-                  // of `1fr` and `text-overflow: ellipsis` — i.e. it is built to clip politely
-                  // when something constrains its width, and as a flex item with `overflow: hidden`
-                  // its automatic minimum size is 0, so on a long dossier name it *was* constrained
-                  // and it *did* clip, to "ENCRYPT…". A status badge that reads "ENCRY" is worse
-                  // than no badge: the word is the claim. The name carries that trade instead.
-                  style={{
-                    flex: 'none',
-                    whiteSpace: 'nowrap',
-                    fontFamily: 'var(--qrbit-font-mono)',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    letterSpacing: '0.06em',
-                    textTransform: 'uppercase',
-                    height: '20px',
-                    paddingInline: '7px',
-                  }}
-                  leftSection={<IconLock size={11} stroke={1.8} aria-hidden="true" />}
-                >
-                  Encrypted
-                </Badge>
-              ) : null}
+          <span className="flex min-w-0 items-center gap-[8px]">
+            <span className="library-panel__file-name qrbit-text-body truncate min-w-0">
+              {file.name}
             </span>
-            <span className="library-panel__file-preview qrbit-text-body-secondary block truncate">
-              {preview}
-            </span>
+            {encrypted ? (
+              <Badge
+                className="library-panel__encrypted-badge"
+                color="locked"
+                variant="light"
+                size="sm"
+                radius="full"
+                style={{
+                  flex: 'none',
+                  whiteSpace: 'nowrap',
+                  fontFamily: 'var(--qrbit-font-mono)',
+                  fontSize: '10px',
+                  fontWeight: 600,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  height: '20px',
+                  paddingInline: '7px',
+                }}
+                leftSection={<IconLock size={11} stroke={1.8} aria-hidden="true" />}
+              >
+                Encrypted
+              </Badge>
+            ) : null}
+          </span>
+          <span className="library-panel__file-preview" style={{ display: 'none' }}>
+            {preview}
           </span>
         </Button>
       )}
@@ -1349,6 +1344,7 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
         ]}
       />
     </li>
+
   )
 }
 

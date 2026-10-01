@@ -1405,11 +1405,9 @@ describe('LibraryPanel — container and contained', () => {
 
     const vault = folderSection('Vault')
     const apiKeys = fileRow('API keys')
-    // Container: the Panel's own row padding. Contained: that padding plus one spacing step,
-    // expressed in the token rather than a number, so it moves with the scheme's scale.
+    // Container: the Panel's own row padding. Contained: tree indentation aligned cleanly under the folder row.
     expect(headerRow(vault).style.paddingInline).toBe('10px')
-    expect(apiKeys.style.paddingInlineStart).toContain('10px')
-    expect(apiKeys.style.paddingInlineStart).toContain('var(--qrbit-space-xxl)')
+    expect(apiKeys.style.paddingInlineStart).toBe('28px')
     expect(apiKeys.style.paddingInlineEnd).toBe('10px')
     // A dossier never carries a disclosure chevron: no chevron means no contents.
     expect(apiKeys.querySelector('.library-panel__folder-toggle')).toBe(null)
@@ -1421,16 +1419,15 @@ describe('LibraryPanel — container and contained', () => {
     expect(looseEnd.querySelector('.library-panel__file-rail')).not.toBe(null)
   })
 
-  it('draws each row as a flat 44px line with one division, and no box around the list', async () => {
+  it('draws each row as a flat line with one division, and no box around the list', async () => {
     await seedTwoFolders()
 
     renderPanel()
 
     const vault = folderSection('Vault')
-    // DESIGN.md's list-row: 44px minimum and one 1px division. The division is a border on the
-    // row itself, so it runs edge to edge and no second surface appears inside the Panel.
+    // Container row uses 44px, and contained single-line dossier row uses 38px pitch.
     expect(headerRow(vault).style.minHeight).toBe('44px')
-    expect(fileRow('API keys').style.minHeight).toBe('44px')
+    expect(fileRow('API keys').style.minHeight).toBe('38px')
     expect(fileRow('API keys').style.borderTop).toContain('var(--qrbit-border)')
     // A section is its header row plus the rows it owns: no padded wrapper, no description line,
     // no `+ New file` row. That padding and those lines were the vertical voids.
