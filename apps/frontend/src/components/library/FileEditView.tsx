@@ -705,7 +705,15 @@ export function FileEditView({
         ) : null}
 
         {/* Blocks list — each row is a measured reorder item */}
-        <div ref={listRef} className="space-y-3">
+        <div
+          ref={listRef}
+          className="space-y-3 p-4"
+          style={{
+            backgroundColor: 'var(--qrbit-raised)',
+            borderRadius: 'var(--qrbit-radius-lg)',
+            border: '1px solid var(--qrbit-border)',
+          }}
+        >
           {draftBlocks.map((block, index) => (
             <BlockItem
               key={block.id}

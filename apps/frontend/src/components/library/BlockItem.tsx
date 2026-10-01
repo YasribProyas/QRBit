@@ -39,6 +39,8 @@ import {
   IconClock,
   IconCopy,
   IconDownload,
+  IconEye,
+  IconEyeOff,
   IconFile,
   IconGripVertical,
   IconKey,
@@ -139,6 +141,7 @@ export function BlockItem({
   reorderOffset = 0,
 }: BlockItemProps) {
   const [passwordInput, setPasswordInput] = useState('')
+  const [isPreview, setIsPreview] = useState(false)
   /**
    * Ids for the two caption/field pairs in the payload area. `useId` because several rows are on
    * screen at once and an `htmlFor` that pointed at the wrong one would label the wrong field.
@@ -391,6 +394,129 @@ export function BlockItem({
     setIsDecrypting(false)
   }
 
+  const renderLockModal = (): ReactNode => (
+    <Modal
+      opened={showLockConfigModal}
+      onClose={() => setShowLockConfigModal(false)}
+      title={isProtected ? 'Encrypted block' : 'Encrypt this block with a password'}
+      size="sm"
+      centered
+      padding="lg"
+      withCloseButton={false}
+    >
+      <Stack gap="md">
+        <Text className="qrbit-text-body-secondary" c="dimmed">
+          {isProtected
+            ? 'The payload of this block is stored as AES-256-GCM ciphertext, and nothing else: no plaintext and no password are kept for it.'
+            : 'This encrypts the block\u2019s payload with Web Crypto PBKDF2-SHA256 (600,000 iterations) + AES-256-GCM. Only the ciphertext is stored. Each block can have its own password, and there is no recovery for one that is lost.'}
+        </Text>
+
+        {!isProtected ? (
+          <form onSubmit={handleSetLockPassword}>
+            <Stack gap="sm">
+              <TextInput
+                size="sm"
+                label="Password for this block"
+                styles={{ label: { fontWeight: 600 } }}
+                type="password"
+                autoFocus
+                required
+                placeholder="Enter a password..."
+                value={newLockPassword}
+                onChange={(e) => setNewLockPassword(e.target.value)}
+              />
+              {lockError !== null ? (
+                <p
+                  className="qrbit-text-body-secondary"
+                  style={{ color: 'var(--qrbit-danger)' }}
+                  role="alert"
+                  data-lock-error="true"
+                >
+                  {lockError}
+                </p>
+              ) : null}
+
+              <Group justify="flex-end" gap="sm" wrap="wrap">
+                <Button
+                  type="button"
+                  variant="subtle"
+                  c="dimmed"
+                  size="sm"
+                  style={{ flex: 'none', maxWidth: '100%' }}
+                  onClick={() => setShowLockConfigModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  color="locked"
+                  loading={isEncrypting}
+                  style={{ flex: 'none', maxWidth: '100%' }}
+                >
+                  {isEncrypting ? 'Encrypting...' : 'Encrypt block'}
+                </Button>
+              </Group>
+            </Stack>
+          </form>
+        ) : (
+          <form onSubmit={handleRemoveLock}>
+            <Stack gap="sm">
+              <Text className="qrbit-text-body-secondary" style={{ color: 'var(--qrbit-ink-secondary)' }}>
+                To reveal this block, use Unlock. To stop encrypting it, open it here first:
+                the password has to be right, or the payload would be discarded with the lock.
+              </Text>
+              <TextInput
+                size="sm"
+                type="password"
+                autoFocus
+                required
+                placeholder="Password for this block"
+                aria-label="Password to remove the lock"
+                value={removeLockPassword}
+                onChange={(e) => {
+                  setRemoveLockPassword(e.target.value)
+                  setRemoveLockError(false)
+                }}
+              />
+              {removeLockError ? (
+                <p
+                  className="qrbit-text-body-secondary"
+                  style={{ color: 'var(--qrbit-danger)' }}
+                  role="alert"
+                  data-unlock-error="true"
+                >
+                  Incorrect password. Please try again.
+                </p>
+              ) : null}
+              <Group justify="flex-end" gap="sm" wrap="wrap">
+                <Button
+                  type="button"
+                  variant="subtle"
+                  c="dimmed"
+                  size="sm"
+                  style={{ flex: 'none', maxWidth: '100%' }}
+                  onClick={() => setShowLockConfigModal(false)}
+                >
+                  Keep it encrypted
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  color="danger"
+                  loading={isDecrypting}
+                  style={{ flex: 'none', maxWidth: '100%' }}
+                >
+                  {isDecrypting ? 'Opening...' : 'Decrypt and remove lock'}
+                </Button>
+              </Group>
+            </Stack>
+          </form>
+        )}
+      </Stack>
+    </Modal>
+  )
+
   /**
    * Transfer status for the two session screens. A badge carries an icon *and* a word
    * (DESIGN.md, "Badges and Chips"): colour alone is never the whole message.
@@ -490,6 +616,182 @@ export function BlockItem({
           <span style={{ flex: '1 1 auto', height: 1, backgroundColor: 'var(--qrbit-border)' }} />
         </div>
         {renderStatusPill()}
+      </div>
+    )
+  }
+
+  // HEADING BLOCK (edit mode custom layout matching prototype)
+  if (mode === 'edit' && block.type === 'heading') {
+    return (
+      <div
+        className="group relative transition-colors"
+        data-reorder-item={isReorderRow ? '' : undefined}
+        data-block-protected={isProtected ? 'true' : undefined}
+        data-block-unprotected={isUnprotected ? 'true' : undefined}
+        style={{
+          backgroundColor: 'transparent',
+          ...dragStyle,
+        }}
+      >
+        {/* Row 1: Label on left, action icons on right */}
+        <div className="flex items-center justify-between gap-2 px-3 pt-2">
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '36px' : '0px' }}>
+            <TextInput
+              variant="unstyled"
+              size="xs"
+              value={block.label || ''}
+              onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
+              placeholder="Label"
+              aria-label="Block label"
+              styles={{
+                input: {
+                  color: 'var(--qrbit-ink-muted)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  lineHeight: '1.2',
+                  height: 'auto',
+                  padding: 0,
+                },
+              }}
+            />
+          </div>
+
+          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              c="dimmed"
+              onClick={() => setIsPreview((v) => !v)}
+              title={isPreview ? 'Edit heading' : 'Preview heading'}
+              aria-label={isPreview ? 'Edit heading' : 'Preview heading'}
+            >
+              {isPreview ? <IconEyeOff size={16} aria-hidden="true" /> : <IconEye size={16} aria-hidden="true" />}
+            </ActionIcon>
+
+            {/* Lock / Unlock Toggle Button */}
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              c={isProtected ? 'locked' : isUnprotected ? 'danger' : 'dimmed'}
+              aria-label={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              title={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              onClick={() => {
+                setLockError(null)
+                setShowLockConfigModal(true)
+              }}
+            >
+              {isProtected ? (
+                <IconLock size={16} aria-hidden="true" />
+              ) : isUnprotected ? (
+                <IconShieldOff size={16} aria-hidden="true" />
+              ) : (
+                <IconShieldLock size={16} aria-hidden="true" />
+              )}
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              c="dimmed"
+              onClick={() => onMoveUp?.(index)}
+              disabled={index === 0}
+              title={`Move ${block.type} block up`}
+              aria-label={`Move ${block.type} block up`}
+            >
+              <IconChevronUp size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              c="dimmed"
+              onClick={() => onMoveDown?.(index)}
+              disabled={index === totalBlocks - 1}
+              title={`Move ${block.type} block down`}
+              aria-label={`Move ${block.type} block down`}
+            >
+              <IconChevronDown size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              c="dimmed"
+              onClick={() => onDuplicate?.(block.id)}
+              title="Duplicate block"
+              aria-label="Duplicate block"
+            >
+              <IconCopy size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              c="dimmed"
+              onClick={() => onDelete?.(block.id)}
+              title="Delete block"
+              aria-label="Delete block"
+            >
+              <IconTrash size={16} aria-hidden="true" />
+            </ActionIcon>
+          </Group>
+        </div>
+
+        {/* Row 2: Grip on left, Heading text / input on right */}
+        <div className="flex items-center gap-2 px-3 pb-3 pt-1">
+          {grip !== null ? <span className="shrink-0">{grip}</span> : null}
+          <div className="flex-1 min-w-0">
+            {canEditPayload && !isPreview ? (
+              <TextInput
+                variant="unstyled"
+                size="md"
+                type="text"
+                value={block.content || ''}
+                onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
+                placeholder="Enter section heading..."
+                aria-label="Section heading"
+                styles={{
+                  input: {
+                    font: 'var(--qrbit-text-display)',
+                    letterSpacing: 'var(--qrbit-text-display-tracking)',
+                    fontSize: '24px',
+                    fontWeight: 700,
+                    lineHeight: '1.2',
+                    padding: 0,
+                    height: 'auto',
+                    border: 'none',
+                    outline: 'none',
+                    boxShadow: 'none',
+                    color: 'var(--qrbit-ink)',
+                  },
+                }}
+              />
+            ) : (
+              <Text
+                style={{
+                  font: 'var(--qrbit-text-display)',
+                  letterSpacing: 'var(--qrbit-text-display-tracking)',
+                  fontSize: '24px',
+                  fontWeight: 700,
+                  lineHeight: '1.2',
+                  color: 'var(--qrbit-ink)',
+                }}
+              >
+                {block.content || 'Heading'}
+              </Text>
+            )}
+          </div>
+        </div>
+
+        {renderLockModal()}
       </div>
     )
   }
@@ -1160,149 +1462,8 @@ export function BlockItem({
         )}
       </div>
 
-      {/*
-        Lock dialog (DESIGN.md, "Dialogs"): a real Mantine `Modal` — radius md, the sheet shadow,
-        the Title role, Escape cancelling and focus returning to the grip that opened it. It
-        portals above the page rather than being a box painted inside the row it belongs to.
-      */}
-      <Modal
-        opened={showLockConfigModal}
-        onClose={() => setShowLockConfigModal(false)}
-        title={isProtected ? 'Encrypted block' : 'Encrypt this block with a password'}
-        size="sm"
-        centered
-        padding="lg"
-        withCloseButton={false}
-      >
-        <Stack gap="md">
-          <Text className="qrbit-text-body-secondary" c="dimmed">
-            {isProtected
-              ? 'The payload of this block is stored as AES-256-GCM ciphertext, and nothing else: no plaintext and no password are kept for it.'
-              : 'This encrypts the block\u2019s payload with Web Crypto PBKDF2-SHA256 (600,000 iterations) + AES-256-GCM. Only the ciphertext is stored. Each block can have its own password, and there is no recovery for one that is lost.'}
-          </Text>
-
-          {!isProtected ? (
-            <form onSubmit={handleSetLockPassword}>
-              <Stack gap="sm">
-                <TextInput
-                  size="sm"
-                  label="Password for this block"
-                  // DESIGN.md's Label role is 12px/600; Mantine's input label is 12px/500, and
-                  // the weight is not a theme slot (see theme.ts).
-                  styles={{ label: { fontWeight: 600 } }}
-                  type="password"
-                  autoFocus
-                  required
-                  placeholder="Enter a password..."
-                  value={newLockPassword}
-                  onChange={(e) => setNewLockPassword(e.target.value)}
-                />
-                {lockError !== null ? (
-                  <p
-                    className="qrbit-text-body-secondary"
-                    style={{ color: 'var(--qrbit-danger)' }}
-                    role="alert"
-                    data-lock-error="true"
-                  >
-                    {lockError}
-                  </p>
-                ) : null}
-
-                <Group justify="flex-end" gap="sm" wrap="wrap">
-                  <Button
-                    type="button"
-                    variant="subtle"
-                    c="dimmed"
-                    size="sm"
-                    style={{ flex: 'none', maxWidth: '100%' }}
-                    onClick={() => setShowLockConfigModal(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    size="sm"
-                    color="locked"
-                    loading={isEncrypting}
-                    style={{ flex: 'none', maxWidth: '100%' }}
-                  >
-                    {isEncrypting ? 'Encrypting...' : 'Encrypt block'}
-                  </Button>
-                </Group>
-              </Stack>
-            </form>
-          ) : (
-            /*
-             * Removing a lock throws the ciphertext away, and a protected block keeps no
-             * plaintext by design, so removal first proves the password opens it and puts the
-             * payload back on the block. It used to be a one-click button that destroyed the
-             * secret with the lock — a data-loss bug wearing a security label. A wrong
-             * password here reports exactly as it does in the Unlock form above, and nothing
-             * changes on the block.
-             */
-            <form onSubmit={handleRemoveLock}>
-              <Stack gap="sm">
-                <Text className="qrbit-text-body-secondary" style={{ color: 'var(--qrbit-ink-secondary)' }}>
-                  To reveal this block, use Unlock. To stop encrypting it, open it here first:
-                  the password has to be right, or the payload would be discarded with the lock.
-                </Text>
-                <TextInput
-                  size="sm"
-                  type="password"
-                  autoFocus
-                  required
-                  placeholder="Password for this block"
-                  aria-label="Password to remove the lock"
-                  value={removeLockPassword}
-                  onChange={(e) => {
-                    setRemoveLockPassword(e.target.value)
-                    setRemoveLockError(false)
-                  }}
-                />
-                {removeLockError ? (
-                  <p
-                    className="qrbit-text-body-secondary"
-                    style={{ color: 'var(--qrbit-danger)' }}
-                    role="alert"
-                    data-unlock-error="true"
-                  >
-                    Incorrect password. Please try again.
-                  </p>
-                ) : null}
-                {/*
-                  Right-aligned and allowed to wrap, for the same reason as every other action row
-                  in this editor: a nowrap row squeezes its children below their own text width and
-                  Mantine's button clips rather than shrinking (`overflow: hidden` root,
-                  `white-space: nowrap` label). `Keep it encrypted` + `Decrypt and remove lock`
-                  together want more than a 380px sheet can give.
-                */}
-                <Group justify="flex-end" gap="sm" wrap="wrap">
-                  <Button
-                    type="button"
-                    variant="subtle"
-                    c="dimmed"
-                    size="sm"
-                    style={{ flex: 'none', maxWidth: '100%' }}
-                    onClick={() => setShowLockConfigModal(false)}
-                  >
-                    Keep it encrypted
-                  </Button>
-                  {/* Destructive, and it names the consequence (DESIGN.md, "Dialogs"). */}
-                  <Button
-                    type="submit"
-                    size="sm"
-                    color="danger"
-                    loading={isDecrypting}
-                    style={{ flex: 'none', maxWidth: '100%' }}
-                  >
-                    {isDecrypting ? 'Opening...' : 'Decrypt and remove lock'}
-                  </Button>
-                </Group>
-              </Stack>
-            </form>
-          )}
-        </Stack>
-      </Modal>
+      {/* Lock dialog */}
+      {renderLockModal()}
     </div>
   )
 }
