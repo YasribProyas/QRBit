@@ -2220,6 +2220,33 @@ button {
   background-color: var(--qrbit-sunken);
 }
 
+/* When hovering over the folder name or chevron toggle, keep the row highlight seamless with no nested box */
+.library-panel__folder-row:hover .library-panel__folder-name,
+.library-panel__folder-row:hover .library-panel__folder-toggle {
+  background-color: transparent !important;
+}
+
+/* When hovering over utility controls (drag grip, + button, 3-dots menu), exclude the folder bar highlight */
+.library-panel__folder-row:has(.library-panel__folder-grip:hover),
+.library-panel__folder-row:has(.library-panel__new-file:hover),
+.library-panel__folder-row:has(.library-panel__folder-menu-toggle:hover),
+.library-panel__folder-row:has(.library-panel__folder-menu-toggle[aria-expanded="true"]) {
+  background-color: transparent;
+}
+
+/* Standalone hover highlight for the util icons */
+.library-panel__folder-grip:hover,
+.library-panel__grip:hover,
+.library-panel__new-file:hover,
+.library-panel__folder-menu-toggle:hover,
+.library-panel__folder-menu-toggle[aria-expanded="true"],
+.library-panel__file-menu-toggle:hover,
+.library-panel__file-menu-toggle[aria-expanded="true"] {
+  background-color: var(--qrbit-sunken) !important;
+  color: var(--qrbit-ink) !important;
+  border-radius: var(--qrbit-radius-sm);
+}
+
 .library-panel__folder-rail {
   cursor: default;
 }
