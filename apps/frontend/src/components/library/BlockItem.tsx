@@ -631,8 +631,8 @@ export function BlockItem({
         }}
       >
         {/* Row 1: Label on left, action icons on right */}
-        <div className="flex items-center justify-between gap-2 px-0 pt-1 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '36px' : '0px' }}>
+        <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -648,6 +648,11 @@ export function BlockItem({
                   lineHeight: '1.2',
                   height: 'auto',
                   padding: 0,
+                  margin: 0,
+                  border: 'none',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  background: 'transparent',
                 },
               }}
             />
@@ -732,30 +737,32 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-1">
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0">
           {grip !== null ? <span className="shrink-0">{grip}</span> : null}
           <div className="flex-1 min-w-0">
             <TextInput
               variant="unstyled"
-              size="md"
               type="text"
+              className="qrbit-heading-input"
+              classNames={{ input: 'qrbit-heading-input' }}
               value={block.content || ''}
               onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
               placeholder="Enter section heading..."
               aria-label="Section heading"
               styles={{
                 input: {
-                  font: 'var(--qrbit-text-display)',
-                  letterSpacing: 'var(--qrbit-text-display-tracking)',
-                  fontSize: '24px',
-                  fontWeight: 700,
+                  fontFamily: 'var(--qrbit-font-ui)',
+                  fontSize: '28px',
+                  fontWeight: 800,
                   lineHeight: '1.2',
+                  letterSpacing: '-0.03em',
+                  color: 'var(--qrbit-ink)',
                   padding: 0,
                   height: 'auto',
                   border: 'none',
                   outline: 'none',
                   boxShadow: 'none',
-                  color: 'var(--qrbit-ink)',
+                  background: 'transparent',
                 },
               }}
             />

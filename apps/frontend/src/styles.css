@@ -2535,3 +2535,34 @@ h3.qrbit-text-title {
     pointer-events: auto;
   }
 }
+
+/* ------------------------------------------- library heading block (edit) -- */
+.qrbit-heading-input,
+.qrbit-heading-input input,
+input.qrbit-heading-input {
+  font-family: var(--qrbit-font-ui) !important;
+  font-size: 28px !important;
+  font-weight: 800 !important;
+  line-height: 1.2 !important;
+  letter-spacing: -0.03em !important;
+  color: var(--qrbit-ink) !important;
+  height: auto !important;
+  min-height: 36px !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.qrbit-heading-input::placeholder,
+.qrbit-heading-input input::placeholder,
+input.qrbit-heading-input::placeholder {
+  font-family: var(--qrbit-font-ui) !important;
+  font-size: 28px !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.03em !important;
+  color: var(--qrbit-ink-muted) !important;
+  opacity: 0.35 !important;
+}
+
