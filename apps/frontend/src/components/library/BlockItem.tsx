@@ -733,7 +733,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-10px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
@@ -895,7 +895,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Normal text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-14px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
