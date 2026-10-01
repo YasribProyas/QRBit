@@ -283,22 +283,15 @@ describe('HomeView — the pairing panel has a title (D17 item 1)', () => {
     expect(element.textContent).not.toContain(SESSION_URL)
   })
 
-  it('paints the panel Raised, bordered, and square-cornered like every other Panel', () => {
+  it('renders the pairing panel flat and seamless without a white raised surface', () => {
     stubViewport(1280)
     const element = renderView()
 
     const panel = one(element, '.home__pairing-panel', 'the pairing panel')
-    // DESIGN.md's Panel row is a fill AND a 1px border. The border used to come from Mantine's
-    // `withBorder`, which is a scheme-scoped rule in its static sheet (`[data-mantine-color-scheme=
-    // 'dark'] …`): with the scheme mirrored on `data-theme` instead — which is what `theme.ts`
-    // does — the panel's computed border is `0px none`, and a Raised fill on a canvas one step
-    // darker with no edge is why the card read as having no surface at all. The component now
-    // states all three values itself, so the surface does not depend on an attribute it cannot see.
-    expect(panel.style.background).toContain('var(--qrbit-raised)')
-    expect(panel.style.border).toBe('1px solid var(--qrbit-border)')
-    expect(panel.style.borderRadius).toBe('var(--qrbit-radius-lg)')
+    expect(panel.style.background).toBe('transparent')
+    expect(panel.style.border).toBe('none')
     // …and no third shadow: a resting surface is flat ("The Floating Only Rule").
-    expect(panel.style.boxShadow).toBe('')
+    expect(panel.style.boxShadow).toBe('none')
   })
 
   it('keeps the code plate light and spends Sunken on the inset', () => {

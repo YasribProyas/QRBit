@@ -225,9 +225,10 @@ const FAB_STYLE = {
  * three values here costs nothing and makes the panel's surface the component's own guarantee.
  */
 const PANEL_STYLE = {
-  background: 'var(--qrbit-raised)',
-  border: '1px solid var(--qrbit-border)',
-  borderRadius: 'var(--qrbit-radius-lg)',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: '0px',
+  boxShadow: 'none',
   width: '100%',
 } as const satisfies CSSProperties
 
@@ -324,17 +325,17 @@ export function HomeView({
             className="home__qr-panel flex min-h-0 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
             aria-label="Pair and send"
           >
-            <Stack gap="md" w="100%" className="flex-1 min-h-0 max-w-2xl mx-auto py-4 px-4">
-              <div className="home__pairing-heading">
-                <Title order={2} className="qrbit-text-headline">
-                  Pair another device
-                </Title>
-                <Text className="qrbit-text-body-secondary" mt="xs">
-                  Another device joins by scanning the code or typing it in
-                </Text>
-              </div>
+            <div className="home__pairing-heading w-full px-8 pt-8 pb-2 text-left">
+              <Title order={2} className="qrbit-text-headline">
+                Pair another device
+              </Title>
+              <Text className="qrbit-text-body-secondary" mt="xs">
+                Another device joins by scanning the code or typing it in
+              </Text>
+            </div>
 
-              {errorMessage ? (
+            {errorMessage ? (
+              <div className="w-full max-w-md mx-auto px-6 py-2">
                 <Alert
                   color="danger"
                   className="home__qr-error"
@@ -357,15 +358,16 @@ export function HomeView({
                     </div>
                   </Stack>
                 </Alert>
-              ) : null}
+              </div>
+            ) : null}
 
-              <Paper
-                p="lg"
-                className="home__pairing-panel relative flex flex-col flex-1 items-center justify-between"
+            <div className="flex-1 flex flex-col items-center justify-center w-full px-6 py-4 min-h-0">
+              <div
+                className="home__pairing-panel relative flex flex-col items-center justify-center w-full max-w-md mx-auto"
                 style={{ ...PANEL_STYLE, minHeight: 0 }}
               >
                 {pairingCode !== null ? (
-                  <div className="session-qr flex w-full flex-col items-center">
+                  <div className="session-qr flex w-full flex-col items-center justify-center">
                     <Group
                       align="flex-start"
                       gap="sm"
@@ -406,13 +408,13 @@ export function HomeView({
                   </Group>
                 )}
 
-                <div className="variant-pixel-divider" />
+                <div className="variant-pixel-divider max-w-sm my-4" />
 
-                <div className="home__manual-fallback variant-sunken-dock w-full mt-auto">
+                <div className="home__manual-fallback variant-sunken-dock w-full max-w-sm">
                   <ManualCodeEntry onSubmit={onJoinCode} />
                 </div>
-              </Paper>
-            </Stack>
+              </div>
+            </div>
           </section>
 
           {isMobileShell ? null : (

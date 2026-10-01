@@ -787,11 +787,14 @@ button {
 }
 
 .home__pairing-panel {
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, var(--qrbit-shadow-sheet);
-  transition: border-color 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  transition: opacity 180ms var(--ease-out);
 }
 .home__pairing-panel:hover {
-  border-color: color-mix(in srgb, var(--qrbit-signal) 40%, var(--qrbit-border));
+  border-color: transparent !important;
+  box-shadow: none !important;
 }
 
 .tactical-qr__well {
