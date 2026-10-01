@@ -42,7 +42,7 @@ export function AppLayout({
 
   return (
     <WithMantine>
-      <Box className="page" style={{ minHeight: '100vh', width: '100%' }}>
+      <Box className="page app-layout-shell" style={{ minHeight: '100vh', width: '100%', paddingBottom: 0 }}>
         <AppHeader
           session={session}
           vaultOpened={mobileVaultOpen}
@@ -52,7 +52,7 @@ export function AppLayout({
 
         {hasVault ? (
           <div className="dual-pane-layout">
-            <aside className="vault-pane" aria-label="Local library">
+            <aside className="vault-pane library-variant-acrylic-monolith" aria-label="Local library">
               {vaultContent}
             </aside>
             <section className="session-pane" aria-label="Session surface">
@@ -81,13 +81,13 @@ export function AppLayout({
           /*
             One column, and a reading measure rather than a stretched form: 48rem is what the
             prose on `/settings` and the session board both fit without running a line of body
-            text past the measure DESIGN.md sets. The class this element used to carry
-            (`single-pane-layout`) is not defined in styles.css — the centring was always the
-            inline style, so it is now the props that say it.
+            text past the measure DESIGN.md sets.
           */
-          <Stack gap="lg" w="100%" maw="48rem" mx="auto">
-            {mainContent}
-          </Stack>
+          <div className="app-layout-shell__main flex-1 overflow-y-auto w-full">
+            <Stack gap="lg" w="100%" maw="48rem" mx="auto" px="lg" py="xl">
+              {mainContent}
+            </Stack>
+          </div>
         )}
       </Box>
     </WithMantine>

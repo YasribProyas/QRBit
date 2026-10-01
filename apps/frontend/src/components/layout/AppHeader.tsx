@@ -76,7 +76,7 @@ export function AppHeader({
 
   return (
 
-    <header className="app-header" style={{ width: '100%' }}>
+    <header className="app-header header-variant-acrylic-bezel shrink-0" style={{ width: '100%' }}>
       <Group justify="space-between" gap="md" wrap="nowrap" align="center">
         {/* Left: the way home, and the library drawer when this screen has one. */}
         <Group gap="sm" wrap="nowrap" align="center">
@@ -102,9 +102,9 @@ export function AppHeader({
             aria-label="QRBit — home"
           >
             <Group gap="sm" wrap="nowrap" align="center">
-              <img src="/favicon.svg" alt="" width={28} height={28} style={{ display: 'block' }} />
+              <img src="/favicon.svg" alt="" width={30} height={30} style={{ display: 'block' }} />
               <Text
-                className="qrbit-text-display"
+                className="qrbit-text-display font-bold tracking-tight"
                 component="span"
                 style={{ whiteSpace: 'nowrap' }}
               >
@@ -120,10 +120,10 @@ export function AppHeader({
                   letterSpacing: '0.08em',
                   fontFamily: 'var(--qrbit-font-mono)',
                   textTransform: 'uppercase',
-                  borderWidth: '1px',
+                  borderWidth: '1.5px',
                 }}
               >
-                P2P Air-Drop
+                {session ? 'P2P Air-Drop // Paired' : 'P2P Air-Drop'}
               </Badge>
             </Group>
           </Link>
@@ -176,9 +176,10 @@ export function AppHeader({
             component={Link}
             to="/settings"
             className={`app-header__settings ${THUMB_TARGET}`}
-            variant="subtle"
+            variant="outline"
             color="gray"
             size="sm"
+            style={{ borderWidth: '1px' }}
             leftSection={<IconSettings size={16} stroke={1.6} aria-hidden="true" />}
           >
             Settings

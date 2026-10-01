@@ -258,6 +258,12 @@ All fonts are self-hosted with `font-display: swap` (`/fonts/plus-jakarta-sans-l
 **Rules:**
 - **The 16px Focus Floor:** All input and textarea fields compute to `font-size: 16px` on mobile viewports to prevent iOS Safari auto-zooming.
 - **The Mono Means Data Rule:** JetBrains Mono is strictly reserved for verifiable data: pairing codes, byte sizes, hashes, cryptographic keys, URLs, and timestamps.
+- **Technical Dossier Mono Typographic Hierarchy:** In library trees and file dossiers, a specialized tactical hierarchy pairs monospace with clean sans:
+  - Panel headline: `font-family: var(--qrbit-font-mono)`, 16px, weight 700, tracking 0.04em, uppercase.
+  - Panel secondary text: `font-family: var(--qrbit-font-mono)`, 11.5px, uppercase, ink-secondary, tracking 0.03em.
+  - Folder labels: `font-family: var(--qrbit-font-mono)`, 13px, weight 600, tracking -0.01em.
+  - Folder item count pills: `font-family: var(--qrbit-font-mono)`, 10.5px, tracking 0.06em.
+  - Dossier / file titles: `font-family: var(--qrbit-font-ui)`, 13.5px, weight 500.
 
 ---
 
@@ -284,10 +290,30 @@ All fonts are self-hosted with `font-display: swap` (`/fonts/plus-jakarta-sans-l
 - **Resting panels:** Flat with 1px hairline border (`var(--qrbit-border)`).
 - **Hover Lift (`--qrbit-shadow-lift`):** `0 1px 3px rgba(11, 18, 32, 0.10)` on light; in dark, high-contrast hairline `var(--qrbit-border-strong)`.
 - **Floating Sheet (`--qrbit-shadow-sheet`):** `0 1px 2px rgba(11, 18, 32, 0.06), 0 8px 24px -8px rgba(11, 18, 32, 0.14)`. Used on modals, floating action buttons, and drag-and-drop ghost items.
+- **Docked Edge-to-Edge Radius Rule:** When panels dock flush against viewport bounds in full-screen mode (header, sidebar, main viewport), outer border radii are set to 0. Resting boundaries between major architectural panes are demarcated solely by structural 1px (`var(--qrbit-border)`) and 1.5px (`var(--qrbit-border-strong)`) hairlines.
 
 ---
 
 ## 5. Component Registry & Mantine Mapping
+
+### Shell & Full-Screen Edge-to-Edge Architecture
+The application runs as a zero-margin, full-screen viewport shell (`width: 100vw; height: 100dvh; overflow: hidden;`):
+- **No Exterior Void Space:** Left, right, top, and bottom gutters are eliminated entirely.
+- **Flush Structural Docking:**
+  - **Header (Cyber Bezel):** Spans 100% full width, flush with top, left, and right viewport edges. Radius is 0, separated from panes below with a 1.5px border-bottom (`var(--qrbit-border-strong)`).
+  - **Sidebar (Acrylic Monolith):** Docked flush with left viewport edge, bottom of header, and bottom of viewport. Divided from the main workspace by a 1px border-right (`var(--qrbit-border)`).
+  - **Main Workspace:** Fills remaining space edge-to-edge from the sidebar to the right viewport edge. Content centers within an internal max-width container (`max-w-2xl` to `max-w-4xl`) with comfortable padding, preventing layout stretch while eliminating exterior void space.
+  - **Gaps:** The architectural layout gap between Header, Aside, and Main is strictly 0px.
+
+### Header: Cyber Bezel (`.header-variant-acrylic-bezel`)
+- **Acrylic Surface:** High-translucency glassmorphism (`rgba(244, 243, 240, 0.85)` in light, `rgba(22, 28, 40, 0.85)` in dark) with `backdrop-filter: blur(16px)` and `-webkit-backdrop-filter: blur(16px)`.
+- **Identity & Brand:** High-contrast 30x30 SVG mark, bold tracking-tight Display wordmark (`font-bold tracking-tight`), uppercase monospace badge (`P2P Air-Drop // Paired`, `borderWidth: 1.5px`, tracking 0.08em).
+- **Controls:** Outlined action buttons with 1px border and 44px thumb target on mobile devices.
+
+### Sidebar: Acrylic Monolith (`.library-variant-acrylic-monolith`)
+- **Acrylic Surface:** Translucent glassmorphism (`rgba(244, 243, 240, 0.7)` light, `rgba(22, 28, 40, 0.7)` dark) with `backdrop-filter: blur(12px)` and `-webkit-backdrop-filter: blur(12px)`.
+- **Structural Dividing Line:** 1px hairline border on the right (`var(--qrbit-border)`), zero outer radius, flush docked to viewport.
+- **Scrollport:** Independent vertical scroll with bottom clearance for floating action buttons.
 
 ### Buttons
 All buttons map to Mantine primitives:
@@ -311,6 +337,9 @@ All buttons map to Mantine primitives:
 ### Local Library & Dossier Rows
 - **Folder Sections:** Indented folder trees with chevron disclosure, drag handles, folder count badges, and action menus.
 - **Dossier Cards:** Flat 44px minimum rows with hover background transition, leading dossier icon, name, preview snippet, and cryptographic locked badge when protected.
+- **Full-Row Clickability:** Both folder rows (`.library-panel__folder-row`) and file rows (`.library-panel__file`) are fully clickable bars with `cursor: pointer` and smooth `:hover` highlight (`var(--qrbit-sunken)`). Inner text buttons and chevrons render transparent on hover to maintain a seamless, single-unit tactile bar.
+- **Symmetrical Utility Controls:** Drag handles, new file `+`, and overflow `···` menu buttons share an identical 26px width (`inline-size: 26px`) for visual harmony.
+- **Isolated Utility Hover via `:has()`:** Hovering over any utility action icon (drag handle, `+`, or `···` menu) uses CSS `:has()` to suppress the row bar highlight (`background-color: transparent`), focusing the hover highlight exclusively onto that specific utility icon button (`background: var(--qrbit-sunken); color: var(--qrbit-ink); border-radius: var(--qrbit-radius-sm)`).
 
 ---
 

@@ -255,7 +255,7 @@ export function HomeView({
       */}
       <div
         className="page home__shell h-dvh overflow-hidden"
-        style={{ paddingBottom: 'var(--qrbit-space-lg)' }}
+        style={{ paddingBottom: 0 }}
       >
         {/* Top bar: the identity, the library toggle, and the one thing not about this screen. */}
         <header className="home__header page__header header-variant-acrylic-bezel shrink-0">
@@ -319,12 +319,12 @@ export function HomeView({
           header); `lg:col-start-*` puts the library in the left column on a desktop without
           reordering the markup for anybody else.
         */}
-        <div className="home__panels grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(20rem,26rem)_minmax(0,1fr)] lg:overflow-hidden">
+        <div className="home__panels grid min-h-0 flex-1 grid-cols-1 gap-0 lg:grid-cols-[minmax(20rem,25rem)_minmax(0,1fr)] lg:overflow-hidden">
           <section
             className="home__qr-panel flex min-h-0 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
             aria-label="Pair and send"
           >
-            <Stack gap="md" w="100%" className="flex-1 min-h-0">
+            <Stack gap="md" w="100%" className="flex-1 min-h-0 max-w-2xl mx-auto py-4 px-4">
               <div className="home__pairing-heading">
                 <Title order={2} className="qrbit-text-headline">
                   Pair another device
