@@ -399,9 +399,9 @@ function buttonIn(scope: HTMLElement, selector: string, what: string): HTMLButto
  */
 function scanControl(element: HTMLElement): HTMLButtonElement {
   const found = [
-    ...element.querySelectorAll<HTMLButtonElement>('button[aria-label="Scan and send"]'),
+    ...element.querySelectorAll<HTMLButtonElement>('button[aria-label="Scan QRBit"], button[aria-label="Scan and send"]'),
   ]
-  expect(found, 'exactly one control named Scan and send').toHaveLength(1)
+  expect(found, 'exactly one control named Scan QRBit or Scan and send').toHaveLength(1)
   return found[0] as HTMLButtonElement
 }
 
