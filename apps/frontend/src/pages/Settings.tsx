@@ -239,22 +239,20 @@ export function Settings(): ReactElement {
               Settings
             </Title>
             <Text className="qrbit-text-body-secondary settings__subtitle" c="dimmed" maw="68ch">
-              What this device is holding, how the app looks, and how to get the library onto
-              another one.
+              Manage your local library storage, appearance, and privacy settings on this device.
             </Text>
           </Stack>
 
           {/* ---------------------------------------------------------- appearance -- */}
           <Section
             heading="Appearance"
-            description="One preference, applied to every screen in the app, stored on this device."
+            description="Customize your visual theme and interface preferences."
           >
             <Group justify="space-between" gap="md" wrap="wrap">
               <Stack gap="xxs" maw="46ch">
                 <Text className="qrbit-text-label">Colour scheme</Text>
                 <Text className="qrbit-text-body-secondary" c="dimmed">
-                  Press the control to cycle light, dark, and follow the device. Light is the
-                  default; the two schemes are the same layout with different surface values.
+                  Choose between light mode, dark mode, or follow your system preference.
                 </Text>
               </Stack>
               <ThemeToggle />
@@ -264,7 +262,7 @@ export function Settings(): ReactElement {
           {/* ------------------------------------------------------------ library -- */}
           <Section
             heading="Library"
-            description="Everything below is written by this browser to this device. Export and import are how it moves."
+            description="Your dossiers and files are stored in this browser's local database. Back up or restore your data anytime."
           >
             {storeError !== null ? (
               <Alert
@@ -283,20 +281,18 @@ export function Settings(): ReactElement {
               <Measure label="Items" value={String(items.length)} />
               <Measure label="Image and file data in items" value={formatByteSize(blobBytes)} />
               <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-                A dossier keeps its own attachments inside it, so they are not in that byte
-                total.
+                Dossier attachments are stored with their respective blocks and counted separately.
               </Text>
             </Stack>
 
             <Stack gap="md">
               <Title order={3} className="qrbit-text-title">
-                Take the library with you
+                Export library backup
               </Title>
               <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-                Export writes the whole library into one{' '}
-                <Code styles={CODE_INLINE_STYLES}>{EXPORT_FILE_EXTENSION}</Code> file that you
-                choose where to save. Nothing is uploaded, and locked items stay encrypted
-                inside that file whether or not you encrypt the file itself (PLAN.md §14).
+                Export writes your entire library into a single{' '}
+                <Code styles={CODE_INLINE_STYLES}>{EXPORT_FILE_EXTENSION}</Code> file to save or transfer.
+                Nothing is uploaded, and protected blocks remain encrypted inside the export.
               </Text>
               <Button
                 variant="default"
@@ -313,11 +309,11 @@ export function Settings(): ReactElement {
 
             <Stack gap="md">
               <Title order={3} className="qrbit-text-title">
-                Bring a library in
+                Import library backup
               </Title>
               <FileInput
                 label="Import file"
-                description={`Adds the folders and items from a ${EXPORT_FILE_EXTENSION} export to this device. Anything already here is kept as it is.`}
+                description={`Restores folders and dossiers from a ${EXPORT_FILE_EXTENSION} export onto this device. Existing library data is preserved.`}
                 placeholder={`Choose a ${EXPORT_FILE_EXTENSION} file`}
                 accept={EXPORT_FILE_EXTENSION}
                 styles={FIELD_LABEL_STYLE}
@@ -333,7 +329,7 @@ export function Settings(): ReactElement {
                 <PasswordInput
                   className="settings__import-password"
                   label="Password"
-                  description="This export file is encrypted. Without its password nothing in it can be read, and there is no way to recover one."
+                  description="This backup archive is encrypted. Enter its password to decrypt and restore its contents."
                   placeholder="Password for this export file"
                   styles={FIELD_LABEL_STYLE}
                   autoComplete="off"
@@ -414,7 +410,7 @@ export function Settings(): ReactElement {
           {/* ------------------------------------------------------------ privacy -- */}
           <Section
             heading="What is kept, and where"
-            description="No account, no history, no cloud copy. These are the only two places this app writes."
+            description="No cloud databases, no user accounts, and no telemetry. All data is scoped to this device."
           >
             <Group gap="huge" align="flex-start" wrap="wrap">
               <Stack gap="sm" maw="30rem">
@@ -439,37 +435,35 @@ export function Settings(): ReactElement {
                 </Title>
                 <FactRow
                   subject="Session keys, safety phrase, items in transit"
-                  detail="memory only — gone when the tab closes"
+                  detail="memory only — discarded when the session closes"
                 />
                 <FactRow
                   subject="Accounts, analytics, crash reports, backups"
-                  detail="none; there is no server that would hold them"
+                  detail="none; no remote servers or tracking exist"
                 />
               </Stack>
             </Group>
 
             <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-              Nothing here survives on its own: clear the site's data in the browser and the
-              library is gone with it. That is why the export above is worth running before you
-              leave a device behind.
+              All library data exists only in this browser on this device. If you clear this browser's
+              site data, your local library will be deleted. Create an export backup before clearing
+              browser storage or switching devices.
             </Text>
           </Section>
 
           {/* --------------------------------------------------------- connection -- */}
           <Section
             heading="Connection"
-            description="Two devices pair through one small signaling worker. This is the only origin the app contacts."
+            description="Devices pair through a lightweight signaling relay to negotiate direct P2P connections."
           >
             <FactRow
               subject="Signaling worker"
               detail={<Code styles={CODE_WELL_STYLES}>{SIGNALING_WS_URL}</Code>}
             />
             <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-              The worker carries codes, public keys and ICE candidates. It never holds the
-              session key: both devices derive it from a handshake of their own, so file bytes
-              travel between them already encrypted — over a relay if the network needs one,
-              which is still ciphertext. A relay is asked for per session and dropped with it,
-              so this page has no session to report.
+              The signaling worker coordinates connection discovery, public keys, and ICE candidates.
+              It never holds or receives the session key or your file contents. Once paired, all data
+              and file bytes travel peer-to-peer with AES-256-GCM encryption.
             </Text>
           </Section>
 
