@@ -47,7 +47,7 @@ import type { FolderPickerChoice } from './FolderPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
 import { describeSendFailure, encryptBlockPayload, findUnsendableBlocks } from '../../lib/dossier'
-import { ROOT_FOLDER_ID, unprotectedSecretBlocks } from '../../lib/library'
+import { ROOT_FOLDER_ID } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
 
@@ -325,13 +325,6 @@ export function FileEditView({
 
   /** The rest of whatever the user pressed, once nothing needs a password any more. */
   const finishSave = async (draft: LibraryFile, intent: SaveIntent): Promise<void> => {
-    const needsPassword = unprotectedSecretBlocks(draft)[0]
-    if (needsPassword !== undefined) {
-      setSendError(null)
-      setEncryptPrompt({ block: needsPassword, draft, intent })
-      return
-    }
-
     if (intent === 'send') {
       /*
        * The refusal happens HERE, before a byte of the draft is handed over. `lib/dossier.ts`

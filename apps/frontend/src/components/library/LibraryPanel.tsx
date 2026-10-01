@@ -98,6 +98,7 @@ import {
   IconFolderOpen,
   IconGripVertical,
   IconLock,
+  IconLockOpen,
   IconPencil,
   IconPlus,
   IconTrash,
@@ -137,6 +138,7 @@ interface PanelActions {
   createFile(folderId: string): void
   openFile(file: LibraryFile): void
   renameFile(file: LibraryFile, name: string): void
+  toggleLockFile(file: LibraryFile): void
   askMoveFile(file: LibraryFile): void
   askDeleteFile(file: LibraryFile): void
   /** Persists a reorder inside `file`'s own folder; `targetIndex` is the row's index in the list as displayed. */
@@ -310,6 +312,9 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
     },
     renameFile: (file, name) => {
       reportToStore(updateFile(file.id, { name }))
+    },
+    toggleLockFile: (file) => {
+      reportToStore(updateFile(file.id, { isLocked: !file.isLocked }))
     },
     askMoveFile: (file) => {
       setMoveRequest(file)
@@ -1240,7 +1245,7 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
   const [draftName, setDraftName] = useState(file.name)
 
   const preview = getFirstBlockPreview(file)
-  const encrypted = hasLockedBlocks(file)
+  const encrypted = Boolean(file.isLocked)
 
   const startRename = (): void => {
     setDraftName(file.name)
@@ -1381,6 +1386,17 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
             icon: <IconArrowsMove size={16} stroke={1.6} aria-hidden="true" />,
             onSelect: () => {
               actions.askMoveFile(file)
+            },
+          },
+          {
+            label: file.isLocked ? 'Unlock dossier' : 'Lock dossier',
+            icon: file.isLocked ? (
+              <IconLockOpen size={16} stroke={1.6} aria-hidden="true" />
+            ) : (
+              <IconLock size={16} stroke={1.6} aria-hidden="true" />
+            ),
+            onSelect: () => {
+              actions.toggleLockFile(file)
             },
           },
           {

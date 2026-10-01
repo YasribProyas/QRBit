@@ -137,6 +137,8 @@ export interface LibraryFile {
    * first reorder of a folder materialises values for the whole run.
    */
   sortOrder?: number
+  /** Whole-dossier encryption / lock flag */
+  isLocked?: boolean
 }
 
 export type LibraryItemType = 'text' | 'richtext' | 'image' | 'file' | 'locked'
@@ -1401,6 +1403,10 @@ export function parseFile(value: unknown): LibraryFile {
   // a folder's is (see `readSortOrder`).
   const position = readSortOrder(value, 'a file')
   if (position !== undefined) file.sortOrder = position
+
+  if (typeof value['isLocked'] === 'boolean') {
+    file.isLocked = value['isLocked']
+  }
 
   return file
 }
