@@ -2568,3 +2568,16 @@ input.qrbit-heading-input::placeholder {
   opacity: 0.35 !important;
 }
 
+.qrbit-heading-block .mantine-ActionIcon-root {
+  color: var(--qrbit-ink-muted) !important;
+}
+
+.qrbit-heading-block .mantine-ActionIcon-root[data-status="locked"] {
+  color: var(--qrbit-locked) !important;
+}
+
+.qrbit-heading-block .mantine-ActionIcon-root[data-status="danger"] {
+  color: var(--qrbit-danger) !important;
+}
+
+

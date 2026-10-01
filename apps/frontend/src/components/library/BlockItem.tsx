@@ -621,7 +621,7 @@ export function BlockItem({
   if (mode === 'edit' && block.type === 'heading') {
     return (
       <div
-        className="group relative transition-colors"
+        className="group relative transition-colors qrbit-heading-block"
         data-reorder-item={isReorderRow ? '' : undefined}
         data-block-protected={isProtected ? 'true' : undefined}
         data-block-unprotected={isUnprotected ? 'true' : undefined}
@@ -658,12 +658,19 @@ export function BlockItem({
             />
           </div>
 
-          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+          <Group gap={0} wrap="nowrap" style={{ flex: 'none', color: 'var(--qrbit-ink-muted)' }}>
             {/* Lock / Unlock Toggle Button */}
             <ActionIcon
               variant="subtle"
               size="md"
-              c={isProtected ? 'locked' : isUnprotected ? 'danger' : 'dimmed'}
+              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
+              style={{
+                color: isProtected
+                  ? 'var(--qrbit-locked)'
+                  : isUnprotected
+                    ? 'var(--qrbit-danger)'
+                    : 'var(--qrbit-ink-muted)',
+              }}
               aria-label={
                 isProtected
                   ? 'Manage encryption for this block'
@@ -691,7 +698,7 @@ export function BlockItem({
             <ActionIcon
               variant="subtle"
               size="md"
-              c="dimmed"
+              style={{ color: 'var(--qrbit-ink-muted)' }}
               onClick={() => onMoveUp?.(index)}
               disabled={index === 0}
               title={`Move ${block.type} block up`}
@@ -703,7 +710,7 @@ export function BlockItem({
             <ActionIcon
               variant="subtle"
               size="md"
-              c="dimmed"
+              style={{ color: 'var(--qrbit-ink-muted)' }}
               onClick={() => onMoveDown?.(index)}
               disabled={index === totalBlocks - 1}
               title={`Move ${block.type} block down`}
@@ -715,7 +722,7 @@ export function BlockItem({
             <ActionIcon
               variant="subtle"
               size="md"
-              c="dimmed"
+              style={{ color: 'var(--qrbit-ink-muted)' }}
               onClick={() => onDuplicate?.(block.id)}
               title="Duplicate block"
               aria-label="Duplicate block"
@@ -726,7 +733,7 @@ export function BlockItem({
             <ActionIcon
               variant="subtle"
               size="md"
-              c="dimmed"
+              style={{ color: 'var(--qrbit-ink-muted)' }}
               onClick={() => onDelete?.(block.id)}
               title="Delete block"
               aria-label="Delete block"
@@ -738,7 +745,16 @@ export function BlockItem({
 
         {/* Row 2: Grip on left, Heading text / input on right */}
         <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-4px' }}>
-          {grip !== null ? <span className="shrink-0">{grip}</span> : null}
+          {grip !== null ? (
+            <span className="shrink-0" style={{ color: 'var(--qrbit-ink-muted)' }}>
+              {React.isValidElement(grip)
+                ? React.cloneElement(grip as React.ReactElement<{ style?: React.CSSProperties; c?: string }>, {
+                    c: undefined,
+                    style: { color: 'var(--qrbit-ink-muted)' },
+                  })
+                : grip}
+            </span>
+          ) : null}
           <div className="flex-1 min-w-0">
             <TextInput
               variant="unstyled"
