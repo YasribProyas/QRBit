@@ -737,7 +737,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0">
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-4px' }}>
           {grip !== null ? <span className="shrink-0">{grip}</span> : null}
           <div className="flex-1 min-w-0">
             <TextInput
@@ -754,10 +754,11 @@ export function BlockItem({
                   fontFamily: 'var(--qrbit-font-ui)',
                   fontSize: '28px',
                   fontWeight: 800,
-                  lineHeight: '1.2',
+                  lineHeight: '1.15',
                   letterSpacing: '-0.03em',
                   color: 'var(--qrbit-ink)',
                   padding: 0,
+                  margin: 0,
                   height: 'auto',
                   border: 'none',
                   outline: 'none',

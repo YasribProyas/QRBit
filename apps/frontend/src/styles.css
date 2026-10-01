@@ -2543,12 +2543,13 @@ input.qrbit-heading-input {
   font-family: var(--qrbit-font-ui) !important;
   font-size: 28px !important;
   font-weight: 800 !important;
-  line-height: 1.2 !important;
+  line-height: 1.15 !important;
   letter-spacing: -0.03em !important;
   color: var(--qrbit-ink) !important;
   height: auto !important;
-  min-height: 36px !important;
+  min-height: unset !important;
   padding: 0 !important;
+  margin: 0 !important;
   background: transparent !important;
   border: none !important;
   outline: none !important;
@@ -2561,6 +2562,7 @@ input.qrbit-heading-input::placeholder {
   font-family: var(--qrbit-font-ui) !important;
   font-size: 28px !important;
   font-weight: 800 !important;
+  line-height: 1.15 !important;
   letter-spacing: -0.03em !important;
   color: var(--qrbit-ink-muted) !important;
   opacity: 0.35 !important;
