@@ -18,8 +18,8 @@
  *    `revealBlock`, `attachmentSizeLabel` and `ImagePreview`.
  */
 
-import { useEffect, useId, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import React, { cloneElement, isValidElement, useEffect, useId, useState } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
 import {
   ActionIcon,
   Badge,
@@ -747,8 +747,8 @@ export function BlockItem({
         <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-4px' }}>
           {grip !== null ? (
             <span className="shrink-0" style={{ color: 'var(--qrbit-ink-muted)' }}>
-              {React.isValidElement(grip)
-                ? React.cloneElement(grip as React.ReactElement<{ style?: React.CSSProperties; c?: string }>, {
+              {isValidElement(grip)
+                ? cloneElement(grip as ReactElement<{ style?: CSSProperties; c?: string }>, {
                     c: undefined,
                     style: { color: 'var(--qrbit-ink-muted)' },
                   })
