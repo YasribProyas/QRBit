@@ -2570,26 +2570,40 @@ input.qrbit-heading-input::placeholder {
 
 .qrbit-heading-block .mantine-ActionIcon-root,
 .qrbit-shorttext-block .mantine-ActionIcon-root,
-.qrbit-richtext-block .mantine-ActionIcon-root {
+.qrbit-richtext-block .mantine-ActionIcon-root,
+.qrbit-image-block .mantine-ActionIcon-root,
+.qrbit-fileattachment-block .mantine-ActionIcon-root,
+.qrbit-locked-block .mantine-ActionIcon-root,
+.qrbit-divider-block .mantine-ActionIcon-root {
   color: var(--qrbit-ink-muted) !important;
   transition: color 150ms ease, background-color 150ms ease;
 }
 
 .qrbit-heading-block .mantine-ActionIcon-root:hover:not([data-disabled]),
 .qrbit-shorttext-block .mantine-ActionIcon-root:hover:not([data-disabled]),
-.qrbit-richtext-block .mantine-ActionIcon-root:hover:not([data-disabled]) {
+.qrbit-richtext-block .mantine-ActionIcon-root:hover:not([data-disabled]),
+.qrbit-image-block .mantine-ActionIcon-root:hover:not([data-disabled]),
+.qrbit-fileattachment-block .mantine-ActionIcon-root:hover:not([data-disabled]),
+.qrbit-locked-block .mantine-ActionIcon-root:hover:not([data-disabled]),
+.qrbit-divider-block .mantine-ActionIcon-root:hover:not([data-disabled]) {
   color: var(--qrbit-ink-secondary) !important;
 }
 
 .qrbit-heading-block .mantine-ActionIcon-root[data-status="locked"],
 .qrbit-shorttext-block .mantine-ActionIcon-root[data-status="locked"],
-.qrbit-richtext-block .mantine-ActionIcon-root[data-status="locked"] {
+.qrbit-richtext-block .mantine-ActionIcon-root[data-status="locked"],
+.qrbit-image-block .mantine-ActionIcon-root[data-status="locked"],
+.qrbit-fileattachment-block .mantine-ActionIcon-root[data-status="locked"],
+.qrbit-locked-block .mantine-ActionIcon-root[data-status="locked"] {
   color: var(--qrbit-locked) !important;
 }
 
 .qrbit-heading-block .mantine-ActionIcon-root[data-status="danger"],
 .qrbit-shorttext-block .mantine-ActionIcon-root[data-status="danger"],
-.qrbit-richtext-block .mantine-ActionIcon-root[data-status="danger"] {
+.qrbit-richtext-block .mantine-ActionIcon-root[data-status="danger"],
+.qrbit-image-block .mantine-ActionIcon-root[data-status="danger"],
+.qrbit-fileattachment-block .mantine-ActionIcon-root[data-status="danger"],
+.qrbit-locked-block .mantine-ActionIcon-root[data-status="danger"] {
   color: var(--qrbit-danger) !important;
 }
 

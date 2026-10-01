@@ -26,6 +26,7 @@ import {
   Button,
   Group,
   Modal,
+  PasswordInput,
   Progress,
   Stack,
   Text,
@@ -587,16 +588,24 @@ export function BlockItem({
   if (block.type === 'divider') {
     return (
       <div
-        className="group relative my-3 flex items-center gap-2"
+        className="group relative my-3 flex items-center gap-2 qrbit-divider-block"
         data-reorder-item={isReorderRow ? '' : undefined}
         style={dragStyle}
       >
-        {grip !== null ? <span className="shrink-0">{grip}</span> : null}
+        {grip !== null ? (
+          <span className="shrink-0">
+            {isValidElement(grip)
+              ? cloneElement(grip as ReactElement<{ c?: string }>, {
+                  c: undefined,
+                })
+              : grip}
+          </span>
+        ) : null}
+        <span style={{ flex: '1 1 auto', height: 1, backgroundColor: 'var(--qrbit-border)' }} />
         {mode === 'edit' && (
           <ActionIcon
             variant="subtle"
-            size="lg"
-            c="dimmed"
+            size="md"
             aria-label="Delete divider"
             title="Delete divider"
             onClick={() => onDelete?.(block.id)}
@@ -604,15 +613,6 @@ export function BlockItem({
             <IconTrash size={16} aria-hidden="true" />
           </ActionIcon>
         )}
-        <div className="w-full flex items-center gap-3">
-          {/* A division is `border`, and 1px of it. */}
-          <span style={{ flex: '1 1 auto', height: 1, backgroundColor: 'var(--qrbit-border)' }} />
-          <Text span className="qrbit-text-label" c="dimmed" style={{ textTransform: 'uppercase' }}>
-            DIVIDER
-          </Text>
-          <span style={{ flex: '1 1 auto', height: 1, backgroundColor: 'var(--qrbit-border)' }} />
-        </div>
-        {renderStatusPill()}
       </div>
     )
   }
@@ -1130,6 +1130,582 @@ export function BlockItem({
     block.type === 'locked' || block.isLocked === true
       ? LOCKED_ITEM_MAX_PLAINTEXT_BYTES
       : LIBRARY_ATTACHMENT_MAX_BYTES
+
+  // IMAGE BLOCK (edit mode custom layout matching prototype)
+  if (mode === 'edit' && block.type === 'image') {
+    return (
+      <div
+        className="group relative transition-colors qrbit-image-block"
+        data-reorder-item={isReorderRow ? '' : undefined}
+        data-block-protected={isProtected ? 'true' : undefined}
+        data-block-unprotected={isUnprotected ? 'true' : undefined}
+        style={{
+          backgroundColor: 'transparent',
+          ...dragStyle,
+        }}
+      >
+        {/* Row 1: Label on left, action icons on right */}
+        <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+            <TextInput
+              variant="unstyled"
+              size="xs"
+              value={block.label || ''}
+              onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
+              placeholder="Label"
+              aria-label="Block label"
+              styles={{
+                input: {
+                  color: 'var(--qrbit-ink-muted)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  lineHeight: '1.1',
+                  height: 'auto',
+                  padding: 0,
+                  margin: 0,
+                  border: 'none',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  background: 'transparent',
+                },
+              }}
+            />
+          </div>
+
+          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
+              aria-label={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              title={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              onClick={() => {
+                setLockError(null)
+                setShowLockConfigModal(true)
+              }}
+            >
+              {isProtected ? (
+                <IconLock size={16} aria-hidden="true" />
+              ) : isUnprotected ? (
+                <IconShieldOff size={16} aria-hidden="true" />
+              ) : (
+                <IconShieldLock size={16} aria-hidden="true" />
+              )}
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveUp?.(index)}
+              disabled={index === 0}
+              title="Move image block up"
+              aria-label="Move image block up"
+            >
+              <IconChevronUp size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveDown?.(index)}
+              disabled={index === totalBlocks - 1}
+              title="Move image block down"
+              aria-label="Move image block down"
+            >
+              <IconChevronDown size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDuplicate?.(block.id)}
+              title="Duplicate block"
+              aria-label="Duplicate block"
+            >
+              <IconCopy size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDelete?.(block.id)}
+              title="Delete block"
+              aria-label="Delete block"
+            >
+              <IconTrash size={16} aria-hidden="true" />
+            </ActionIcon>
+          </Group>
+        </div>
+
+        {/* Row 2: Grip on left, Image preview & controls on right */}
+        <div className="flex items-start gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
+          {grip !== null ? (
+            <span className="shrink-0 pt-1">
+              {isValidElement(grip)
+                ? cloneElement(grip as ReactElement<{ c?: string }>, {
+                    c: undefined,
+                  })
+                : grip}
+            </span>
+          ) : null}
+          <div className="flex-1 min-w-0 space-y-2">
+            <div
+              className="relative w-full flex flex-col items-center justify-center overflow-hidden"
+              style={{
+                backgroundColor: 'var(--qrbit-sunken)',
+                border: '1px solid var(--qrbit-border)',
+                borderRadius: 'var(--qrbit-radius-sm)',
+                padding: 'var(--qrbit-space-md)',
+                minHeight: 96,
+              }}
+            >
+              {canPreviewImage && attachmentBlob instanceof Blob ? (
+                <ImagePreview blob={attachmentBlob} name={block.fileName ?? 'Chosen image'} />
+              ) : (
+                <p
+                  className="qrbit-text-body-secondary text-center px-4"
+                  style={{ color: 'var(--qrbit-ink-muted)' }}
+                  data-attachment-empty="true"
+                >
+                  {attachmentBlob instanceof Blob
+                    ? 'The bytes on this block are not an image, so there is no preview to draw.'
+                    : 'No image chosen yet — this block holds no bytes.'}
+                </p>
+              )}
+
+              {transferStatus === 'in_progress' && (
+                <div
+                  className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6"
+                  style={{ backgroundColor: 'var(--qrbit-sunken)' }}
+                >
+                  <span className="qrbit-text-body-secondary">
+                    Streaming image data… {Math.round(transferProgress)}%
+                  </span>
+                  <Progress value={transferProgress} size="sm" radius="full" w={192} />
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <Text span className="qrbit-text-body-secondary" style={{ minWidth: 0 }} truncate>
+                {block.fileName ?? 'No file chosen'}
+              </Text>
+              <Text
+                span
+                className="qrbit-text-data"
+                c="dimmed"
+                style={{ flex: 'none' }}
+              >
+                {attachmentSizeLabel ?? 'no size until a file is chosen'}
+              </Text>
+            </div>
+
+            <AttachmentControls block={block} maxBytes={attachmentMaxBytes} onUpdate={onUpdate} />
+          </div>
+        </div>
+
+        {renderLockModal()}
+      </div>
+    )
+  }
+
+  // FILE ATTACHMENT BLOCK (edit mode custom layout matching prototype)
+  if (mode === 'edit' && block.type === 'fileAttachment') {
+    return (
+      <div
+        className="group relative transition-colors qrbit-fileattachment-block"
+        data-reorder-item={isReorderRow ? '' : undefined}
+        data-block-protected={isProtected ? 'true' : undefined}
+        data-block-unprotected={isUnprotected ? 'true' : undefined}
+        style={{
+          backgroundColor: 'transparent',
+          ...dragStyle,
+        }}
+      >
+        {/* Row 1: Label on left, action icons on right */}
+        <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+            <TextInput
+              variant="unstyled"
+              size="xs"
+              value={block.label || ''}
+              onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
+              placeholder="Label"
+              aria-label="Block label"
+              styles={{
+                input: {
+                  color: 'var(--qrbit-ink-muted)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  lineHeight: '1.1',
+                  height: 'auto',
+                  padding: 0,
+                  margin: 0,
+                  border: 'none',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  background: 'transparent',
+                },
+              }}
+            />
+          </div>
+
+          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
+              aria-label={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              title={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              onClick={() => {
+                setLockError(null)
+                setShowLockConfigModal(true)
+              }}
+            >
+              {isProtected ? (
+                <IconLock size={16} aria-hidden="true" />
+              ) : isUnprotected ? (
+                <IconShieldOff size={16} aria-hidden="true" />
+              ) : (
+                <IconShieldLock size={16} aria-hidden="true" />
+              )}
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveUp?.(index)}
+              disabled={index === 0}
+              title="Move attachment block up"
+              aria-label="Move attachment block up"
+            >
+              <IconChevronUp size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveDown?.(index)}
+              disabled={index === totalBlocks - 1}
+              title="Move attachment block down"
+              aria-label="Move attachment block down"
+            >
+              <IconChevronDown size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDuplicate?.(block.id)}
+              title="Duplicate block"
+              aria-label="Duplicate block"
+            >
+              <IconCopy size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDelete?.(block.id)}
+              title="Delete block"
+              aria-label="Delete block"
+            >
+              <IconTrash size={16} aria-hidden="true" />
+            </ActionIcon>
+          </Group>
+        </div>
+
+        {/* Row 2: Grip on left, Attachment card & controls on right */}
+        <div className="flex items-start gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
+          {grip !== null ? (
+            <span className="shrink-0 pt-1">
+              {isValidElement(grip)
+                ? cloneElement(grip as ReactElement<{ c?: string }>, {
+                    c: undefined,
+                  })
+                : grip}
+            </span>
+          ) : null}
+          <div className="flex-1 min-w-0 space-y-2">
+            <div
+              className="flex items-center justify-between p-2.5 rounded border gap-3"
+              style={{
+                backgroundColor: 'var(--qrbit-sunken)',
+                borderColor: 'var(--qrbit-border)',
+                borderRadius: 'var(--qrbit-radius-sm)',
+              }}
+            >
+              <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    flex: 'none',
+                    width: 34,
+                    height: 34,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--qrbit-signal)',
+                    backgroundColor: 'var(--qrbit-raised)',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
+                >
+                  <IconFile size={18} />
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <Text span className="qrbit-text-body block" truncate>
+                    {block.fileName ?? 'No file chosen'}
+                  </Text>
+                  <Text span className="qrbit-text-data block" c="dimmed">
+                    {attachmentSizeLabel ?? 'no size until a file is chosen'}
+                  </Text>
+                </div>
+              </Group>
+            </div>
+
+            <AttachmentControls block={block} maxBytes={attachmentMaxBytes} onUpdate={onUpdate} />
+          </div>
+        </div>
+
+        {renderLockModal()}
+      </div>
+    )
+  }
+
+  // LOCKED BLOCK (edit mode custom layout matching prototype)
+  if (mode === 'edit' && block.type === 'locked') {
+    return (
+      <div
+        className="group relative transition-colors qrbit-locked-block"
+        data-reorder-item={isReorderRow ? '' : undefined}
+        data-block-protected={isProtected ? 'true' : undefined}
+        data-block-unprotected={isUnprotected ? 'true' : undefined}
+        style={{
+          backgroundColor: 'transparent',
+          ...dragStyle,
+        }}
+      >
+        {/* Row 1: Label on left, action icons on right */}
+        <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+            <TextInput
+              variant="unstyled"
+              size="xs"
+              value={block.label || ''}
+              onChange={(e) => onUpdate?.(block.id, { label: e.target.value })}
+              placeholder="Label"
+              aria-label="Block label"
+              styles={{
+                input: {
+                  color: 'var(--qrbit-ink-muted)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  lineHeight: '1.1',
+                  height: 'auto',
+                  padding: 0,
+                  margin: 0,
+                  border: 'none',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  background: 'transparent',
+                },
+              }}
+            />
+          </div>
+
+          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
+              aria-label={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              title={
+                isProtected
+                  ? 'Manage encryption for this block'
+                  : 'Encrypt this block with a password'
+              }
+              onClick={() => {
+                setLockError(null)
+                setShowLockConfigModal(true)
+              }}
+            >
+              {isProtected ? (
+                <IconLock size={16} aria-hidden="true" />
+              ) : isUnprotected ? (
+                <IconShieldOff size={16} aria-hidden="true" />
+              ) : (
+                <IconShieldLock size={16} aria-hidden="true" />
+              )}
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveUp?.(index)}
+              disabled={index === 0}
+              title="Move locked block up"
+              aria-label="Move locked block up"
+            >
+              <IconChevronUp size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onMoveDown?.(index)}
+              disabled={index === totalBlocks - 1}
+              title="Move locked block down"
+              aria-label="Move locked block down"
+            >
+              <IconChevronDown size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDuplicate?.(block.id)}
+              title="Duplicate block"
+              aria-label="Duplicate block"
+            >
+              <IconCopy size={16} aria-hidden="true" />
+            </ActionIcon>
+
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              onClick={() => onDelete?.(block.id)}
+              title="Delete block"
+              aria-label="Delete block"
+            >
+              <IconTrash size={16} aria-hidden="true" />
+            </ActionIcon>
+          </Group>
+        </div>
+
+        {/* Row 2: Grip on left, Secret content / unlock on right */}
+        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
+          {grip !== null ? (
+            <span className="shrink-0">
+              {isValidElement(grip)
+                ? cloneElement(grip as ReactElement<{ c?: string }>, {
+                    c: undefined,
+                  })
+                : grip}
+            </span>
+          ) : null}
+          <div className="flex-1 min-w-0">
+            {isProtected ? (
+              block.isUnlocked ? (
+                <div className="flex items-center justify-between gap-3 p-2 rounded" style={{ backgroundColor: 'var(--qrbit-sunken)' }}>
+                  <Text span className="qrbit-text-body font-mono text-sm" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                    {revealedPlaintext}
+                  </Text>
+                  <Badge variant="light" color="success" size="xs">Revealed</Badge>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3 p-2 rounded" style={{ backgroundColor: 'var(--qrbit-sunken)' }}>
+                  <Text span className="qrbit-text-body-secondary text-xs" c="dimmed">
+                    Encrypted credential (PBKDF2 + AES-256-GCM)
+                  </Text>
+                  <Button
+                    size="xs"
+                    color="locked"
+                    leftSection={<IconLockOpen size={12} aria-hidden="true" />}
+                    onClick={() => {
+                      setUnlockError(false)
+                      setShowUnlockModal(true)
+                    }}
+                  >
+                    Unlock
+                  </Button>
+                </div>
+              )
+            ) : (
+              <TextInput
+                type="text"
+                className="qrbit-secret-input"
+                classNames={{ input: 'qrbit-secret-input' }}
+                value={block.content ?? ''}
+                onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
+                placeholder="Secret / credential value"
+                aria-label="Secret credential"
+                styles={{
+                  input: {
+                    fontFamily: 'monospace',
+                    fontSize: '14px',
+                    fontWeight: 400,
+                    lineHeight: '1.4',
+                    color: 'var(--qrbit-ink)',
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    border: '1px solid var(--qrbit-border)',
+                    borderRadius: 'var(--qrbit-radius-sm, 6px)',
+                    padding: '6px 10px',
+                  },
+                }}
+              />
+            )}
+
+            {showUnlockModal && isProtected && !block.isUnlocked && (
+              <form onSubmit={handleUnlockSubmit} className="flex flex-col gap-2 mt-2 p-3 rounded border border-[var(--qrbit-border)] bg-[var(--qrbit-raised)]">
+                <Group justify="space-between" wrap="nowrap" gap="sm">
+                  <Text span className="qrbit-text-label text-xs">
+                    {`Password for "${block.label || 'Encrypted credential'}"`}
+                  </Text>
+                  <Button
+                    variant="subtle"
+                    size="compact-xs"
+                    c="dimmed"
+                    onClick={() => setShowUnlockModal(false)}
+                  >
+                    Cancel
+                  </Button>
+                </Group>
+                <div className="flex gap-2">
+                  <PasswordInput
+                    size="xs"
+                    className="flex-1"
+                    placeholder="Enter password"
+                    value={passwordInput}
+                    onChange={(e) => {
+                      setUnlockError(false)
+                      setPasswordInput(e.target.value)
+                    }}
+                    error={unlockError ? 'Wrong password' : false}
+                    autoFocus
+                  />
+                  <Button size="xs" color="locked" type="submit" loading={isDecrypting}>
+                    Unlock
+                  </Button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+
+        {renderLockModal()}
+      </div>
+    )
+  }
 
   return (
     <div
