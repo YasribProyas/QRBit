@@ -687,7 +687,24 @@ function FolderSection({
       data-reorder-item={handleProps === null ? undefined : ''}
       style={rowStyle(first, dragOffset)}
     >
-      <div className="library-panel__folder-row flex min-w-0 items-center" style={CONTAINER_ROW}>
+      <div
+        className="library-panel__folder-row flex min-w-0 items-center cursor-pointer"
+        style={CONTAINER_ROW}
+        onClick={(event) => {
+          if (renaming) return
+          const target = event.target as HTMLElement | null
+          if (
+            target?.closest('.library-panel__folder-grip') ||
+            target?.closest('.library-panel__folder-rail') ||
+            target?.closest('.library-panel__new-file') ||
+            target?.closest('.library-panel__folder-menu-toggle') ||
+            target?.closest('.library-panel__folder-rename')
+          ) {
+            return
+          }
+          onToggleCollapsed()
+        }}
+      >
         {/*
           The container row: grip, folder button (with folder icon), collapse toggle beside it, count, plus, menu.
         */}
@@ -751,7 +768,10 @@ function FolderSection({
             // void the owner pointed at. The sentence is still there, on the control it
             // describes, and the empty state says it out loud when it is the truth.
             title={folder === null ? 'Dossiers that are not in a folder listed here.' : undefined}
-            onClick={onToggleCollapsed}
+            onClick={(event) => {
+              event.stopPropagation()
+              onToggleCollapsed()
+            }}
           >
             <span className="library-panel__folder-label qrbit-text-title truncate">{name}</span>
           </Button>
@@ -764,7 +784,10 @@ function FolderSection({
             className="library-panel__folder-toggle shrink-0"
             aria-expanded={!collapsed}
             aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${name}`}
-            onClick={onToggleCollapsed}
+            onClick={(event) => {
+              event.stopPropagation()
+              onToggleCollapsed()
+            }}
             style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
           >
             {collapsed ? (
@@ -978,6 +1001,9 @@ function ReorderGrip({
         color: hovered ? 'var(--qrbit-ink)' : 'var(--qrbit-ink-muted)',
         transition: 'color 150ms ease, background-color 150ms ease',
       }}
+      onClick={(event) => {
+        event.stopPropagation()
+      }}
     >
       <IconGripVertical size={16} stroke={1.5} aria-hidden="true" />
     </ActionIcon>
@@ -1000,6 +1026,9 @@ function GripSlot({ className }: { className: string }) {
       aria-hidden="true"
       className={`${className} shrink-0`}
       style={{ inlineSize: ROW_ICON_BOX }}
+      onClick={(event) => {
+        event.stopPropagation()
+      }}
     />
   )
 }
@@ -1038,6 +1067,9 @@ function RowMenu({ label, items, className }: { label: string; items: RowMenuIte
           size="lg"
           className={className}
           aria-label={label}
+          onClick={(event) => {
+            event.stopPropagation()
+          }}
           style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
         >
           <IconDotsVertical size={16} stroke={1.6} aria-hidden="true" />

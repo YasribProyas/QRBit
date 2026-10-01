@@ -2180,11 +2180,46 @@ button {
 }
 
 .library-panel__file .library-panel__grip,
-.library-panel__file .library-panel__file-rail {
+.library-panel__file .library-panel__file-rail,
+.library-panel__folder-grip,
+.library-panel__folder-rail,
+.library-panel__new-file,
+.library-panel__folder-menu-toggle,
+.library-panel__file-menu-toggle {
   width: 26px;
   min-width: 26px;
   height: 30px;
+  inline-size: 26px !important;
 }
 
+.library-panel__new-file {
+  margin-inline-end: -4px;
+}
 
+.header-variant-acrylic-bezel {
+  background: rgba(244, 243, 240, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1.5px solid var(--qrbit-border-strong);
+  border-radius: var(--qrbit-radius-lg);
+  box-shadow: 0 4px 20px -2px rgba(11, 18, 32, 0.08);
+  padding: 0.65rem 1.2rem;
+}
 
+[data-theme='dark'] .header-variant-acrylic-bezel {
+  background: rgba(22, 28, 40, 0.85);
+}
+
+.library-panel__folder-row {
+  cursor: pointer;
+  border-radius: var(--qrbit-radius-sm);
+  transition: background-color 150ms ease;
+}
+
+.library-panel__folder-row:hover {
+  background-color: var(--qrbit-sunken);
+}
+
+.library-panel__folder-rail {
+  cursor: default;
+}

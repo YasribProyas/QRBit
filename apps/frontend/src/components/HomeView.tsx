@@ -258,14 +258,8 @@ export function HomeView({
         style={{ paddingBottom: 'var(--qrbit-space-lg)' }}
       >
         {/* Top bar: the identity, the library toggle, and the one thing not about this screen. */}
-        <header className="home__header page__header shrink-0">
+        <header className="home__header page__header header-variant-acrylic-bezel shrink-0">
           <Group align="center" gap="sm" wrap="nowrap">
-            {/*
-              Only on a phone, and only ever this one button. At desktop widths the library is
-              already on screen, so a toggle would open a drawer over a panel the user can see —
-              which is the thing DESIGN.md's "No drawer" line was protecting, and the reason the
-              line is only overridden below the breakpoint.
-            */}
             {isMobileShell ? (
               <Burger
                 className="home__library-toggle"
@@ -281,15 +275,8 @@ export function HomeView({
               />
             ) : null}
 
-            <img src="/favicon.svg" alt="QRBit" width={28} height={28} />
-            {/*
-              The wordmark is the display role and needs no tagline under it. The line this
-              header used to carry ("Air-gapped structured transfer") claimed a property the
-              product does not have — pairing runs through the signaling worker, so the two
-              devices are not air-gapped — and `AppHeader.tsx` dropped the same sentence for the
-              same reason, so the two headers now agree on what the product promises.
-            */}
-            <Text className="qrbit-text-display" component="h1">
+            <img src="/favicon.svg" alt="QRBit" width={30} height={30} />
+            <Text className="qrbit-text-display font-bold tracking-tight" component="h1">
               QRBit
             </Text>
             <Badge
@@ -302,10 +289,10 @@ export function HomeView({
                 letterSpacing: '0.08em',
                 fontFamily: 'var(--qrbit-font-mono)',
                 textTransform: 'uppercase',
-                borderWidth: '1px',
+                borderWidth: '1.5px',
               }}
             >
-              P2P Air-Drop
+              P2P Air-Drop // Paired
             </Badge>
           </Group>
 
@@ -314,9 +301,10 @@ export function HomeView({
             <Link className="home__settings" to="/settings" style={{ textDecoration: 'none' }}>
               <Button
                 className={THUMB_TARGET}
-                variant="subtle"
+                variant="outline"
                 color="gray"
                 size="sm"
+                style={{ borderWidth: '1px' }}
                 leftSection={<IconSettings size={16} stroke={1.6} aria-hidden="true" />}
               >
                 Settings
