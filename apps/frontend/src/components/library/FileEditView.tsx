@@ -796,7 +796,7 @@ export function FileEditView({
         </Group>
       </header>
 
-      <main className="flex-1 px-4 py-5 max-w-xl mx-auto w-full space-y-4">
+      <main className="flex-1 px-4 py-5 max-w-2xl lg:max-w-3xl xl:max-w-4xl mx-auto w-full space-y-4">
         {/* Meta bar: block count, and the reorder hint — now true (D16.2/D16.3) */}
         <Group justify="space-between" wrap="nowrap" gap="sm" px="xs">
           <Group gap="xs" wrap="nowrap">
@@ -837,7 +837,7 @@ export function FileEditView({
         {/* Blocks list — each row is a measured reorder item */}
         <div
           ref={listRef}
-          className="space-y-3 p-4"
+          className="space-y-3 pl-3.5 pr-11 py-5"
           style={{
             backgroundColor: 'var(--qrbit-raised)',
             borderRadius: 'var(--qrbit-radius-lg)',

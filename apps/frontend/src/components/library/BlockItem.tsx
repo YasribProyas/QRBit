@@ -231,7 +231,7 @@ export function BlockItem({
       // control, one name, visible or spoken (DESIGN.md wants the visible word).
       <ActionIcon
         variant="subtle"
-        size="lg"
+        size="md"
         c="dimmed"
         title={reorderHandleProps['aria-label']}
         {...reorderHandleProps}
@@ -633,7 +633,7 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -734,7 +734,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-10px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-10px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
@@ -795,7 +795,7 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -896,7 +896,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Normal text / input on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-14px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-14px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
@@ -962,7 +962,7 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -1063,7 +1063,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Textarea on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
@@ -1149,7 +1149,7 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -1249,7 +1249,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Image preview & controls on right */}
-        <div className="flex items-start gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
+        <div className="flex items-start gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
             <span className="shrink-0 pt-1">
               {isValidElement(grip)
@@ -1378,7 +1378,7 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -1478,7 +1478,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Attachment card & controls on right */}
-        <div className="flex items-start gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
+        <div className="flex items-start gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
             <span className="shrink-0 pt-1">
               {isValidElement(grip)
@@ -1591,7 +1591,7 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '44px' : '0px' }}>
+          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
             <TextInput
               variant="unstyled"
               size="xs"
@@ -1691,7 +1691,7 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Secret content / unlock on right */}
-        <div className="flex items-center gap-2 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
           {grip !== null ? (
             <span className="shrink-0">
               {isValidElement(grip)
