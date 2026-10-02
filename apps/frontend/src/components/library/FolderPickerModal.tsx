@@ -25,6 +25,7 @@ import { IconArrowLeft, IconFolderPlus } from '@tabler/icons-react'
 
 import { WithMantine } from '../common/WithMantine'
 import { FolderOptionRow } from './FolderPicker'
+import { ROOT_FOLDER_ID } from '../../lib/library'
 import type { LibraryFolder } from '../../lib/library'
 
 /** What the user chose. `isNew` answers are a name, not an id: the folder does not exist yet. */
@@ -71,7 +72,9 @@ export function FolderPickerModal({
   fileName = 'Received Dossier',
   purpose = 'save',
 }: FolderPickerModalProps) {
-  const [selectedFolderId, setSelectedFolderId] = useState<string>(folders[0]?.id || '')
+  const [selectedFolderId, setSelectedFolderId] = useState<string>(
+    folders[0]?.id || ROOT_FOLDER_ID,
+  )
   const [newFolderName, setNewFolderName] = useState('')
   const [isCreatingNew, setIsCreatingNew] = useState(false)
 
@@ -139,6 +142,14 @@ export function FolderPickerModal({
               </Text>
             ) : (
               <div role="radiogroup" aria-label={words.title}>
+                <FolderOptionRow
+                  key={ROOT_FOLDER_ID}
+                  name="Root"
+                  selected={selectedFolderId === ROOT_FOLDER_ID}
+                  onSelect={() => {
+                    setSelectedFolderId(ROOT_FOLDER_ID)
+                  }}
+                />
                 {folders.map((folder) => (
                   <FolderOptionRow
                     key={folder.id}

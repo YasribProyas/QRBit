@@ -693,18 +693,26 @@ export function FileEditView({
                   aria-label="Move to folder"
                   style={{ flex: 'none' }}
                 >
-                  <IconFolderPlus size={15} aria-hidden="true" />
+                  <IconFolderSymlink size={15} aria-hidden="true" />
                 </ActionIcon>
                 <ActionIcon
                   variant="subtle"
                   size="md"
                   c={draftIsLocked ? 'locked' : 'dimmed'}
                   onClick={() => {
-                    setDraftIsLocked((prev) => !prev)
-                    setIsDirty(true)
+                    if (draftIsLocked) {
+                      setDraftIsLocked(false)
+                      dossierPasswordRef.current = ''
+                      setIsDirty(true)
+                    } else {
+                      setShowDossierLockModal(true)
+                      setDossierLockPassword('')
+                      setDossierLockConfirm('')
+                      setDossierLockError(null)
+                    }
                   }}
-                  title={draftIsLocked ? 'Unlock dossier' : 'Lock dossier'}
-                  aria-label={draftIsLocked ? 'Unlock dossier' : 'Lock dossier'}
+                  title={draftIsLocked ? 'Unlock dossier (remove encryption)' : 'Lock dossier'}
+                  aria-label={draftIsLocked ? 'Unlock dossier (remove encryption)' : 'Lock dossier'}
                   style={{
                     flex: 'none',
                     color: draftIsLocked ? 'var(--qrbit-locked)' : undefined,
