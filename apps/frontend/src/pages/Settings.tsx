@@ -234,36 +234,25 @@ export function Settings(): ReactElement {
       showVault={false}
       mainContent={
         <Stack gap="xl" className="settings-page">
-          <Stack gap="xs">
+          <Stack gap="xxs">
             <Title order={1} className="qrbit-text-display settings__display-title">
               Settings
             </Title>
-            <Text className="qrbit-text-body-secondary settings__subtitle" c="dimmed" maw="68ch">
-              Manage your local library storage, appearance, and privacy settings on this device.
+            <Text className="qrbit-text-body-secondary settings__subtitle" c="dimmed">
+              Local preferences, storage, and privacy on this device.
             </Text>
           </Stack>
 
           {/* ---------------------------------------------------------- appearance -- */}
-          <Section
-            heading="Appearance"
-            description="Customize your visual theme and interface preferences."
-          >
-            <Group justify="space-between" gap="md" wrap="wrap">
-              <Stack gap="xxs" maw="46ch">
-                <Text className="qrbit-text-label">Colour scheme</Text>
-                <Text className="qrbit-text-body-secondary" c="dimmed">
-                  Choose between light mode, dark mode, or follow your system preference.
-                </Text>
-              </Stack>
+          <Section heading="Appearance">
+            <Group justify="space-between" gap="md" wrap="nowrap">
+              <Text className="qrbit-text-body font-medium">Colour scheme</Text>
               <ThemeToggle />
             </Group>
           </Section>
 
           {/* ------------------------------------------------------------ library -- */}
-          <Section
-            heading="Library"
-            description="Your dossiers and files are stored in this browser's local database. Back up or restore your data anytime."
-          >
+          <Section heading="Library">
             {storeError !== null ? (
               <Alert
                 color="danger"
@@ -275,45 +264,37 @@ export function Settings(): ReactElement {
               </Alert>
             ) : null}
 
-            <Stack gap="xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Measure label="Folders" value={String(folders.length)} />
               <Measure label="Dossiers" value={String(files.length)} />
               <Measure label="Items" value={String(items.length)} />
               <Measure label="Image and file data in items" value={formatByteSize(blobBytes)} />
-              <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-                Dossier attachments are stored with their respective blocks and counted separately.
-              </Text>
-            </Stack>
+            </div>
 
-            <Stack gap="md">
-              <Title order={3} className="qrbit-text-title">
-                Export library backup
-              </Title>
-              <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-                Export writes your entire library into a single{' '}
-                <Code styles={CODE_INLINE_STYLES}>{EXPORT_FILE_EXTENSION}</Code> file to save or transfer.
-                Nothing is uploaded, and protected blocks remain encrypted inside the export.
-              </Text>
-              <Button
-                variant="default"
-                size="sm"
-                className={`${THUMB_TARGET} tactile-btn`}
-                leftSection={<IconDownload size={16} aria-hidden="true" />}
-                onClick={() => {
-                  setExporting(true)
-                }}
-              >
-                Export library
-              </Button>
-            </Stack>
+            <div className="pt-2">
+              <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                <Text className="qrbit-text-body-secondary" c="dimmed">
+                  Export entire library into a single{' '}
+                  <Code styles={CODE_INLINE_STYLES}>{EXPORT_FILE_EXTENSION}</Code> file. Nothing is uploaded.
+                </Text>
+                <Button
+                  variant="default"
+                  size="sm"
+                  className={`${THUMB_TARGET} tactile-btn`}
+                  leftSection={<IconDownload size={16} aria-hidden="true" />}
+                  onClick={() => {
+                    setExporting(true)
+                  }}
+                >
+                  Export library
+                </Button>
+              </Group>
+            </div>
 
-            <Stack gap="md">
-              <Title order={3} className="qrbit-text-title">
-                Import library backup
-              </Title>
+            <Stack gap="sm" pt="sm" style={{ borderTop: '1px solid var(--qrbit-border)' }}>
               <FileInput
                 label="Import file"
-                description={`Restores folders and dossiers from a ${EXPORT_FILE_EXTENSION} export onto this device. Existing library data is preserved.`}
+                description={`Restore folders and dossiers from a ${EXPORT_FILE_EXTENSION} file.`}
                 placeholder={`Choose a ${EXPORT_FILE_EXTENSION} file`}
                 accept={EXPORT_FILE_EXTENSION}
                 styles={FIELD_LABEL_STYLE}
@@ -329,7 +310,7 @@ export function Settings(): ReactElement {
                 <PasswordInput
                   className="settings__import-password"
                   label="Password"
-                  description="This backup archive is encrypted. Enter its password to decrypt and restore its contents."
+                  description="Enter the password for this encrypted backup file."
                   placeholder="Password for this export file"
                   styles={FIELD_LABEL_STYLE}
                   autoComplete="off"
@@ -408,62 +389,47 @@ export function Settings(): ReactElement {
           </Section>
 
           {/* ------------------------------------------------------------ privacy -- */}
-          <Section
-            heading="What is kept, and where"
-            description="No cloud databases, no user accounts, and no telemetry. All data is scoped to this device."
-          >
-            <Group gap="huge" align="flex-start" wrap="wrap">
-              <Stack gap="sm" maw="30rem">
-                <Title order={3} className="qrbit-text-title">
-                  Kept on this device
-                </Title>
-                <FactRow subject="Folders, dossiers, items" detail="in this browser's IndexedDB" />
+          <Section heading="What is kept, and where">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Stack gap="xs">
+                <Text className="qrbit-text-title">Kept locally</Text>
+                <FactRow subject="Folders, dossiers, items" detail="in IndexedDB" />
                 <FactRow
                   subject="Colour scheme"
                   detail={
                     <>
-                      in localStorage, under one key{' '}
-                      <Code styles={CODE_INLINE_STYLES}>qrbit:theme</Code>
+                      in localStorage (<Code styles={CODE_INLINE_STYLES}>qrbit:theme</Code>)
                     </>
                   }
                 />
               </Stack>
 
-              <Stack gap="sm" maw="30rem">
-                <Title order={3} className="qrbit-text-title">
-                  Never kept
-                </Title>
+              <Stack gap="xs">
+                <Text className="qrbit-text-title">Never stored</Text>
                 <FactRow
-                  subject="Session keys, safety phrase, items in transit"
-                  detail="memory only — discarded when the session closes"
+                  subject="Session keys & transit items"
+                  detail="memory only"
                 />
                 <FactRow
-                  subject="Accounts, analytics, crash reports, backups"
-                  detail="none; no remote servers or tracking exist"
+                  subject="Accounts & analytics"
+                  detail="none exist"
                 />
               </Stack>
-            </Group>
+            </div>
 
-            <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-              All library data exists only in this browser on this device. If you clear this browser's
-              site data, your local library will be deleted. Create an export backup before clearing
-              browser storage or switching devices.
+            <Text className="qrbit-text-body-secondary" c="dimmed">
+              All data exists only on this device. Back up your library before clearing browser site data.
             </Text>
           </Section>
 
           {/* --------------------------------------------------------- connection -- */}
-          <Section
-            heading="Connection"
-            description="Devices pair through a lightweight signaling relay to negotiate direct P2P connections."
-          >
+          <Section heading="Connection">
             <FactRow
               subject="Signaling worker"
               detail={<Code styles={CODE_WELL_STYLES}>{SIGNALING_WS_URL}</Code>}
             />
-            <Text className="qrbit-text-body-secondary" c="dimmed" maw="68ch">
-              The signaling worker coordinates connection discovery, public keys, and ICE candidates.
-              It never holds or receives the session key or your file contents. Once paired, all data
-              and file bytes travel peer-to-peer with AES-256-GCM encryption.
+            <Text className="qrbit-text-body-secondary" c="dimmed">
+              Signaling worker coordinates discovery and exchange only. All file transfer is direct and end-to-end encrypted with AES-256-GCM.
             </Text>
           </Section>
 
@@ -485,7 +451,7 @@ export function Settings(): ReactElement {
 interface SectionProps {
   heading: string
   /** The one line under a heading. Supporting copy, never a kicker above one. */
-  description: string
+  description?: string
   children: ReactNode
 }
 
@@ -502,14 +468,16 @@ function Section({ heading, description, children }: SectionProps): ReactElement
 
   return (
     <Paper component="section" aria-labelledby={headingId} radius="lg" p="lg" className="settings-section-panel" styles={PANEL_STYLES}>
-      <Stack gap="lg">
-        <Stack gap="xs">
+      <Stack gap="md">
+        <Stack gap="xxs">
           <Title order={2} id={headingId} className="qrbit-text-headline">
             {heading}
           </Title>
-          <Text className="qrbit-text-body-secondary settings__section-desc" c="dimmed" maw="68ch">
-            {description}
-          </Text>
+          {description ? (
+            <Text className="qrbit-text-body-secondary settings__section-desc" c="dimmed" maw="68ch">
+              {description}
+            </Text>
+          ) : null}
         </Stack>
         {children}
       </Stack>
@@ -520,12 +488,25 @@ function Section({ heading, description, children }: SectionProps): ReactElement
 /** A counted or measured value: label one side, the Data role on the other. */
 function Measure({ label, value }: { label: string; value: string }): ReactElement {
   return (
-    <Group className="settings__measure" justify="space-between" gap="md" wrap="nowrap">
-      <Text className="qrbit-text-body">{label}</Text>
-      <Text className="qrbit-text-data" c="dimmed" style={{ textAlign: 'right' }}>
+    <div
+      className="settings__measure flex flex-col p-3 rounded"
+      style={{
+        background: 'var(--qrbit-sunken)',
+        border: '1px solid var(--qrbit-border)',
+        borderRadius: 'var(--qrbit-radius-md)',
+      }}
+    >
+      <Text className="qrbit-text-label" c="dimmed" truncate>
+        {label}
+      </Text>
+      <Text
+        className="qrbit-text-data"
+        fw={600}
+        style={{ color: 'var(--qrbit-ink)', fontSize: '13px', marginTop: '2px' }}
+      >
         {value}
       </Text>
-    </Group>
+    </div>
   )
 }
 
@@ -535,8 +516,8 @@ function Measure({ label, value }: { label: string; value: string }): ReactEleme
  */
 function FactRow({ subject, detail }: { subject: string; detail: ReactNode }): ReactElement {
   return (
-    <Group gap="sm" align="flex-start" wrap="wrap">
-      <Text className="qrbit-text-body">{subject}</Text>
+    <Group justify="space-between" gap="sm" align="baseline" wrap="wrap">
+      <Text className="qrbit-text-body font-medium">{subject}</Text>
       <Text className="qrbit-text-body-secondary" c="dimmed">
         {detail}
       </Text>
