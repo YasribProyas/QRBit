@@ -166,6 +166,10 @@ export function BlockItem({
   const [removeLockPassword, setRemoveLockPassword] = useState('')
   const [removeLockError, setRemoveLockError] = useState(false)
   const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null)
+  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false)
+
+  const hasLabel = Boolean(block.label && block.label.trim() !== '')
+  const isBlockActive = isReorderDragging || showLockConfigModal || showUnlockModal
 
   // Every edit-mode row is a measured reorder item, grip or no grip: the hook counts those
   // markers to index a drag, so the set of them has to be the whole list.
@@ -516,6 +520,57 @@ export function BlockItem({
     </Modal>
   )
 
+  const renderImageViewerModal = (): ReactNode => {
+    if (block.type !== 'image' || !attachmentBlob || !(attachmentBlob instanceof Blob)) return null
+
+    return (
+      <Modal
+        opened={isImageViewerOpen}
+        onClose={() => setIsImageViewerOpen(false)}
+        size="auto"
+        centered
+        padding="md"
+        withCloseButton
+        title={block.fileName ?? 'Image Preview'}
+        styles={{
+          content: {
+            backgroundColor: 'var(--qrbit-raised)',
+            border: '1px solid var(--qrbit-border)',
+            borderRadius: 'var(--qrbit-radius-lg)',
+            maxWidth: '94vw',
+            maxHeight: '94vh',
+          },
+          body: {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 'var(--qrbit-space-sm)',
+            overflow: 'auto',
+          },
+        }}
+      >
+        <ImagePreview
+          blob={attachmentBlob}
+          name={block.fileName ?? 'Chosen image'}
+          fullSize
+        />
+        {block.fileName ? (
+          <Group gap="xs" mt="xs" justify="center">
+            <Text size="xs" className="qrbit-text-body font-medium">
+              {block.fileName}
+            </Text>
+            {attachmentSizeLabel ? (
+              <Text size="xs" className="qrbit-text-data" c="dimmed">
+                ({attachmentSizeLabel})
+              </Text>
+            ) : null}
+          </Group>
+        ) : null}
+      </Modal>
+    )
+  }
+
   /**
    * Transfer status for the two session screens. A badge carries an icon *and* a word
    * (DESIGN.md, "Badges and Chips"): colour alone is never the whole message.
@@ -594,7 +649,13 @@ export function BlockItem({
         style={dragStyle}
       >
         {grip !== null ? (
-          <span className="shrink-0">
+          <span
+            className={`shrink-0 transition-opacity duration-150 ${
+              isReorderDragging
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+            }`}
+          >
             {isValidElement(grip)
               ? cloneElement(grip as ReactElement<{ c?: string }>, {
                   c: undefined,
@@ -609,6 +670,11 @@ export function BlockItem({
             size="md"
             aria-label="Delete divider"
             title="Delete divider"
+            className={`shrink-0 transition-opacity duration-150 ${
+              isReorderDragging
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+            }`}
             onClick={() => onDelete?.(block.id)}
           >
             <IconTrash size={16} aria-hidden="true" />
@@ -633,7 +699,14 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
+          <div
+            className={`flex items-center ${
+              hasLabel || isBlockActive
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
+            }`}
+            style={{ paddingLeft: grip !== null ? '34px' : '0px' }}
+          >
             <TextInput
               variant="unstyled"
               size="xs"
@@ -659,7 +732,16 @@ export function BlockItem({
             />
           </div>
 
-          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+          <Group
+            gap={0}
+            wrap="nowrap"
+            className={`transition-opacity duration-150 ${
+              isBlockActive
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+            }`}
+            style={{ flex: 'none' }}
+          >
             {/* Lock / Unlock Toggle Button */}
             <ActionIcon
               variant="subtle"
@@ -734,9 +816,15 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
-        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-10px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
-            <span className="shrink-0">
+            <span
+              className={`shrink-0 transition-opacity duration-150 ${
+                isBlockActive
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              }`}
+            >
               {isValidElement(grip)
                 ? cloneElement(grip as ReactElement<{ c?: string }>, {
                     c: undefined,
@@ -795,7 +883,14 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
+          <div
+            className={`flex items-center ${
+              hasLabel || isBlockActive
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
+            }`}
+            style={{ paddingLeft: grip !== null ? '34px' : '0px' }}
+          >
             <TextInput
               variant="unstyled"
               size="xs"
@@ -821,7 +916,16 @@ export function BlockItem({
             />
           </div>
 
-          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+          <Group
+            gap={0}
+            wrap="nowrap"
+            className={`transition-opacity duration-150 ${
+              isBlockActive
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+            }`}
+            style={{ flex: 'none' }}
+          >
             {/* Lock / Unlock Toggle Button */}
             <ActionIcon
               variant="subtle"
@@ -896,9 +1000,15 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Normal text / input on right */}
-        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-14px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
-            <span className="shrink-0">
+            <span
+              className={`shrink-0 transition-opacity duration-150 ${
+                isBlockActive
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              }`}
+            >
               {isValidElement(grip)
                 ? cloneElement(grip as ReactElement<{ c?: string }>, {
                     c: undefined,
@@ -962,7 +1072,14 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
+          <div
+            className={`flex items-center ${
+              hasLabel || isBlockActive
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
+            }`}
+            style={{ paddingLeft: grip !== null ? '34px' : '0px' }}
+          >
             <TextInput
               variant="unstyled"
               size="xs"
@@ -988,7 +1105,16 @@ export function BlockItem({
             />
           </div>
 
-          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+          <Group
+            gap={0}
+            wrap="nowrap"
+            className={`transition-opacity duration-150 ${
+              isBlockActive
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+            }`}
+            style={{ flex: 'none' }}
+          >
             {/* Lock / Unlock Toggle Button */}
             <ActionIcon
               variant="subtle"
@@ -1063,9 +1189,15 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Textarea on right */}
-        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
-            <span className="shrink-0">
+            <span
+              className={`shrink-0 transition-opacity duration-150 ${
+                isBlockActive
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              }`}
+            >
               {isValidElement(grip)
                 ? cloneElement(grip as ReactElement<{ c?: string }>, {
                     c: undefined,
@@ -1149,7 +1281,14 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
+          <div
+            className={`flex items-center ${
+              hasLabel || isBlockActive
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
+            }`}
+            style={{ paddingLeft: grip !== null ? '34px' : '0px' }}
+          >
             <TextInput
               variant="unstyled"
               size="xs"
@@ -1175,7 +1314,16 @@ export function BlockItem({
             />
           </div>
 
-          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+          <Group
+            gap={0}
+            wrap="nowrap"
+            className={`transition-opacity duration-150 ${
+              isBlockActive
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+            }`}
+            style={{ flex: 'none' }}
+          >
             <ActionIcon
               variant="subtle"
               size="md"
@@ -1251,7 +1399,13 @@ export function BlockItem({
         {/* Row 2: Grip on left, Image preview & controls on right */}
         <div className="flex items-start gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
-            <span className="shrink-0 pt-1">
+            <span
+              className={`shrink-0 pt-1 transition-opacity duration-150 ${
+                isBlockActive
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              }`}
+            >
               {isValidElement(grip)
                 ? cloneElement(grip as ReactElement<{ c?: string }>, {
                     c: undefined,
@@ -1262,18 +1416,21 @@ export function BlockItem({
           {block.blob !== undefined || block.fileName !== undefined ? (
             <div className="flex-1 min-w-0 space-y-1.5">
               <div
-                className="relative w-full flex flex-col items-center justify-center overflow-hidden rounded border"
+                className="relative w-fit max-w-full flex flex-col items-center justify-center rounded border"
                 style={{
                   backgroundColor: 'var(--qrbit-sunken)',
                   borderColor: 'var(--qrbit-border)',
                   borderRadius: 'var(--qrbit-radius-sm)',
                   padding: '4px',
-                  maxHeight: 180,
                   minHeight: 56,
                 }}
               >
                 {canPreviewImage && attachmentBlob instanceof Blob ? (
-                  <ImagePreview blob={attachmentBlob} name={block.fileName ?? 'Chosen image'} />
+                  <ImagePreview
+                    blob={attachmentBlob}
+                    name={block.fileName ?? 'Chosen image'}
+                    onClick={() => setIsImageViewerOpen(true)}
+                  />
                 ) : (
                   <p
                     className="qrbit-text-body-secondary text-center px-2 py-1 text-xs"
@@ -1317,6 +1474,7 @@ export function BlockItem({
                   variant="subtle"
                   size="xs"
                   c="dimmed"
+                  className="hover:text-[var(--qrbit-danger)] hover:bg-[color-mix(in_srgb,var(--qrbit-danger)_12%,transparent)] transition-colors"
                   title="Remove image"
                   aria-label="Remove image"
                   onClick={() => {
@@ -1358,6 +1516,7 @@ export function BlockItem({
           )}
         </div>
 
+        {renderImageViewerModal()}
         {renderLockModal()}
       </div>
     )
@@ -1378,7 +1537,14 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
+          <div
+            className={`flex items-center ${
+              hasLabel || isBlockActive
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
+            }`}
+            style={{ paddingLeft: grip !== null ? '34px' : '0px' }}
+          >
             <TextInput
               variant="unstyled"
               size="xs"
@@ -1404,7 +1570,16 @@ export function BlockItem({
             />
           </div>
 
-          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+          <Group
+            gap={0}
+            wrap="nowrap"
+            className={`transition-opacity duration-150 ${
+              isBlockActive
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+            }`}
+            style={{ flex: 'none' }}
+          >
             <ActionIcon
               variant="subtle"
               size="md"
@@ -1480,7 +1655,13 @@ export function BlockItem({
         {/* Row 2: Grip on left, Attachment card & controls on right */}
         <div className="flex items-start gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
-            <span className="shrink-0 pt-1">
+            <span
+              className={`shrink-0 pt-1 transition-opacity duration-150 ${
+                isBlockActive
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              }`}
+            >
               {isValidElement(grip)
                 ? cloneElement(grip as ReactElement<{ c?: string }>, {
                     c: undefined,
@@ -1491,7 +1672,7 @@ export function BlockItem({
           {block.blob !== undefined || block.fileName !== undefined ? (
             <div className="flex-1 min-w-0">
               <div
-                className="flex items-center justify-between p-1.5 px-2.5 rounded border gap-2"
+                className="flex items-center justify-between p-1.5 px-2.5 rounded border gap-2 w-full sm:w-1/3 min-w-[200px]"
                 style={{
                   backgroundColor: 'var(--qrbit-sunken)',
                   borderColor: 'var(--qrbit-border)',
@@ -1530,6 +1711,7 @@ export function BlockItem({
                   variant="subtle"
                   size="sm"
                   c="dimmed"
+                  className="hover:text-[var(--qrbit-danger)] hover:bg-[color-mix(in_srgb,var(--qrbit-danger)_12%,transparent)] transition-colors"
                   title="Remove file"
                   aria-label="Remove file"
                   onClick={() => {
@@ -1591,7 +1773,14 @@ export function BlockItem({
       >
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
-          <div className="flex items-center" style={{ paddingLeft: grip !== null ? '34px' : '0px' }}>
+          <div
+            className={`flex items-center transition-opacity duration-150 ${
+              hasLabel || isBlockActive
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100'
+            }`}
+            style={{ paddingLeft: grip !== null ? '34px' : '0px' }}
+          >
             <TextInput
               variant="unstyled"
               size="xs"
@@ -1617,7 +1806,16 @@ export function BlockItem({
             />
           </div>
 
-          <Group gap={0} wrap="nowrap" style={{ flex: 'none' }}>
+          <Group
+            gap={0}
+            wrap="nowrap"
+            style={{ flex: 'none' }}
+            className={`transition-opacity duration-150 ${
+              isBlockActive
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+            }`}
+          >
             <ActionIcon
               variant="subtle"
               size="md"
@@ -1691,9 +1889,15 @@ export function BlockItem({
         </div>
 
         {/* Row 2: Grip on left, Secret content / unlock on right */}
-        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-8px' }}>
+        <div className="flex items-center gap-1.5 px-0 pt-0 pb-0" style={{ marginTop: '-6px' }}>
           {grip !== null ? (
-            <span className="shrink-0">
+            <span
+              className={`shrink-0 transition-opacity duration-150 ${
+                isBlockActive
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              }`}
+            >
               {isValidElement(grip)
                 ? cloneElement(grip as ReactElement<{ c?: string }>, {
                     c: undefined,
@@ -2107,7 +2311,11 @@ export function BlockItem({
               }}
             >
               {canPreviewImage && attachmentBlob instanceof Blob ? (
-                <ImagePreview blob={attachmentBlob} name={block.fileName ?? 'Chosen image'} />
+                <ImagePreview
+                  blob={attachmentBlob}
+                  name={block.fileName ?? 'Chosen image'}
+                  onClick={() => setIsImageViewerOpen(true)}
+                />
               ) : (
                 <p
                   className="qrbit-text-body-secondary text-center px-4"
@@ -2430,6 +2638,7 @@ export function BlockItem({
 
       {/* Lock dialog */}
       {renderLockModal()}
+      {renderImageViewerModal()}
     </div>
   )
 }
@@ -2605,16 +2814,51 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
  * `OFFSET: Δ120mm` caption, shown for every image block whether or not it held anything. It read
  * as the user's picture and it was decoration. A row now draws a picture only when it has one.
  */
-function ImagePreview({ blob, name }: { blob: Blob; name: string }) {
+function ImagePreview({
+  blob,
+  name,
+  onClick,
+  fullSize = false,
+}: {
+  blob: Blob
+  name: string
+  onClick?: () => void
+  fullSize?: boolean
+}) {
   const url = useObjectUrl(blob)
   if (url === null) return null
 
+  if (fullSize) {
+    return (
+      <img
+        style={{
+          maxWidth: '88vw',
+          maxHeight: '80vh',
+          width: 'auto',
+          height: 'auto',
+          objectFit: 'contain',
+          borderRadius: 'var(--qrbit-radius-sm)',
+          display: 'block',
+        }}
+        src={url}
+        alt={name}
+        data-attachment-preview="true"
+      />
+    )
+  }
+
   return (
     <img
-      className="max-h-full max-w-full object-contain"
+      className="max-h-[380px] max-w-full w-auto h-auto object-contain cursor-pointer transition-transform hover:scale-[1.005]"
+      style={{
+        display: 'block',
+        borderRadius: 'calc(var(--qrbit-radius-sm) - 2px)',
+      }}
       src={url}
       alt={name}
       data-attachment-preview="true"
+      onClick={onClick}
+      title="Click to view full size"
     />
   )
 }
