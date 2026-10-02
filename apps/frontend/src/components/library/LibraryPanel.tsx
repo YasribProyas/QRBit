@@ -963,7 +963,10 @@ function FolderSection({
             target?.closest('.library-panel__folder-rail') ||
             target?.closest('.library-panel__new-file') ||
             target?.closest('.library-panel__folder-menu-toggle') ||
-            target?.closest('.library-panel__folder-rename')
+            target?.closest('.library-panel__folder-rename') ||
+            target?.closest('[role="menu"]') ||
+            target?.closest('[role="menuitem"]') ||
+            target?.closest('.mantine-Menu-dropdown')
           ) {
             return
           }
@@ -1327,7 +1330,11 @@ function RowMenu({ label, items, className }: { label: string; items: RowMenuIte
         </ActionIcon>
       </Menu.Target>
 
-      <Menu.Dropdown>
+      <Menu.Dropdown
+        onClick={(event) => {
+          event.stopPropagation()
+        }}
+      >
         {/*
           The surface, border and hover of this dropdown come from Mantine's own scheme rules
           (`--mantine-color-dark-6`, `-dark-4`, `gray-1`), which the theme's slot bridge does
@@ -1487,7 +1494,7 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
   const [draftName, setDraftName] = useState(file.name)
 
   const preview = getFirstBlockPreview(file)
-  const encrypted = Boolean(file.isLocked)
+  const encrypted = Boolean(file.isLocked) || hasLockedBlocks(file)
 
   const startRename = (): void => {
     setDraftName(file.name)
