@@ -2,7 +2,9 @@ import { useEffect, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { AppLayout } from '../components/layout/AppLayout'
 import { SessionView } from '../components/session/SessionView'
+import { LiveSessionView } from '../components/session/LiveSessionView'
 import { useSession } from '../hooks/useSession'
+import { useLibraryStore } from '../store/libraryStore'
 
 /**
  * Session page (PLAN.md §8).
@@ -51,6 +53,9 @@ export function Session() {
    */
   const sharedFileNotCaptured = searchParams.get('share') === '1'
 
+  const folders = useLibraryStore((state) => state.folders)
+  const saveFile = useLibraryStore((state) => state.saveFile)
+
   return (
     <AppLayout
       session={session}
@@ -83,7 +88,18 @@ export function Session() {
             </section>
           ) : null}
 
-          <SessionView session={session} />
+          {session.phase === 'active' ? (
+            <LiveSessionView
+              session={session}
+              folders={folders}
+              onSaveToLibrary={(file) => {
+                saveFile(file).catch(() => undefined)
+              }}
+              onEndSession={() => session.abort()}
+            />
+          ) : (
+            <SessionView session={session} />
+          )}
         </div>
       }
     />

@@ -766,11 +766,11 @@ describe('Home — live host session and QR (ORCHESTRATION.md D13, Lane 3)', () 
     await waitFor(() => useSessionStore.getState().phase === 'active', 'the active phase')
     await settle()
 
-    // Home renders session board in place of the library
+    // Home renders session board in the session panel while keeping library accessible
     expect(element.querySelector('.session-board')).not.toBe(null)
     expect(element.querySelector('.safety-phrase')).toBe(null)
-    expect(element.querySelector('.library-panel')).toBe(null)
-    expect(element.textContent).not.toContain('Local Library')
+    expect(element.querySelector('.library-panel')).not.toBe(null)
+    expect(element.textContent).toContain('Local Library')
   })
 
   it('the library panel is visible while waiting', async () => {

@@ -133,6 +133,8 @@ export interface HomeViewProps {
   errorMessage?: string | null
   /** Optional dossier editor to render in the main section in place of the QR panel */
   editor?: ReactNode
+  /** Optional active live session to render in the main section in place of the QR panel */
+  activeSession?: ReactNode
 }
 
 /**
@@ -222,6 +224,7 @@ export function HomeView({
   roleLabel,
   errorMessage,
   editor,
+  activeSession,
 }: HomeViewProps) {
   const isMobileShell = useMediaQuery(MOBILE_SHELL_QUERY, undefined, {
     getInitialValueInEffect: false,
@@ -309,6 +312,13 @@ export function HomeView({
               aria-label="Dossier editor"
             >
               {editor}
+            </section>
+          ) : activeSession ? (
+            <section
+              className="home__session-panel flex min-h-0 flex-1 flex-col overflow-y-auto lg:col-start-2 lg:row-start-1"
+              aria-label="Live session"
+            >
+              {activeSession}
             </section>
           ) : (
             <section
@@ -419,7 +429,7 @@ export function HomeView({
           "Scan QRBit" on the left of the QR icon, with equal, generous spacing.
           When editing on a phone, hide the band so it does not obstruct the editor surface.
         */}
-        {(!editor || !isMobileShell) ? (
+        {!activeSession && (!editor || !isMobileShell) ? (
           <div className="home__fab-band" style={FAB_BAND_STYLE}>
             <button
               type="button"

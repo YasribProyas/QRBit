@@ -6,8 +6,7 @@ import { FileEditView } from '../components/library/FileEditView'
 import { LibraryPanel } from '../components/library/LibraryPanel'
 import { ScannerView } from '../components/ScannerView'
 import { SafetyPhraseView } from '../components/SafetyPhraseView'
-import { SenderSessionView } from '../components/session/SenderSessionView'
-import { ReceiverSessionView } from '../components/session/ReceiverSessionView'
+import { LiveSessionView } from '../components/session/LiveSessionView'
 import { SessionEndedView } from '../components/session/SessionEndedView'
 import { isSenderRole } from '../components/session/SessionBoard'
 import {
@@ -188,44 +187,7 @@ export function Home() {
   }
 
 
-  // 3. SAFETY PHRASE GATE
-  if (session.phase === 'pairing' && session.safetyPhrase) {
-    return (
-      <SafetyPhraseView
-        phrase={session.safetyPhrase}
-        confirmed={session.phraseConfirmed}
-        peerConfirmed={session.peerConfirmed}
-        onConfirm={session.confirmPhrase}
-        onAbort={session.abort}
-        role={session.role}
-      />
-    )
-  }
-
-  // 4. ACTIVE LIVE SESSION
-  if (session.phase === 'active') {
-    if (isSenderRole(session.role)) {
-      return (
-        <SenderSessionView
-          session={session}
-          sessionFile={selectedFileForTransfer}
-          onEndSession={() => session.abort()}
-        />
-      )
-    }
-    return (
-      <ReceiverSessionView
-        session={session}
-        folders={folders}
-        onSaveToLibrary={(file) => {
-          saveFile(file).catch(() => undefined)
-        }}
-        onEndSession={() => session.abort()}
-      />
-    )
-  }
-
-  // 5. SESSION ENDED SUMMARY
+  // 4. SESSION ENDED SUMMARY
   if (session.phase === 'ended' && session.receivedItems.length > 0) {
     return (
       <SessionEndedView
@@ -240,58 +202,90 @@ export function Home() {
     )
   }
 
-  // 6. DEFAULT HOME VIEW — the shell: library left (or in the drawer), QR or Editor right
+  // 5. DEFAULT HOME VIEW — the shell: library left (or in the drawer), QR, LiveSession or Editor right
   return (
-    <HomeView
-      pairingCode={session.sessionCode}
-      onRegeneratePairing={() => session.restart()}
-      onOpenScanner={() => setScanning(true)}
-      onJoinCode={(code) => handleScan(code)}
-      roleLabel={session.roleLabel}
-      errorMessage={session.errorMessage}
-      editor={
-        editingFile ? (
-          <>
-            {sendFailure !== null ? (
-              <p
-                className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700"
-                role="alert"
-                data-send-failure="true"
-              >
-                {sendFailure}
-              </p>
-            ) : null}
-            <FileEditView
-              file={editingFile}
-              initialPassword={editingPassword}
-              onBack={() => {
-                setEditingFile(null)
-                setEditingPassword(undefined)
-              }}
-              onSaveFile={handleSaveFile}
-              onSendFile={async (fileToSend) => {
-                // Only open the scanner once the dossier is actually on its way: a refused Send must
-                // not walk the user away from the editor that just told them what to fix.
-                if (await handleSendFileDirectly(fileToSend)) setScanning(true)
-              }}
-              folders={folders}
-            />
-          </>
-        ) : undefined
-      }
-      library={
-        <LibraryPanel
-          activeFileId={editingFile?.id}
-          onSelectFile={(file, password) => {
-            setEditingFile(file)
-            setEditingPassword(password)
-          }}
-          onCreateFile={(folderId) => {
-            setEditingPassword(undefined)
-            handleCreateNewFile(folderId)
-          }}
+    <>
+      {/* 3. SAFETY PHRASE GATE — overlays cleanly over the shell */}
+      {session.phase === 'pairing' && session.safetyPhrase ? (
+        <SafetyPhraseView
+          phrase={session.safetyPhrase}
+          confirmed={session.phraseConfirmed}
+          peerConfirmed={session.peerConfirmed}
+          onConfirm={session.confirmPhrase}
+          onAbort={session.abort}
+          role={session.role}
         />
-      }
-    />
+      ) : null}
+
+      <HomeView
+        pairingCode={session.sessionCode}
+        onRegeneratePairing={() => session.restart()}
+        onOpenScanner={() => setScanning(true)}
+        onJoinCode={(code) => handleScan(code)}
+        roleLabel={session.roleLabel}
+        errorMessage={session.errorMessage}
+        activeSession={
+          session.phase === 'active' ? (
+            <LiveSessionView
+              session={session}
+              folders={folders}
+              onSaveToLibrary={(file) => {
+                saveFile(file).catch(() => undefined)
+              }}
+              onEndSession={() => session.abort()}
+              onOpenDossier={(file) => {
+                setEditingFile(file)
+              }}
+            />
+          ) : undefined
+        }
+        editor={
+          editingFile ? (
+            <>
+              {sendFailure !== null ? (
+                <p
+                  className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700"
+                  role="alert"
+                  data-send-failure="true"
+                >
+                  {sendFailure}
+                </p>
+              ) : null}
+              <FileEditView
+                file={editingFile}
+                initialPassword={editingPassword}
+                onBack={() => {
+                  setEditingFile(null)
+                  setEditingPassword(undefined)
+                }}
+                onSaveFile={handleSaveFile}
+                onSendFile={async (fileToSend) => {
+                  if (session.phase === 'active') {
+                    const sent = await handleSendFileDirectly(fileToSend)
+                    if (sent) setEditingFile(null)
+                  } else {
+                    if (await handleSendFileDirectly(fileToSend)) setScanning(true)
+                  }
+                }}
+                folders={folders}
+              />
+            </>
+          ) : undefined
+        }
+        library={
+          <LibraryPanel
+            activeFileId={editingFile?.id}
+            onSelectFile={(file, password) => {
+              setEditingFile(file)
+              setEditingPassword(password)
+            }}
+            onCreateFile={(folderId) => {
+              setEditingPassword(undefined)
+              handleCreateNewFile(folderId)
+            }}
+          />
+        }
+      />
+    </>
   )
 }

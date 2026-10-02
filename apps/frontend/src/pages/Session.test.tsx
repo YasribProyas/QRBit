@@ -419,7 +419,7 @@ describe('Session page in the active phase (PLAN.md §8 Phase 3)', () => {
     expect(element.textContent).not.toContain('Waiting for the data channel')
   })
 
-  it('renders the board for the receiver but no add bar (PLAN.md §9: sender only)', () => {
+  it('renders the board with send capabilities for both peers symmetrically', () => {
     mocked.current = makeResult({
       role: 'host',
       phase: 'active',
@@ -430,7 +430,7 @@ describe('Session page in the active phase (PLAN.md §8 Phase 3)', () => {
     const element = renderSession()
 
     expect(element.querySelector('.session-board')).not.toBe(null)
-    expect(element.querySelector('.add-item-bar')).toBe(null)
+    expect(element.querySelector('.add-item-bar')).not.toBe(null)
   })
 
   it('shows no board before the session is active', () => {
