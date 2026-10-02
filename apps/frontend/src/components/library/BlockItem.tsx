@@ -165,6 +165,7 @@ export function BlockItem({
    */
   const [removeLockPassword, setRemoveLockPassword] = useState('')
   const [removeLockError, setRemoveLockError] = useState(false)
+  const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null)
 
   // Every edit-mode row is a measured reorder item, grip or no grip: the hook counts those
   // markers to index a drag, so the set of them has to be the whole list.
@@ -1258,60 +1259,103 @@ export function BlockItem({
                 : grip}
             </span>
           ) : null}
-          <div className="flex-1 min-w-0 space-y-2">
-            <div
-              className="relative w-full flex flex-col items-center justify-center overflow-hidden"
-              style={{
-                backgroundColor: 'var(--qrbit-sunken)',
-                border: '1px solid var(--qrbit-border)',
-                borderRadius: 'var(--qrbit-radius-sm)',
-                padding: 'var(--qrbit-space-md)',
-                minHeight: 96,
-              }}
-            >
-              {canPreviewImage && attachmentBlob instanceof Blob ? (
-                <ImagePreview blob={attachmentBlob} name={block.fileName ?? 'Chosen image'} />
-              ) : (
-                <p
-                  className="qrbit-text-body-secondary text-center px-4"
-                  style={{ color: 'var(--qrbit-ink-muted)' }}
-                  data-attachment-empty="true"
-                >
-                  {attachmentBlob instanceof Blob
-                    ? 'The bytes on this block are not an image, so there is no preview to draw.'
-                    : 'No image chosen yet — this block holds no bytes.'}
-                </p>
-              )}
-
-              {transferStatus === 'in_progress' && (
-                <div
-                  className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6"
-                  style={{ backgroundColor: 'var(--qrbit-sunken)' }}
-                >
-                  <span className="qrbit-text-body-secondary">
-                    Streaming image data… {Math.round(transferProgress)}%
-                  </span>
-                  <Progress value={transferProgress} size="sm" radius="full" w={192} />
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between gap-2">
-              <Text span className="qrbit-text-body-secondary" style={{ minWidth: 0 }} truncate>
-                {block.fileName ?? 'No file chosen'}
-              </Text>
-              <Text
-                span
-                className="qrbit-text-data"
-                c="dimmed"
-                style={{ flex: 'none' }}
+          {block.blob !== undefined || block.fileName !== undefined ? (
+            <div className="flex-1 min-w-0 space-y-1.5">
+              <div
+                className="relative w-full flex flex-col items-center justify-center overflow-hidden rounded border"
+                style={{
+                  backgroundColor: 'var(--qrbit-sunken)',
+                  borderColor: 'var(--qrbit-border)',
+                  borderRadius: 'var(--qrbit-radius-sm)',
+                  padding: '4px',
+                  maxHeight: 180,
+                  minHeight: 56,
+                }}
               >
-                {attachmentSizeLabel ?? 'no size until a file is chosen'}
-              </Text>
-            </div>
+                {canPreviewImage && attachmentBlob instanceof Blob ? (
+                  <ImagePreview blob={attachmentBlob} name={block.fileName ?? 'Chosen image'} />
+                ) : (
+                  <p
+                    className="qrbit-text-body-secondary text-center px-2 py-1 text-xs"
+                    style={{ color: 'var(--qrbit-ink-muted)' }}
+                    data-attachment-empty="true"
+                  >
+                    {attachmentBlob instanceof Blob
+                      ? 'The bytes on this block are not an image.'
+                      : 'No image chosen'}
+                  </p>
+                )}
 
-            <AttachmentControls block={block} maxBytes={attachmentMaxBytes} onUpdate={onUpdate} />
-          </div>
+                {transferStatus === 'in_progress' && (
+                  <div
+                    className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 p-3"
+                    style={{ backgroundColor: 'var(--qrbit-sunken)' }}
+                  >
+                    <span className="qrbit-text-body-secondary text-xs">
+                      Streaming… {Math.round(transferProgress)}%
+                    </span>
+                    <Progress value={transferProgress} size="xs" radius="full" w={140} />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 px-0.5">
+                <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                  <Text span className="qrbit-text-body-secondary text-xs" style={{ minWidth: 0 }} truncate>
+                    {block.fileName ?? 'Chosen image'}
+                  </Text>
+                  <Text
+                    span
+                    className="qrbit-text-data text-xs"
+                    c="dimmed"
+                    style={{ flex: 'none' }}
+                  >
+                    {attachmentSizeLabel ?? ''}
+                  </Text>
+                </Group>
+                <ActionIcon
+                  variant="subtle"
+                  size="xs"
+                  c="dimmed"
+                  title="Remove image"
+                  aria-label="Remove image"
+                  onClick={() => {
+                    onUpdate?.(block.id, {
+                      blob: undefined,
+                      fileName: undefined,
+                      fileSize: undefined,
+                      mimeType: undefined,
+                    })
+                  }}
+                >
+                  <IconX size={14} aria-hidden="true" />
+                </ActionIcon>
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 min-w-0">
+              <AttachmentPicker
+                blockType="image"
+                label="Choose image"
+                maxBytes={attachmentMaxBytes}
+                onSelect={(attachment) => {
+                  setAttachmentPickerError(null)
+                  onUpdate?.(block.id, {
+                    blob: attachment.blob,
+                    fileName: attachment.fileName,
+                    mimeType: attachment.mimeType,
+                    fileSize: attachment.sizeInBytes,
+                  })
+                }}
+                onReject={(msg) => setAttachmentPickerError(msg)}
+              />
+              {attachmentPickerError ? (
+                <Text size="xs" c="danger" mt={4}>
+                  {attachmentPickerError}
+                </Text>
+              ) : null}
+            </div>
+          )}
         </div>
 
         {renderLockModal()}
@@ -1444,45 +1488,87 @@ export function BlockItem({
                 : grip}
             </span>
           ) : null}
-          <div className="flex-1 min-w-0 space-y-2">
-            <div
-              className="flex items-center justify-between p-2.5 rounded border gap-3"
-              style={{
-                backgroundColor: 'var(--qrbit-sunken)',
-                borderColor: 'var(--qrbit-border)',
-                borderRadius: 'var(--qrbit-radius-sm)',
-              }}
-            >
-              <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
-                <span
-                  aria-hidden="true"
-                  style={{
-                    flex: 'none',
-                    width: 34,
-                    height: 34,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--qrbit-signal)',
-                    backgroundColor: 'var(--qrbit-raised)',
-                    borderRadius: 'var(--qrbit-radius-sm)',
+          {block.blob !== undefined || block.fileName !== undefined ? (
+            <div className="flex-1 min-w-0">
+              <div
+                className="flex items-center justify-between p-1.5 px-2.5 rounded border gap-2"
+                style={{
+                  backgroundColor: 'var(--qrbit-sunken)',
+                  borderColor: 'var(--qrbit-border)',
+                  borderRadius: 'var(--qrbit-radius-sm)',
+                }}
+              >
+                <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      flex: 'none',
+                      width: 28,
+                      height: 28,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--qrbit-signal)',
+                      backgroundColor: 'var(--qrbit-raised)',
+                      borderRadius: 'var(--qrbit-radius-sm)',
+                    }}
+                  >
+                    <IconFile size={16} />
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <Text span className="qrbit-text-body block truncate text-[13px] leading-tight" truncate>
+                      {block.fileName ?? 'Selected file'}
+                    </Text>
+                    <Text span className="qrbit-text-data block text-[11px] leading-tight" c="dimmed">
+                      {attachmentSizeLabel ?? ''}
+                    </Text>
+                  </div>
+                </Group>
+
+                {/* Cross at the end of the grey file item */}
+                <ActionIcon
+                  variant="subtle"
+                  size="sm"
+                  c="dimmed"
+                  title="Remove file"
+                  aria-label="Remove file"
+                  onClick={() => {
+                    onUpdate?.(block.id, {
+                      blob: undefined,
+                      fileName: undefined,
+                      fileSize: undefined,
+                      mimeType: undefined,
+                    })
                   }}
                 >
-                  <IconFile size={18} />
-                </span>
-                <div style={{ minWidth: 0 }}>
-                  <Text span className="qrbit-text-body block" truncate>
-                    {block.fileName ?? 'No file chosen'}
-                  </Text>
-                  <Text span className="qrbit-text-data block" c="dimmed">
-                    {attachmentSizeLabel ?? 'no size until a file is chosen'}
-                  </Text>
-                </div>
-              </Group>
+                  <IconX size={15} aria-hidden="true" />
+                </ActionIcon>
+              </div>
             </div>
-
-            <AttachmentControls block={block} maxBytes={attachmentMaxBytes} onUpdate={onUpdate} />
-          </div>
+          ) : (
+            <div className="flex-1 min-w-0">
+              <AttachmentPicker
+                blockType="fileAttachment"
+                label="Choose file"
+                maxBytes={attachmentMaxBytes}
+                onSelect={(attachment) => {
+                  setAttachmentPickerError(null)
+                  onUpdate?.(block.id, {
+                    blob: attachment.blob,
+                    fileName: attachment.fileName,
+                    mimeType: attachment.mimeType,
+                    fileSize: attachment.sizeInBytes,
+                  })
+                }}
+                onReject={(msg) => setAttachmentPickerError(msg)}
+              />
+              {attachmentPickerError ? (
+                <Text size="xs" c="danger" mt={4}>
+                  {attachmentPickerError}
+                </Text>
+              ) : null}
+            </div>
+          )}
         </div>
 
         {renderLockModal()}
