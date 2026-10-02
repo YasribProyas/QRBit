@@ -36,6 +36,7 @@ import {
   IconLock,
   IconLockOpen,
   IconPencil,
+  IconPlugConnectedX,
   IconPlus,
   IconSend,
   IconStack,
@@ -46,13 +47,16 @@ import { BlockItem } from './BlockItem'
 import { AddBlockModal } from './AddBlockModal'
 import { FolderPickerModal } from './FolderPickerModal'
 import type { FolderPickerChoice } from './FolderPickerModal'
+import { DossierPickerModal } from '../session/DossierPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
-import { describeSendFailure, encryptBlockPayload, findUnsendableBlocks } from '../../lib/dossier'
+import { describeSendFailure, encryptBlockPayload, fileBlocksToLibraryItems, findUnsendableBlocks, sessionItemsToFileBlocks } from '../../lib/dossier'
 import { decryptItem, encryptItem } from '../../lib/crypto'
-import { ROOT_FOLDER_ID } from '../../lib/library'
+import { ROOT_FOLDER_ID, unprotectedSecretBlocks } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
+import { useSessionStore } from '../../store/sessionStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
+import type { UseSessionResult } from '../../hooks/useSession'
 
 export interface FileEditViewProps {
   file: LibraryFile
@@ -61,7 +65,7 @@ export interface FileEditViewProps {
   /** Persists the whole draft. Called by `Save`, by `Save & leave`, and once before `Send`. */
   onSaveFile: (file: LibraryFile) => void
   /** Hands the dossier to the transfer path — always with the current draft, after it was persisted. */
-  onSendFile: (file: LibraryFile) => void | Promise<void>
+  onSendFile?: (file: LibraryFile) => void | Promise<void>
   /** Candidate destinations for the folder picker; the file's own folder is looked up here for the label. */
   folders: LibraryFolder[]
   /**
@@ -70,6 +74,9 @@ export interface FileEditViewProps {
    * and on every dirty/clean transition; the editor works identically without it.
    */
   onDirtyChange?: (isDirty: boolean) => void
+  session?: UseSessionResult
+  isSharedSession?: boolean
+  onEndSession?: () => void
 }
 
 /** The gap `space-y-3` puts between block rows, in px at the default root size. */
@@ -106,6 +113,9 @@ export function FileEditView({
   onSendFile,
   folders,
   onDirtyChange,
+  session,
+  isSharedSession,
+  onEndSession,
 }: FileEditViewProps) {
   // --- the draft (D16.1) ---------------------------------------------------
   const [seededFromId, setSeededFromId] = useState(file.id)
@@ -122,6 +132,7 @@ export function FileEditView({
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
+  const [isDossierPickerOpen, setIsDossierPickerOpen] = useState(false)
   const [isMoving, setIsMoving] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
   /** Why a Send was refused, in words the user can act on. Cleared by the next Send. */
@@ -253,6 +264,87 @@ export function FileEditView({
     setSendError(null)
   }, [])
 
+  // --- realtime session sync -----------------------------------------------
+  const sessionItems = useSessionStore((state) => state.items)
+  const localUpdatedIdsRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (!isSharedSession) return
+    if (sessionItems.length === 0) return
+
+    const incomingBlocks = sessionItemsToFileBlocks(sessionItems)
+
+    setDraftBlocks((current) => {
+      if (current.length === 0) {
+        return incomingBlocks
+      }
+
+      const currentMap = new Map(current.map((b) => [b.id, b]))
+      const incomingIds = new Set(incomingBlocks.map((b) => b.id))
+
+      let changed = false
+      const nextBlocks: FileBlock[] = []
+
+      // 1. Process incoming blocks from session
+      for (const inc of incomingBlocks) {
+        const existing = currentMap.get(inc.id)
+        if (!existing) {
+          nextBlocks.push(inc)
+          changed = true
+        } else {
+          const isLocallyModified = localUpdatedIdsRef.current.has(inc.id)
+          if (
+            !isLocallyModified &&
+            (existing.content !== inc.content ||
+              existing.value !== inc.value ||
+              existing.label !== inc.label ||
+              existing.blob !== inc.blob ||
+              existing.fileSize !== inc.fileSize ||
+              existing.isUnlocked !== inc.isUnlocked)
+          ) {
+            nextBlocks.push({
+              ...existing,
+              ...inc,
+              content: existing.content ?? inc.content,
+              isUnlocked: existing.isUnlocked ?? inc.isUnlocked,
+            })
+            changed = true
+          } else {
+            nextBlocks.push(existing)
+          }
+        }
+      }
+
+      // 2. Keep any newly added local blocks not yet in sessionItems
+      for (const b of current) {
+        if (!incomingIds.has(b.id) && !sessionItems.some((s) => s.id === b.id)) {
+          nextBlocks.push(b)
+        }
+      }
+
+      return changed ? nextBlocks : current
+    })
+  }, [isSharedSession, sessionItems])
+
+  const handleAppendDossier = async (appendFile: LibraryFile): Promise<void> => {
+    try {
+      const newBlocks = appendFile.blocks.map((b) => ({
+        ...b,
+        id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      }))
+      commitBlocks((current) => [...current, ...newBlocks])
+
+      if (isSharedSession && session && session.phase === 'active') {
+        const items = await fileBlocksToLibraryItems(appendFile)
+        for (const item of items) {
+          session.sendLibraryItem(item)
+        }
+      }
+    } catch (err: unknown) {
+      setSendError(describeSendFailure(err))
+    }
+  }
+
   /**
    * THE reorder reducer (D16.3). A released grip drag, a key on the grip and an arrow button
    * each call this and nothing else, so the two paths are the same path by construction.
@@ -294,10 +386,40 @@ export function FileEditView({
     commitBlocks((current) =>
       current.map((block) => (block.id === blockId ? { ...block, ...changes } : block)),
     )
+
+    if (isSharedSession && session && session.phase === 'active') {
+      localUpdatedIdsRef.current.add(blockId)
+      setTimeout(() => {
+        localUpdatedIdsRef.current.delete(blockId)
+      }, 500)
+
+      const target = draftBlocks.find((b) => b.id === blockId)
+      const updated = { ...target, ...changes }
+      if (updated.type === 'heading') {
+        session.updateTextItem(blockId, `# ${updated.content || ''}`)
+      } else if (updated.type === 'shortText') {
+        session.updateTextItem(
+          blockId,
+          `${updated.label ? updated.label + ': ' : ''}${updated.value || ''}`,
+        )
+      } else if (updated.type === 'richText') {
+        session.updateTextItem(blockId, updated.content || '')
+      }
+
+      if (changes.blob instanceof Blob) {
+        const file = new File([changes.blob], changes.fileName || 'file', {
+          type: changes.mimeType || changes.blob.type,
+        })
+        session.addFileItem(file)
+      }
+    }
   }
 
   const handleDeleteBlock = (blockId: string): void => {
     commitBlocks((current) => current.filter((block) => block.id !== blockId))
+    if (isSharedSession && session && session.phase === 'active') {
+      session.deleteItem(blockId)
+    }
   }
 
   /** Unlocking a credential is an in-memory RAM reveal only — never marks dirty or writes to storage. */
@@ -330,15 +452,31 @@ export function FileEditView({
   }
 
   const handleAddBlockType = (type: BlockType): void => {
-    /*
-     * A new block starts empty apart from its type — including `locked`.
-     *
-     * The `locked` case used to arrive pre-filled: a label nobody asked for, a made-up token
-     * payload, and a password from the source — a secret "encrypted" under a guessable key, added
-     * every time anybody pressed the button. There is nothing to invent here: the label is the
-     * user's, the secret is the user's, and the password is the user's or the block is not
-     * encrypted at all. The row shows an empty protected field and says so.
-     */
+    if (isSharedSession && session && session.phase === 'active') {
+      let newId = ''
+      if (type === 'heading') {
+        newId = session.addTextItem('# Section Heading')
+      } else if (type === 'shortText') {
+        newId = session.addTextItem('Key: Value')
+      } else if (type === 'richText') {
+        newId = session.addRichTextItem('')
+      } else if (type === 'divider') {
+        newId = session.addTextItem('---')
+      }
+
+      if (newId) {
+        const newBlock: FileBlock = {
+          id: newId,
+          type,
+          content: type === 'heading' ? 'Section Heading' : type === 'richText' ? '' : undefined,
+          label: type === 'shortText' ? 'Key' : undefined,
+          value: type === 'shortText' ? 'Value' : undefined,
+        }
+        commitBlocks((current) => [...current, newBlock])
+        return
+      }
+    }
+
     const newBlock: FileBlock = { id: `b-${Date.now()}`, type }
     if (type === 'locked') {
       newBlock.isLocked = true
@@ -430,27 +568,36 @@ export function FileEditView({
    * rejects an empty name, so offering to save one would only produce an error the user has
    * no way to fix from here.
    */
-  const persist = async (draft: LibraryFile): Promise<boolean> => {
+  const persist = (draft: LibraryFile): boolean | Promise<boolean> => {
     if (draft.name.trim() === '') return false
-    const fileToSave = await preparePersistFile(draft)
-    onSaveFile(fileToSave)
-    setIsDirty(false)
-    return true
-  }
-
-  // Debounced autosave: automatically saves changes after 600ms of inactivity
-  useEffect(() => {
-    if (!isDirty || !canPersist) return
-    if (draftIsLocked && !dossierPasswordRef.current) return
-
-    const timer = setTimeout(() => {
-      void persist(draftFile())
-    }, 600)
-
-    return () => {
-      clearTimeout(timer)
+    if (!draft.isLocked) {
+      const cleanedBlocks = (draft.blocks || []).map((b) => {
+        if (b.lockedData) {
+          const { content, value, blob, isUnlocked, ...rest } = b
+          return rest as FileBlock
+        }
+        return b
+      })
+      const fileToSave: LibraryFile = {
+        ...draft,
+        blocks: cleanedBlocks,
+        isLocked: false,
+        ciphertext: undefined,
+        iv: undefined,
+        salt: undefined,
+      }
+      onSaveFile(fileToSave)
+      setIsDirty(false)
+      return true
     }
-  }, [isDirty, canPersist, draftFile, draftIsLocked])
+
+    return (async () => {
+      const fileToSave = await preparePersistFile(draft)
+      onSaveFile(fileToSave)
+      setIsDirty(false)
+      return true
+    })()
+  }
 
   const closeEncryptPrompt = (): void => {
     setEncryptPrompt(null)
@@ -462,8 +609,16 @@ export function FileEditView({
   }
 
   /** The rest of whatever the user pressed, once nothing needs a password any more. */
-  const finishSave = async (draft: LibraryFile, intent: SaveIntent): Promise<void> => {
+  const finishSave = (draft: LibraryFile, intent: SaveIntent): void => {
+    const needsPassword = unprotectedSecretBlocks(draft)[0]
+    if (needsPassword !== undefined) {
+      setSendError(null)
+      setEncryptPrompt({ block: needsPassword, draft, intent })
+      return
+    }
+
     if (intent === 'send') {
+      if (!onSendFile) return
       /*
        * The refusal happens HERE, before a byte of the draft is handed over. `lib/dossier.ts`
        * throws for an attachment block with no file and for a locked block that was never
@@ -477,7 +632,17 @@ export function FileEditView({
         setSendError(describeSendFailure(first))
         return
       }
-      if (!(await persist(draft))) return
+      const res = persist(draft)
+      if (res === false) return
+      if (res instanceof Promise) {
+        void res.then((saved) => {
+          if (!saved) return
+          void Promise.resolve(onSendFile(draft)).catch((cause: unknown) => {
+            setSendError(describeSendFailure(cause))
+          })
+        })
+        return
+      }
 
       // The host's send is allowed to be async (that is how `pages/Home.tsx` wires it, and the
       // conversion inside it can still reject). Awaiting it here is what keeps the failure visible
@@ -488,7 +653,17 @@ export function FileEditView({
       return
     }
 
-    if (!(await persist(draft))) return
+    const res = persist(draft)
+    if (res === false) return
+    if (res instanceof Promise) {
+      void res.then((saved) => {
+        if (saved && intent === 'leave') {
+          setIsLeaveDialogOpen(false)
+          onBack()
+        }
+      })
+      return
+    }
     if (intent === 'leave') {
       setIsLeaveDialogOpen(false)
       onBack()
@@ -500,11 +675,12 @@ export function FileEditView({
       setShowDossierLockModal(true)
       return
     }
-    void finishSave(draftFile(), 'save')
+    finishSave(draftFile(), 'save')
   }
 
   /** Send gives the channel what is on screen: the draft is persisted, then the same record goes out. */
   const handleSend = (): void => {
+    if (!onSendFile) return
     setSendError(null)
     if (draftIsLocked && !dossierPasswordRef.current) {
       setShowDossierLockModal(true)
@@ -557,14 +733,6 @@ export function FileEditView({
   }
 
   const handleBackRequest = (): void => {
-    if (isDirty && canPersist) {
-      if (draftIsLocked && !dossierPasswordRef.current) {
-        setShowDossierLockModal(true)
-        return
-      }
-      void persist(draftFile()).then(() => onBack())
-      return
-    }
     if (isDirty) {
       setIsLeaveDialogOpen(true)
       return
@@ -679,7 +847,7 @@ export function FileEditView({
   }
 
   return (
-    <div className="file-edit-view flex flex-col min-h-full pb-14">
+    <div className="file-edit-view session-board flex flex-col min-h-full pb-14">
       {/*
         Top bar: back, editable title, dirty state, Save, Send. It is sticky, so it is one of the
         few surfaces that genuinely floats above the page — it takes the sheet shadow rather than
@@ -830,69 +998,159 @@ export function FileEditView({
         </Group>
 
         <Group gap="sm" wrap="wrap" justify="flex-end" style={{ flex: 'none', maxWidth: '100%' }}>
-          {isDirty ? (
-            /*
-              Caution Amber means "a warning that is not a failure" — an unsaved draft — and the
-              badge carries an icon AND a word, because colour alone is never the message. It sits
-              beside Save, so the state and the control that clears it are adjacent.
-            */
-            <Badge
-              variant="light"
-              color="warning"
-              radius="full"
-              leftSection={<IconAlertCircle size={12} aria-hidden="true" />}
-              style={{ flex: 'none' }}
-            >
-              Unsaved changes
-            </Badge>
-          ) : null}
-
-          {/*
-            DESIGN.md's Button table gives this screen exactly two roles, and they are now
-            different ones. `Send` is the filled `signal` primary: the product is one motion —
-            put something in, show a code, hand it across — so the control that starts that motion
-            owns the accent, and the One Blue Rule means only one control on this bar may.
-            `Save dossier` is the Default role: raised fill, 1px `--qrbit-border-strong`, ink
-            label — DESIGN.md's own definition of "the outline of a control the user must find",
-            which is why it does not need the accent to be found. It is also the control the user
-            comes back to dozens of times per dossier, and a repeated action styled as the primary
-            would make the primary mean nothing.
-
-            Its state is in its own word and icon, not only in the amber badge next to it: clean
-            reads `Saved` with a check and is disabled, dirty reads `Save dossier` with the floppy
-            and is live. `data-save-state` is the same fact for anything that needs to read it
-            without matching on a label that changes.
-          */}
-          <Button
-            variant="default"
-            size="sm"
-            leftSection={
-              isDirty ? (
-                <IconDeviceFloppy size={14} aria-hidden="true" />
+          {isSharedSession && session ? (
+            <Group gap="xs" wrap="nowrap" align="center">
+              {session.phase === 'active' ? (
+                <div
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border"
+                  style={{
+                    backgroundColor: 'rgba(34, 197, 94, 0.08)',
+                    borderColor: 'rgba(34, 197, 94, 0.25)',
+                    color: 'var(--qrbit-success, #16a34a)',
+                  }}
+                  title={
+                    session.safetyPhrase
+                      ? `Safety Phrase: ${session.safetyPhrase.join(' • ')}`
+                      : 'Live session active'
+                  }
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Live Shared</span>
+                  {session.safetyPhrase ? (
+                    <span className="hidden md:inline font-mono opacity-75 text-[11px] ml-1">
+                      ({session.safetyPhrase.join(' • ')})
+                    </span>
+                  ) : null}
+                </div>
               ) : (
-                <IconCheck size={14} aria-hidden="true" />
-              )
-            }
-            disabled={!isDirty || !canPersist}
-            data-save-state={isDirty ? 'dirty' : 'clean'}
-            style={{ flex: 'none' }}
-            onClick={handleSave}
-          >
-            {isDirty ? 'Save dossier' : 'Saved'}
-          </Button>
+                <div
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    borderColor: 'var(--qrbit-border)',
+                    color: 'var(--qrbit-ink-muted)',
+                  }}
+                  title="Peer disconnected. This dossier is preserved and can be saved to library."
+                >
+                  <span className="w-2 h-2 rounded-full bg-stone-400" />
+                  <span>Peer disconnected</span>
+                </div>
+              )}
 
-          {/* The screen's purpose: hand the dossier across. Filled signal, white label, both states. */}
-          <Button
-            variant="filled"
-            color="signal"
-            size="sm"
-            leftSection={<IconSend size={14} aria-hidden="true" />}
-            disabled={!canPersist}
-            style={{ flex: 'none' }}
-            onClick={handleSend}
-          >
-            Send
-          </Button>
+              {/* Append from library button */}
+              <Button
+                variant="default"
+                size="sm"
+                leftSection={<IconFolderPlus size={14} aria-hidden="true" />}
+                onClick={() => setIsDossierPickerOpen(true)}
+                title="Append an existing dossier from your local computer"
+              >
+                Append dossier
+              </Button>
+
+              {/* Save dossier button */}
+              <Button
+                variant="default"
+                size="sm"
+                leftSection={
+                  isDirty ? (
+                    <IconDeviceFloppy size={14} aria-hidden="true" />
+                  ) : (
+                    <IconCheck size={14} aria-hidden="true" />
+                  )
+                }
+                data-save-state={isDirty ? 'dirty' : 'clean'}
+                onClick={handleSave}
+              >
+                {isDirty ? 'Save to library' : 'Saved to library'}
+              </Button>
+
+              {/* Disconnect button if active */}
+              {session.phase === 'active' ? (
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  size="lg"
+                  onClick={() => {
+                    session.abort()
+                    onEndSession?.()
+                  }}
+                  title="Disconnect session (dossier remains here)"
+                  aria-label="Disconnect session"
+                >
+                  <IconPlugConnectedX size={16} stroke={1.6} />
+                </ActionIcon>
+              ) : null}
+            </Group>
+          ) : (
+            <>
+              {isDirty ? (
+                /*
+                  Caution Amber means "a warning that is not a failure" — an unsaved draft — and the
+                  badge carries an icon AND a word, because colour alone is never the message. It sits
+                  beside Save, so the state and the control that clears it are adjacent.
+                */
+                <Badge
+                  variant="light"
+                  color="warning"
+                  radius="full"
+                  leftSection={<IconAlertCircle size={12} aria-hidden="true" />}
+                  style={{ flex: 'none' }}
+                >
+                  Unsaved changes
+                </Badge>
+              ) : null}
+
+              {/*
+                DESIGN.md's Button table gives this screen exactly two roles, and they are now
+                different ones. `Send` is the filled `signal` primary: the product is one motion —
+                put something in, show a code, hand it across — so the control that starts that motion
+                owns the accent, and the One Blue Rule means only one control on this bar may.
+                `Save dossier` is the Default role: raised fill, 1px `--qrbit-border-strong`, ink
+                label — DESIGN.md's own definition of "the outline of a control the user must find",
+                which is why it does not need the accent to be found. It is also the control the user
+                comes back to dozens of times per dossier, and a repeated action styled as the primary
+                would make the primary mean nothing.
+
+                Its state is in its own word and icon, not only in the amber badge next to it: clean
+                reads `Saved` with a check and is disabled, dirty reads `Save dossier` with the floppy
+                and is live. `data-save-state` is the same fact for anything that needs to read it
+                without matching on a label that changes.
+              */}
+              <Button
+                variant="default"
+                size="sm"
+                leftSection={
+                  isDirty ? (
+                    <IconDeviceFloppy size={14} aria-hidden="true" />
+                  ) : (
+                    <IconCheck size={14} aria-hidden="true" />
+                  )
+                }
+                disabled={!isDirty || !canPersist}
+                data-save-state={isDirty ? 'dirty' : 'clean'}
+                style={{ flex: 'none' }}
+                onClick={handleSave}
+              >
+                {isDirty ? 'Save dossier' : 'Saved'}
+              </Button>
+
+              {/* The screen's purpose: hand the dossier across. Filled signal, white label, both states. */}
+              {onSendFile ? (
+                <Button
+                  variant="filled"
+                  color="signal"
+                  size="sm"
+                  leftSection={<IconSend size={14} aria-hidden="true" />}
+                  disabled={!canPersist}
+                  style={{ flex: 'none' }}
+                  onClick={handleSend}
+                >
+                  Send
+                </Button>
+              ) : null}
+            </>
+          )}
         </Group>
       </header>
 
@@ -964,7 +1222,7 @@ export function FileEditView({
           ))}
         </div>
 
-        <div className="pt-2">
+        <div className="add-item-bar pt-2">
           {/*
             A labelled action is a `Button` (DESIGN.md, "Buttons"), and the border is 1px
             `border-strong` like every other control — the old 2px dashed outline was a shape the
@@ -988,6 +1246,15 @@ export function FileEditView({
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         onSelectType={handleAddBlockType}
+      />
+
+      {/* Dossier Picker Modal for appending local dossiers */}
+      <DossierPickerModal
+        isOpen={isDossierPickerOpen}
+        onClose={() => setIsDossierPickerOpen(false)}
+        onSelectDossier={(selected) => {
+          void handleAppendDossier(selected)
+        }}
       />
 
       {/* Folder picker: move this dossier out of the folder it was created in */}

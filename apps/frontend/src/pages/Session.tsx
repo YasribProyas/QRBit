@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { AppLayout } from '../components/layout/AppLayout'
 import { SessionView } from '../components/session/SessionView'
-import { LiveSessionView } from '../components/session/LiveSessionView'
+import { FileEditView } from '../components/library/FileEditView'
 import { useSession } from '../hooks/useSession'
 import { useLibraryStore } from '../store/libraryStore'
+import { ROOT_FOLDER_ID, type LibraryFile } from '../lib/library'
 
 /**
  * Session page (PLAN.md §8).
@@ -43,6 +44,21 @@ export function Session() {
     }
   }, [session.phase, addTextItem])
 
+  const notifyUnload = session.notifyUnload
+  const phase = session.phase
+
+  useEffect(() => {
+    if (phase !== 'active') return
+
+    const handleBeforeUnload = () => {
+      notifyUnload()
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [phase, notifyUnload])
+
   /*
    * PLAN.md §15's share target POSTs to `/session` with the file as multipart form data,
    * and only a service worker of our own can read that body. This build ships
@@ -55,6 +71,21 @@ export function Session() {
 
   const folders = useLibraryStore((state) => state.folders)
   const saveFile = useLibraryStore((state) => state.saveFile)
+
+  const [sharedDossier, setSharedDossier] = useState<LibraryFile | null>(null)
+
+  useEffect(() => {
+    if (session.phase === 'active' && sharedDossier === null) {
+      setSharedDossier({
+        id: 'shared-live-dossier',
+        name: 'Shared Dossier',
+        folderId: ROOT_FOLDER_ID,
+        blocks: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    }
+  }, [session.phase, sharedDossier])
 
   return (
     <AppLayout
@@ -88,13 +119,28 @@ export function Session() {
             </section>
           ) : null}
 
-          {session.phase === 'active' ? (
-            <LiveSessionView
-              session={session}
-              folders={folders}
-              onSaveToLibrary={(file) => {
+          {session.phase === 'active' || sharedDossier ? (
+            <FileEditView
+              file={
+                sharedDossier ?? {
+                  id: 'shared-live-dossier',
+                  name: 'Shared Dossier',
+                  folderId: ROOT_FOLDER_ID,
+                  blocks: [],
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                }
+              }
+              onBack={() => {
+                session.abort()
+                setSharedDossier(null)
+              }}
+              onSaveFile={(file) => {
                 saveFile(file).catch(() => undefined)
               }}
+              folders={folders}
+              session={session}
+              isSharedSession={true}
               onEndSession={() => session.abort()}
             />
           ) : (

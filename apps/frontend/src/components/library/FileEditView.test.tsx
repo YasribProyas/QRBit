@@ -144,9 +144,18 @@ function buttons(): HTMLButtonElement[] {
   return Array.from(element().querySelectorAll('button'))
 }
 
-/** Mantine renders the label as text content, so the label is the stable selector. */
+/** Mantine renders the label as text content, or for icon buttons in aria-label/title. */
 function buttonByLabel(label: string): HTMLButtonElement {
-  const found = buttons().find((button) => (button.textContent ?? '').trim() === label)
+  const clean = label.replace(/[….]+$/, '').trim()
+  const found = buttons().find(
+    (button) =>
+      (button.textContent ?? '').trim() === label ||
+      button.getAttribute('aria-label') === label ||
+      button.getAttribute('title') === label ||
+      (clean !== '' &&
+        (button.getAttribute('aria-label')?.startsWith(clean) ||
+          button.getAttribute('title')?.startsWith(clean))),
+  )
   if (found === undefined) throw new Error(`test bug: no button labelled "${label}"`)
   return found
 }

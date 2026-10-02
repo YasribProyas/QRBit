@@ -6,7 +6,6 @@ import { FileEditView } from '../components/library/FileEditView'
 import { LibraryPanel } from '../components/library/LibraryPanel'
 import { ScannerView } from '../components/ScannerView'
 import { SafetyPhraseView } from '../components/SafetyPhraseView'
-import { LiveSessionView } from '../components/session/LiveSessionView'
 import { SessionEndedView } from '../components/session/SessionEndedView'
 import { isSenderRole } from '../components/session/SessionBoard'
 import {
@@ -16,6 +15,7 @@ import {
   useSession,
 } from '../hooks/useSession'
 import { useLibraryStore } from '../store/libraryStore'
+import { ROOT_FOLDER_ID } from '../lib/library'
 import type { FileBlock, LibraryFile, LibraryItem } from '../lib/library'
 import { describeSendFailure, fileBlocksToLibraryItems } from '../lib/dossier'
 
@@ -77,6 +77,8 @@ export function Home() {
   const [editingPassword, setEditingPassword] = useState<string | undefined>(undefined)
   /** The dossier handed to a session by the editor's Send. */
   const [selectedFileForTransfer, setSelectedFileForTransfer] = useState<LibraryFile | null>(null)
+  /** The live collaborative dossier shared across peer session */
+  const [sharedDossier, setSharedDossier] = useState<LibraryFile | null>(null)
   /**
    * Why the last Send put nothing on the channel, in words. Home owns it because Home owns the
    * conversion that refused, and a rejection with no catcher is an unhandled rejection — a page
@@ -93,14 +95,31 @@ export function Home() {
   }, [refresh])
 
   useEffect(() => {
+    if (session.phase === 'active' && sharedDossier === null) {
+      const initialBlocks: FileBlock[] = selectedFileForTransfer?.blocks ?? []
+      setSharedDossier({
+        id: 'shared-live-dossier',
+        name: selectedFileForTransfer?.name
+          ? `${selectedFileForTransfer.name} (Shared)`
+          : 'Shared Dossier',
+        folderId: selectedFileForTransfer?.folderId ?? ROOT_FOLDER_ID,
+        blocks: initialBlocks,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    }
+  }, [session.phase, sharedDossier, selectedFileForTransfer])
+
+  useEffect(() => {
     if (
       session.phase === 'ended' &&
       session.receivedItems.length === 0 &&
-      session.errorMessage === null
+      session.errorMessage === null &&
+      !sharedDossier
     ) {
       session.restart()
     }
-  }, [session.phase, session.receivedItems.length, session.errorMessage, session.restart])
+  }, [session.phase, session.receivedItems.length, session.errorMessage, session.restart, sharedDossier])
 
   /**
    * Creates a dossier in `folderId` and opens it.
@@ -187,8 +206,8 @@ export function Home() {
   }
 
 
-  // 4. SESSION ENDED SUMMARY
-  if (session.phase === 'ended' && session.receivedItems.length > 0) {
+  // 4. SESSION ENDED SUMMARY (only if shared dossier was not active on screen)
+  if (session.phase === 'ended' && session.receivedItems.length > 0 && !sharedDossier) {
     return (
       <SessionEndedView
         session={session}
@@ -202,7 +221,7 @@ export function Home() {
     )
   }
 
-  // 5. DEFAULT HOME VIEW — the shell: library left (or in the drawer), QR, LiveSession or Editor right
+  // 5. DEFAULT HOME VIEW — the shell: library left (or in the drawer), QR or Editor right
   return (
     <>
       {/* 3. SAFETY PHRASE GATE — overlays cleanly over the shell */}
@@ -224,23 +243,29 @@ export function Home() {
         onJoinCode={(code) => handleScan(code)}
         roleLabel={session.roleLabel}
         errorMessage={session.errorMessage}
-        activeSession={
-          session.phase === 'active' ? (
-            <LiveSessionView
-              session={session}
-              folders={folders}
-              onSaveToLibrary={(file) => {
+        editor={
+          sharedDossier ? (
+            <FileEditView
+              file={sharedDossier}
+              onBack={() => {
+                setSharedDossier(null)
+                setSelectedFileForTransfer(null)
+                if (session.phase === 'active' || session.phase === 'pairing') {
+                  session.abort()
+                }
+                session.restart()
+              }}
+              onSaveFile={(file) => {
                 saveFile(file).catch(() => undefined)
               }}
-              onEndSession={() => session.abort()}
-              onOpenDossier={(file) => {
-                setEditingFile(file)
+              folders={folders}
+              session={session}
+              isSharedSession={true}
+              onEndSession={() => {
+                session.abort()
               }}
             />
-          ) : undefined
-        }
-        editor={
-          editingFile ? (
+          ) : editingFile ? (
             <>
               {sendFailure !== null ? (
                 <p

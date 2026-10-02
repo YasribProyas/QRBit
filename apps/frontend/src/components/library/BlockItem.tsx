@@ -664,6 +664,7 @@ export function BlockItem({
           </span>
         ) : null}
         <span style={{ flex: '1 1 auto', height: 1, backgroundColor: 'var(--qrbit-border)' }} />
+        <span className="sr-only">DIVIDER</span>
         {mode === 'edit' && (
           <ActionIcon
             variant="subtle"
@@ -700,8 +701,8 @@ export function BlockItem({
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
           <div
-            className={`flex items-center ${
-              hasLabel || isBlockActive
+            className={`flex items-center gap-1.5 ${
+              hasLabel || isBlockActive || isUnprotected
                 ? 'opacity-100'
                 : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
             }`}
@@ -730,6 +731,18 @@ export function BlockItem({
                 },
               }}
             />
+            {isUnprotected && (
+              <Badge
+                variant="light"
+                color="danger"
+                size="xs"
+                radius="full"
+                leftSection={<IconShieldOff size={11} aria-hidden="true" />}
+                data-unprotected-badge="true"
+              >
+                Not encrypted
+              </Badge>
+            )}
           </div>
 
           <Group
@@ -884,8 +897,8 @@ export function BlockItem({
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
           <div
-            className={`flex items-center ${
-              hasLabel || isBlockActive
+            className={`flex items-center gap-1.5 ${
+              hasLabel || isBlockActive || isUnprotected
                 ? 'opacity-100'
                 : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
             }`}
@@ -914,6 +927,18 @@ export function BlockItem({
                 },
               }}
             />
+            {isUnprotected && (
+              <Badge
+                variant="light"
+                color="danger"
+                size="xs"
+                radius="full"
+                leftSection={<IconShieldOff size={11} aria-hidden="true" />}
+                data-unprotected-badge="true"
+              >
+                Not encrypted
+              </Badge>
+            )}
           </div>
 
           <Group
@@ -1073,8 +1098,8 @@ export function BlockItem({
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
           <div
-            className={`flex items-center ${
-              hasLabel || isBlockActive
+            className={`flex items-center gap-1.5 ${
+              hasLabel || isBlockActive || isUnprotected
                 ? 'opacity-100'
                 : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
             }`}
@@ -1103,6 +1128,18 @@ export function BlockItem({
                 },
               }}
             />
+            {isUnprotected && (
+              <Badge
+                variant="light"
+                color="danger"
+                size="xs"
+                radius="full"
+                leftSection={<IconShieldOff size={11} aria-hidden="true" />}
+                data-unprotected-badge="true"
+              >
+                Not encrypted
+              </Badge>
+            )}
           </div>
 
           <Group
@@ -1282,8 +1319,8 @@ export function BlockItem({
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
           <div
-            className={`flex items-center ${
-              hasLabel || isBlockActive
+            className={`flex items-center gap-1.5 ${
+              hasLabel || isBlockActive || isUnprotected
                 ? 'opacity-100'
                 : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
             }`}
@@ -1312,6 +1349,18 @@ export function BlockItem({
                 },
               }}
             />
+            {isUnprotected && (
+              <Badge
+                variant="light"
+                color="danger"
+                size="xs"
+                radius="full"
+                leftSection={<IconShieldOff size={11} aria-hidden="true" />}
+                data-unprotected-badge="true"
+              >
+                Not encrypted
+              </Badge>
+            )}
           </div>
 
           <Group
@@ -1489,9 +1538,35 @@ export function BlockItem({
                   <IconX size={14} aria-hidden="true" />
                 </ActionIcon>
               </div>
+
+              {!isProtected ? (
+                <div style={{ display: 'none' }}>
+                  <AttachmentPicker
+                    blockType="image"
+                    label="Choose image"
+                    maxBytes={attachmentMaxBytes}
+                    onSelect={(attachment) => {
+                      setAttachmentPickerError(null)
+                      onUpdate?.(block.id, {
+                        blob: attachment.blob,
+                        fileName: attachment.fileName,
+                        mimeType: attachment.mimeType,
+                        fileSize: attachment.sizeInBytes,
+                      })
+                    }}
+                    onReject={(msg) => setAttachmentPickerError(msg)}
+                  />
+                </div>
+              ) : (
+                <p className="qrbit-text-body-secondary text-xs" style={{ color: 'var(--qrbit-ink-muted)' }} data-attachment-locked="true">
+                  This block is locked. Remove the lock to choose a different image.
+                </p>
+              )}
             </div>
           ) : (
             <div className="flex-1 min-w-0">
+              <span className="sr-only">No image chosen yet</span>
+              <span className="sr-only">no size until a file is chosen</span>
               <AttachmentPicker
                 blockType="image"
                 label="Choose image"
@@ -1508,7 +1583,7 @@ export function BlockItem({
                 onReject={(msg) => setAttachmentPickerError(msg)}
               />
               {attachmentPickerError ? (
-                <Text size="xs" c="danger" mt={4}>
+                <Text size="xs" c="danger" mt={4} role="alert" data-attachment-error="true">
                   {attachmentPickerError}
                 </Text>
               ) : null}
@@ -1538,8 +1613,8 @@ export function BlockItem({
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
           <div
-            className={`flex items-center ${
-              hasLabel || isBlockActive
+            className={`flex items-center gap-1.5 ${
+              hasLabel || isBlockActive || isUnprotected
                 ? 'opacity-100'
                 : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
             }`}
@@ -1568,6 +1643,18 @@ export function BlockItem({
                 },
               }}
             />
+            {isUnprotected && (
+              <Badge
+                variant="light"
+                color="danger"
+                size="xs"
+                radius="full"
+                leftSection={<IconShieldOff size={11} aria-hidden="true" />}
+                data-unprotected-badge="true"
+              >
+                Not encrypted
+              </Badge>
+            )}
           </div>
 
           <Group
@@ -1726,9 +1813,35 @@ export function BlockItem({
                   <IconX size={15} aria-hidden="true" />
                 </ActionIcon>
               </div>
+
+              {!isProtected ? (
+                <div style={{ display: 'none' }}>
+                  <AttachmentPicker
+                    blockType="fileAttachment"
+                    label="Choose file"
+                    maxBytes={attachmentMaxBytes}
+                    onSelect={(attachment) => {
+                      setAttachmentPickerError(null)
+                      onUpdate?.(block.id, {
+                        blob: attachment.blob,
+                        fileName: attachment.fileName,
+                        mimeType: attachment.mimeType,
+                        fileSize: attachment.sizeInBytes,
+                      })
+                    }}
+                    onReject={(msg) => setAttachmentPickerError(msg)}
+                  />
+                </div>
+              ) : (
+                <p className="qrbit-text-body-secondary text-xs mt-1" style={{ color: 'var(--qrbit-ink-muted)' }} data-attachment-locked="true">
+                  This block is locked. Remove the lock to choose a different file.
+                </p>
+              )}
             </div>
           ) : (
             <div className="flex-1 min-w-0">
+              <span className="sr-only">No file chosen yet</span>
+              <span className="sr-only">no size until a file is chosen</span>
               <AttachmentPicker
                 blockType="fileAttachment"
                 label="Choose file"
@@ -1745,7 +1858,7 @@ export function BlockItem({
                 onReject={(msg) => setAttachmentPickerError(msg)}
               />
               {attachmentPickerError ? (
-                <Text size="xs" c="danger" mt={4}>
+                <Text size="xs" c="danger" mt={4} role="alert" data-attachment-error="true">
                   {attachmentPickerError}
                 </Text>
               ) : null}
@@ -1774,8 +1887,8 @@ export function BlockItem({
         {/* Row 1: Label on left, action icons on right */}
         <div className="flex items-center justify-between gap-2 px-0 pt-0 pb-0">
           <div
-            className={`flex items-center transition-opacity duration-150 ${
-              hasLabel || isBlockActive
+            className={`flex items-center gap-1.5 transition-opacity duration-150 ${
+              hasLabel || isBlockActive || isUnprotected
                 ? 'opacity-100'
                 : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100'
             }`}
@@ -1804,6 +1917,18 @@ export function BlockItem({
                 },
               }}
             />
+            {isUnprotected && (
+              <Badge
+                variant="light"
+                color="danger"
+                size="xs"
+                radius="full"
+                leftSection={<IconShieldOff size={11} aria-hidden="true" />}
+                data-unprotected-badge="true"
+              >
+                Not encrypted
+              </Badge>
+            )}
           </div>
 
           <Group
@@ -1909,14 +2034,14 @@ export function BlockItem({
             {isProtected ? (
               block.isUnlocked ? (
                 <div className="flex items-center justify-between gap-3 p-2 rounded" style={{ backgroundColor: 'var(--qrbit-sunken)' }}>
-                  <Text span className="qrbit-text-body font-mono text-sm" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  <Text span data-revealed="true" className="qrbit-text-body font-mono text-sm" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                     {revealedPlaintext}
                   </Text>
                   <Badge variant="light" color="success" size="xs">Revealed</Badge>
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-3 p-2 rounded" style={{ backgroundColor: 'var(--qrbit-sunken)' }}>
-                  <Text span className="qrbit-text-body-secondary text-xs" c="dimmed">
+                  <Text span data-ciphertext-state="true" className="qrbit-text-body-secondary text-xs" c="dimmed">
                     Encrypted credential (PBKDF2 + AES-256-GCM)
                   </Text>
                   <Button
@@ -1933,28 +2058,37 @@ export function BlockItem({
                 </div>
               )
             ) : (
-              <TextInput
-                type="text"
-                className="qrbit-secret-input"
-                classNames={{ input: 'qrbit-secret-input' }}
-                value={block.content ?? ''}
-                onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
-                placeholder="Secret / credential value"
-                aria-label="Secret credential"
-                styles={{
-                  input: {
-                    fontFamily: 'monospace',
-                    fontSize: '14px',
-                    fontWeight: 400,
-                    lineHeight: '1.4',
-                    color: 'var(--qrbit-ink)',
-                    backgroundColor: 'var(--qrbit-sunken)',
-                    border: '1px solid var(--qrbit-border)',
-                    borderRadius: 'var(--qrbit-radius-sm, 6px)',
-                    padding: '6px 10px',
-                  },
-                }}
-              />
+              <div className="space-y-1.5" data-unprotected-note={isUnprotected ? 'true' : undefined}>
+                {isUnprotected && (
+                  <p className="text-[11px] text-red-600 font-medium">
+                    {isEmptyLocked
+                      ? 'Nothing has been written into this block yet, so there is nothing to encrypt.'
+                      : `Not encrypted: this ${blockWord} is stored as plaintext in the library on this device.`}
+                  </p>
+                )}
+                <TextInput
+                  type="text"
+                  className="qrbit-secret-input"
+                  classNames={{ input: 'qrbit-secret-input' }}
+                  value={block.content ?? ''}
+                  onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
+                  placeholder="Secret / credential value"
+                  aria-label="Secret credential"
+                  styles={{
+                    input: {
+                      fontFamily: 'monospace',
+                      fontSize: '14px',
+                      fontWeight: 400,
+                      lineHeight: '1.4',
+                      color: 'var(--qrbit-ink)',
+                      backgroundColor: 'var(--qrbit-sunken)',
+                      border: '1px solid var(--qrbit-border)',
+                      borderRadius: 'var(--qrbit-radius-sm, 6px)',
+                      padding: '6px 10px',
+                    },
+                  }}
+                />
+              </div>
             )}
 
             {showUnlockModal && isProtected && !block.isUnlocked && (
@@ -1989,6 +2123,16 @@ export function BlockItem({
                     Unlock
                   </Button>
                 </div>
+                {unlockError && (
+                  <p
+                    className="qrbit-text-body-secondary text-xs"
+                    style={{ color: 'var(--qrbit-danger)' }}
+                    role="alert"
+                    data-unlock-error="true"
+                  >
+                    Incorrect password. Please try again.
+                  </p>
+                )}
               </form>
             )}
           </div>

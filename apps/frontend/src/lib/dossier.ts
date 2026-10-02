@@ -380,8 +380,6 @@ export async function fileBlocksToLibraryItems(file: LibraryFile): Promise<Libra
   const now = Date.now()
 
   for (const block of file.blocks) {
-    if (block.type === 'divider') continue
-
     // The gate: a block that cannot be sent rejects the whole conversion here, before any
     // item is built and long before anything reaches the wire.
     const failure = blockSendFailure(block)
@@ -426,6 +424,16 @@ export async function fileBlocksToLibraryItems(file: LibraryFile): Promise<Libra
         name: block.label || 'Notes',
         type: 'text',
         content: block.content || '',
+        createdAt: now,
+        updatedAt: now,
+      })
+    } else if (block.type === 'divider') {
+      items.push({
+        id: block.id,
+        folderId: file.folderId,
+        name: 'Divider',
+        type: 'text',
+        content: '---',
         createdAt: now,
         updatedAt: now,
       })
@@ -513,17 +521,18 @@ function lockedItemFromBlock(
 }
 
 /**
- * Converts incoming SessionItems from a live session back into a structured LibraryFile.
+ * Converts incoming SessionItems from a live session directly into FileBlocks.
  */
-export function sessionItemsToLibraryFile(
-  name: string,
-  folderId: string,
-  sessionItems: SessionItem[],
-): LibraryFile {
-  const now = Date.now()
-  const blocks: FileBlock[] = sessionItems.map((item) => {
+export function sessionItemsToFileBlocks(sessionItems: SessionItem[]): FileBlock[] {
+  return sessionItems.map((item) => {
     switch (item.type) {
       case 'text': {
+        if (item.content === '---') {
+          return {
+            id: item.id,
+            type: 'divider',
+          }
+        }
         if (item.content.startsWith('# ')) {
           return {
             id: item.id,
@@ -593,13 +602,23 @@ export function sessionItemsToLibraryFile(
         }
     }
   })
+}
 
+/**
+ * Converts incoming SessionItems from a live session back into a structured LibraryFile.
+ */
+export function sessionItemsToLibraryFile(
+  name: string,
+  folderId: string,
+  sessionItems: SessionItem[],
+): LibraryFile {
+  const now = Date.now()
   return {
     id: globalThis.crypto.randomUUID(),
     folderId,
     name,
     createdAt: now,
     updatedAt: now,
-    blocks,
+    blocks: sessionItemsToFileBlocks(sessionItems),
   }
 }
