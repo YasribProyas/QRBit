@@ -390,36 +390,118 @@ export function Settings(): ReactElement {
 
           {/* ------------------------------------------------------------ privacy -- */}
           <Section heading="What is kept, and where">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Stack gap="xs">
-                <Text className="qrbit-text-title">Kept locally</Text>
-                <FactRow subject="Folders, dossiers, items" detail="in IndexedDB" />
-                <FactRow
-                  subject="Colour scheme"
-                  detail={
-                    <>
-                      in localStorage (<Code styles={CODE_INLINE_STYLES}>qrbit:theme</Code>)
-                    </>
-                  }
-                />
-              </Stack>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Card 1: Stored locally */}
+              <div
+                className="p-4 rounded-lg flex flex-col gap-3.5"
+                style={{
+                  background: 'var(--qrbit-sunken)',
+                  border: '1px solid var(--qrbit-border)',
+                  borderRadius: 'var(--qrbit-radius-md)',
+                }}
+              >
+                <div
+                  className="flex items-center justify-between pb-2"
+                  style={{ borderBottom: '1px solid var(--qrbit-border)' }}
+                >
+                  <Text fw={600} className="qrbit-text-body font-medium" style={{ color: 'var(--qrbit-ink)' }}>
+                    Stored on this device
+                  </Text>
+                  <span
+                    className="qrbit-text-data text-xs px-2 py-0.5 rounded font-mono"
+                    style={{
+                      backgroundColor: 'color-mix(in srgb, var(--qrbit-signal) 12%, transparent)',
+                      color: 'var(--qrbit-signal)',
+                    }}
+                  >
+                    Local only
+                  </span>
+                </div>
 
-              <Stack gap="xs">
-                <Text className="qrbit-text-title">Never stored</Text>
-                <FactRow
-                  subject="Session keys & transit items"
-                  detail="memory only"
-                />
-                <FactRow
-                  subject="Accounts & analytics"
-                  detail="none exist"
-                />
-              </Stack>
+                <div className="space-y-3">
+                  <div>
+                    <Text className="qrbit-text-body font-medium text-xs">
+                      Folders, dossiers & items
+                    </Text>
+                    <Text className="qrbit-text-body-secondary text-xs" c="dimmed">
+                      Kept directly in this browser’s IndexedDB database.
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="qrbit-text-body font-medium text-xs">
+                      Colour scheme
+                    </Text>
+                    <Text className="qrbit-text-body-secondary text-xs" c="dimmed">
+                      Saved in localStorage (<Code styles={CODE_INLINE_STYLES}>qrbit:theme</Code>).
+                    </Text>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Never stored */}
+              <div
+                className="p-4 rounded-lg flex flex-col gap-3.5"
+                style={{
+                  background: 'var(--qrbit-sunken)',
+                  border: '1px solid var(--qrbit-border)',
+                  borderRadius: 'var(--qrbit-radius-md)',
+                }}
+              >
+                <div
+                  className="flex items-center justify-between pb-2"
+                  style={{ borderBottom: '1px solid var(--qrbit-border)' }}
+                >
+                  <Text fw={600} className="qrbit-text-body font-medium" style={{ color: 'var(--qrbit-ink)' }}>
+                    Never stored anywhere
+                  </Text>
+                  <span
+                    className="qrbit-text-data text-xs px-2 py-0.5 rounded font-mono"
+                    style={{
+                      backgroundColor: 'color-mix(in srgb, var(--qrbit-locked) 12%, transparent)',
+                      color: 'var(--qrbit-locked)',
+                    }}
+                  >
+                    Zero retention
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <Text className="qrbit-text-body font-medium text-xs">
+                      Session keys & transit items
+                    </Text>
+                    <Text className="qrbit-text-body-secondary text-xs" c="dimmed">
+                      Held in volatile memory only; destroyed when closed.
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="qrbit-text-body font-medium text-xs">
+                      Accounts & telemetry
+                    </Text>
+                    <Text className="qrbit-text-body-secondary text-xs" c="dimmed">
+                      None. No remote servers track you or collect data.
+                    </Text>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <Text className="qrbit-text-body-secondary" c="dimmed">
-              All data exists only on this device. Back up your library before clearing browser site data.
-            </Text>
+            <div
+              className="p-3 rounded flex items-center gap-2.5 text-xs"
+              style={{
+                backgroundColor: 'var(--qrbit-sunken)',
+                border: '1px solid var(--qrbit-border)',
+                borderRadius: 'var(--qrbit-radius-md)',
+                color: 'var(--qrbit-ink-secondary)',
+              }}
+            >
+              <IconExclamationCircle size={16} style={{ flex: 'none', color: 'var(--qrbit-ink-muted)' }} />
+              <span>
+                All library data exists only on this device. Back up your library with an export before clearing browser site data or switching machines.
+              </span>
+            </div>
           </Section>
 
           {/* --------------------------------------------------------- connection -- */}
