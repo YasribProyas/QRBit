@@ -1453,17 +1453,17 @@ describe('LibraryPanel — container and contained', () => {
 
     click(toggle)
 
-    // A collapsed folder is its header alone — the count is the whole statement of what is in it.
+    // A collapsed folder is its header alone
     expect(folderSection('Vault').children).toHaveLength(1)
     expect(
-      folderSection('Vault').querySelector('.library-panel__folder-count')?.textContent,
-    ).toBe('2 dossiers')
+      folderSection('Vault').querySelector('.library-panel__folder-count'),
+    ).toBe(null)
 
     click(toggle)
     expect(containedRows(folderSection('Vault'))).toHaveLength(2)
   })
 
-  it('counts dossiers with their noun, on every container, including an empty one', async () => {
+  it('does not display dossier count badges in the folder browser', async () => {
     await seedTwoFolders()
     await seedFolder('Quiet')
     await loadLibrary()
@@ -1471,21 +1471,17 @@ describe('LibraryPanel — container and contained', () => {
     renderPanel()
 
     expect(
-      folderSection('Vault').querySelector('.library-panel__folder-count')?.textContent,
-    ).toBe('2 dossiers')
+      folderSection('Vault').querySelector('.library-panel__folder-count'),
+    ).toBe(null)
     expect(
-      folderSection('Notes').querySelector('.library-panel__folder-count')?.textContent,
-    ).toBe('1 dossier')
+      folderSection('Notes').querySelector('.library-panel__folder-count'),
+    ).toBe(null)
     expect(
-      folderSection('Root').querySelector('.library-panel__folder-count')?.textContent,
-    ).toBe('1 dossier')
+      folderSection('Root').querySelector('.library-panel__folder-count'),
+    ).toBe(null)
     expect(
-      folderSection('Quiet').querySelector('.library-panel__folder-count')?.textContent,
-    ).toBe('0 dossiers')
-    // A bare figure with no noun is what the panel used to print.
-    expect(
-      folderSection('Vault').querySelector('.library-panel__folder-count')?.textContent,
-    ).not.toBe('2')
+      folderSection('Quiet').querySelector('.library-panel__folder-count'),
+    ).toBe(null)
   })
 
   it('asks for a new file in the folder whose header plus was pressed, without collapsing it', async () => {

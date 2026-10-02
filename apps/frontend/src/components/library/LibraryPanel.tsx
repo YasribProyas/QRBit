@@ -1063,24 +1063,10 @@ function FolderSection({
           </ActionIcon>
         )}
 
-        <span
-          className="library-panel__folder-count qrbit-text-data shrink-0 ml-auto"
-          style={{
-            background: 'var(--qrbit-sunken)',
-            border: '1px solid var(--qrbit-border)',
-            borderRadius: 'var(--qrbit-radius-full)',
-            padding: '2px 8px',
-            fontSize: '11px',
-            color: 'var(--qrbit-ink-secondary)',
-          }}
-        >
-          {plural(files.length, 'dossier')}
-        </span>
-
         <ActionIcon
           variant="subtle"
           size="lg"
-          className="library-panel__new-file shrink-0"
+          className="library-panel__new-file shrink-0 ml-auto"
           aria-label={`New file in ${name}`}
           style={{ transition: 'color 150ms ease, background-color 150ms ease' }}
           onClick={(event) => {
