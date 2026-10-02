@@ -537,9 +537,10 @@ async function seedFile(
   folderId: string,
   sortOrder: number,
   blocks: FileBlock[] = [{ id: `b-${name}`, type: 'heading', content: `${name} heading` }],
+  isLocked: boolean = false,
 ): Promise<LibraryFile> {
   const created = await createFile(name, folderId, blocks)
-  const ordered: LibraryFile = { ...created, sortOrder }
+  const ordered: LibraryFile = { ...created, sortOrder, isLocked }
   await saveFile(ordered)
   return ordered
 }
@@ -633,24 +634,26 @@ describe('LibraryPanel — what the panel lists', () => {
     await seedFile('Plain', vault.id, 1000, [
       { id: 'b-plain', type: 'richText', content: 'Notes only' },
     ])
-    await seedFile('Secrets', vault.id, 2000, [
-      { id: 'b-heading', type: 'heading', content: 'Cluster keys' },
-      {
-        id: 'b-locked',
-        type: 'locked',
-        label: 'Root keyphrase',
-        // A real stored tuple, because that is the only thing the badge may mean: `isLocked`
-        // is the lock *intent*, and `hasLockedBlocks` answers with `lockedTupleOf` — a row
-        // wearing the flag with plaintext in it gets no badge and says "Not encrypted"
-        // instead (PLAN.md §6.2, §14).
-        isLocked: true,
-        lockedData: {
-          ciphertext: new Uint8Array(32).fill(7),
-          iv: new Uint8Array(12).fill(1),
-          salt: new Uint8Array(16).fill(2),
+    await seedFile(
+      'Secrets',
+      vault.id,
+      2000,
+      [
+        { id: 'b-heading', type: 'heading', content: 'Cluster keys' },
+        {
+          id: 'b-locked',
+          type: 'locked',
+          label: 'Root keyphrase',
+          isLocked: true,
+          lockedData: {
+            ciphertext: new Uint8Array(32).fill(7),
+            iv: new Uint8Array(12).fill(1),
+            salt: new Uint8Array(16).fill(2),
+          },
         },
-      },
-    ])
+      ],
+      true,
+    )
     await loadLibrary()
 
     renderPanel()
@@ -686,19 +689,25 @@ describe('LibraryPanel — what the panel lists', () => {
   it('truncates a long name and never truncates the Encrypted badge', async () => {
     const vault = await seedFolder('Vault')
     const longName = 'Quarterly board pack with annexes and supporting schedules'
-    await seedFile(longName, vault.id, 1000, [
-      {
-        id: 'b-locked-long',
-        type: 'locked',
-        label: 'Board pack',
-        isLocked: true,
-        lockedData: {
-          ciphertext: new Uint8Array(32).fill(7),
-          iv: new Uint8Array(12).fill(1),
-          salt: new Uint8Array(16).fill(2),
+    await seedFile(
+      longName,
+      vault.id,
+      1000,
+      [
+        {
+          id: 'b-locked-long',
+          type: 'locked',
+          label: 'Board pack',
+          isLocked: true,
+          lockedData: {
+            ciphertext: new Uint8Array(32).fill(7),
+            iv: new Uint8Array(12).fill(1),
+            salt: new Uint8Array(16).fill(2),
+          },
         },
-      },
-    ])
+      ],
+      true,
+    )
     await loadLibrary()
 
     renderPanel()

@@ -114,7 +114,7 @@ import type { FolderPickerChoice } from './FolderPickerModal'
 import { NewFolderModal } from './NewFolderModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
-import { getFirstBlockPreview, hasLockedBlocks } from '../../lib/dossier'
+import { getFirstBlockPreview } from '../../lib/dossier'
 import { describeDelete, folderDeleteImpact } from '../../lib/folders'
 import type { DeleteImpact, PendingDelete } from '../../lib/folders'
 import { ROOT_FOLDER_ID, siblingFolders } from '../../lib/library'
@@ -1494,7 +1494,7 @@ function FileRow({ file, actions, handleProps, dragOffset }: FileRowProps) {
   const [draftName, setDraftName] = useState(file.name)
 
   const preview = getFirstBlockPreview(file)
-  const encrypted = Boolean(file.isLocked) || hasLockedBlocks(file)
+  const encrypted = Boolean(file.isLocked)
 
   const startRename = (): void => {
     setDraftName(file.name)
