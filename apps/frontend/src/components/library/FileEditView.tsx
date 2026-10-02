@@ -49,7 +49,7 @@ import type { FolderPickerChoice } from './FolderPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
 import { describeSendFailure, encryptBlockPayload, findUnsendableBlocks } from '../../lib/dossier'
-import { encryptItem } from '../../lib/crypto'
+import { decryptItem, encryptItem } from '../../lib/crypto'
 import { ROOT_FOLDER_ID } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
@@ -158,6 +158,7 @@ export function FileEditView({
   const [encryptError, setEncryptError] = useState<string | null>(null)
   const [isEncrypting, setIsEncrypting] = useState(false)
   const [draftIsLocked, setDraftIsLocked] = useState(Boolean(file.isLocked))
+  const [seededIsLocked, setSeededIsLocked] = useState(file.isLocked)
 
   // Whole-dossier lock modal states
   const [showDossierLockModal, setShowDossierLockModal] = useState(false)
@@ -165,18 +166,31 @@ export function FileEditView({
   const [dossierLockConfirm, setDossierLockConfirm] = useState('')
   const [dossierLockError, setDossierLockError] = useState<string | null>(null)
   const [isDossierLocking, setIsDossierLocking] = useState(false)
+
+  // Whole-dossier unlock modal states
+  const [showDossierUnlockModal, setShowDossierUnlockModal] = useState(false)
+  const [dossierUnlockPassword, setDossierUnlockPassword] = useState('')
+  const [dossierUnlockError, setDossierUnlockError] = useState<string | null>(null)
+  const [isDossierUnlocking, setIsDossierUnlocking] = useState(false)
+
   const dossierPasswordRef = useRef<string>(initialPassword ?? '')
 
   useEffect(() => {
-    if (initialPassword) {
+    if (initialPassword !== undefined) {
       dossierPasswordRef.current = initialPassword
     }
   }, [initialPassword])
+
+  if (seededIsLocked !== file.isLocked) {
+    setSeededIsLocked(file.isLocked)
+    setDraftIsLocked(Boolean(file.isLocked))
+  }
 
   if (seededFromId !== file.id) {
     // React's "adjust state when a prop changes" during render: no effect, no frame drawn
     // against the previous dossier, and no chance for a stale draft to be saved over it.
     setSeededFromId(file.id)
+    setSeededIsLocked(file.isLocked)
     setDraftName(file.name)
     setDraftBlocks(file.blocks)
     setFolderId(file.folderId)
@@ -189,6 +203,9 @@ export function FileEditView({
     setDossierLockPassword('')
     setDossierLockConfirm('')
     setDossierLockError(null)
+    setShowDossierUnlockModal(false)
+    setDossierUnlockPassword('')
+    setDossierUnlockError(null)
     setEncryptPrompt(null)
     setEncryptPassword('')
     setEncryptConfirm('')
@@ -262,6 +279,18 @@ export function FileEditView({
   }
 
   const handleUpdateBlock = (blockId: string, changes: Partial<FileBlock>): void => {
+    // If this update is only revealing an in-memory unlocked secret (keeping lockedData),
+    // it is in-memory RAM reveal only — never mark dirty, never trigger autosave!
+    const isOnlyReveal =
+      changes.isUnlocked === true && !('lockedData' in changes && changes.lockedData === undefined)
+
+    if (isOnlyReveal) {
+      setDraftBlocks((current) =>
+        current.map((block) => (block.id === blockId ? { ...block, ...changes } : block)),
+      )
+      return
+    }
+
     commitBlocks((current) =>
       current.map((block) => (block.id === blockId ? { ...block, ...changes } : block)),
     )
@@ -271,9 +300,19 @@ export function FileEditView({
     commitBlocks((current) => current.filter((block) => block.id !== blockId))
   }
 
-  /** Unlocking a credential is an edit like any other: it lands in the draft, not the library. */
-  const handleUnlockCredential = (blockId: string): void => {
-    handleUpdateBlock(blockId, { isUnlocked: true })
+  /** Unlocking a credential is an in-memory RAM reveal only — never marks dirty or writes to storage. */
+  const handleUnlockCredential = (blockId: string, revealedContent?: string): void => {
+    setDraftBlocks((current) =>
+      current.map((block) =>
+        block.id === blockId
+          ? {
+              ...block,
+              isUnlocked: true,
+              ...(revealedContent !== undefined ? { content: revealedContent } : {}),
+            }
+          : block,
+      ),
+    )
   }
 
   const handleDuplicateBlock = (blockId: string): void => {
@@ -335,15 +374,31 @@ export function FileEditView({
 
   /**
    * Encrypts the entire dossier if locked before writing to IndexedDB.
+   * Ensures that revealed values of encrypted blocks are NEVER written to storage.
    */
   const preparePersistFile = async (draft: LibraryFile): Promise<LibraryFile> => {
+    // Strip plaintext and isUnlocked from any block that has lockedData (encrypted blocks):
+    // Revealed secrets MUST ONLY live in RAM and NEVER in browser storage!
+    const cleanedBlocks = (draft.blocks || []).map((b) => {
+      if (b.lockedData) {
+        const { content, value, blob, isUnlocked, ...rest } = b
+        return rest as FileBlock
+      }
+      return b
+    })
+
+    const draftWithCleanedBlocks = {
+      ...draft,
+      blocks: cleanedBlocks,
+    }
+
     if (draft.isLocked) {
       const password = dossierPasswordRef.current
       if (password) {
-        const plaintext = new TextEncoder().encode(JSON.stringify(draft.blocks || []))
+        const plaintext = new TextEncoder().encode(JSON.stringify(cleanedBlocks))
         const { ciphertext, iv, salt } = await encryptItem(password, plaintext)
         return {
-          ...draft,
+          ...draftWithCleanedBlocks,
           isLocked: true,
           ciphertext,
           iv,
@@ -352,7 +407,7 @@ export function FileEditView({
         }
       } else if (file.ciphertext && draftBlocks.length === 0) {
         return {
-          ...draft,
+          ...draftWithCleanedBlocks,
           isLocked: true,
           ciphertext: file.ciphertext,
           iv: file.iv,
@@ -362,7 +417,7 @@ export function FileEditView({
       }
     }
     return {
-      ...draft,
+      ...draftWithCleanedBlocks,
       isLocked: false,
       ciphertext: undefined,
       iv: undefined,
@@ -547,10 +602,55 @@ export function FileEditView({
       setShowDossierLockModal(false)
       setDossierLockPassword('')
       setDossierLockConfirm('')
+      void persist({
+        ...draftFile(),
+        isLocked: true,
+      })
     } catch (err: unknown) {
       setDossierLockError(err instanceof Error ? err.message : 'Encryption failed')
     } finally {
       setIsDossierLocking(false)
+    }
+  }
+
+  const handleConfirmDossierUnlock = async (): Promise<void> => {
+    if (!dossierUnlockPassword) {
+      setDossierUnlockError('Enter the password to unlock this dossier.')
+      return
+    }
+
+    setIsDossierUnlocking(true)
+    setDossierUnlockError(null)
+    try {
+      if (file.ciphertext && file.salt && file.iv) {
+        await decryptItem(
+          dossierUnlockPassword,
+          file.salt,
+          file.iv,
+          file.ciphertext,
+        )
+      } else if (dossierPasswordRef.current && dossierPasswordRef.current !== dossierUnlockPassword) {
+        throw new Error('Incorrect password')
+      }
+
+      setDraftIsLocked(false)
+      dossierPasswordRef.current = ''
+      setShowDossierUnlockModal(false)
+      setDossierUnlockPassword('')
+      setDossierUnlockError(null)
+      setIsDirty(true)
+
+      void persist({
+        ...draftFile(),
+        isLocked: false,
+        ciphertext: undefined,
+        iv: undefined,
+        salt: undefined,
+      })
+    } catch {
+      setDossierUnlockError('Incorrect password. Could not unlock dossier.')
+    } finally {
+      setIsDossierUnlocking(false)
     }
   }
 
@@ -701,9 +801,9 @@ export function FileEditView({
                   c={draftIsLocked ? 'locked' : 'dimmed'}
                   onClick={() => {
                     if (draftIsLocked) {
-                      setDraftIsLocked(false)
-                      dossierPasswordRef.current = ''
-                      setIsDirty(true)
+                      setShowDossierUnlockModal(true)
+                      setDossierUnlockPassword('')
+                      setDossierUnlockError(null)
                     } else {
                       setShowDossierLockModal(true)
                       setDossierLockPassword('')
@@ -1007,6 +1107,80 @@ export function FileEditView({
                   loading={isDossierLocking}
                 >
                   Lock dossier
+                </Button>
+              </Group>
+            </Stack>
+          </form>
+        </Modal>
+      ) : null}
+
+      {/* Whole-dossier unlock modal */}
+      {showDossierUnlockModal ? (
+        <Modal
+          opened
+          onClose={() => {
+            if (!isDossierUnlocking) {
+              setShowDossierUnlockModal(false)
+              setDossierUnlockPassword('')
+              setDossierUnlockError(null)
+            }
+          }}
+          title="Unlock Dossier"
+          size="sm"
+          centered
+          padding="lg"
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void handleConfirmDossierUnlock()
+            }}
+          >
+            <Stack gap="md">
+              <Text className="qrbit-text-body-secondary" c="dimmed">
+                Enter the password to unlock and remove encryption from “{draftName}”.
+              </Text>
+
+              <PasswordInput
+                label="Password"
+                placeholder="Enter dossier password"
+                autoFocus
+                required
+                value={dossierUnlockPassword}
+                onChange={(e) => {
+                  setDossierUnlockPassword(e.currentTarget.value)
+                  setDossierUnlockError(null)
+                }}
+              />
+
+              {dossierUnlockError !== null ? (
+                <Text size="xs" c="danger">
+                  {dossierUnlockError}
+                </Text>
+              ) : null}
+
+              <Group justify="flex-end" gap="sm" mt="xs">
+                <Button
+                  type="button"
+                  variant="subtle"
+                  size="sm"
+                  c="dimmed"
+                  disabled={isDossierUnlocking}
+                  onClick={() => {
+                    setShowDossierUnlockModal(false)
+                    setDossierUnlockPassword('')
+                    setDossierUnlockError(null)
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  color="locked"
+                  size="sm"
+                  loading={isDossierUnlocking}
+                >
+                  Unlock and Decrypt
                 </Button>
               </Group>
             </Stack>

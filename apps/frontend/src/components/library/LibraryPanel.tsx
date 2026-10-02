@@ -338,6 +338,19 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
           blocks: [],
         }),
       )
+      if (lockTarget.id === activeFileId) {
+        onSelectFile(
+          {
+            ...lockTarget,
+            isLocked: true,
+            ciphertext,
+            iv,
+            salt,
+            blocks: lockTarget.blocks,
+          },
+          lockPassword,
+        )
+      }
       setLockTarget(null)
       setLockPassword('')
       setLockConfirmPassword('')
@@ -354,6 +367,15 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
     if (!file.ciphertext || !file.salt || !file.iv) {
       if (forAction === 'decrypt') {
         reportToStore(updateFile(file.id, { isLocked: false }))
+        if (file.id === activeFileId) {
+          onSelectFile(
+            {
+              ...file,
+              isLocked: false,
+            },
+            undefined,
+          )
+        }
       } else {
         onSelectFile(file)
       }
@@ -386,6 +408,19 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
             blocks: parsedBlocks,
           }),
         )
+        if (file.id === activeFileId) {
+          onSelectFile(
+            {
+              ...file,
+              isLocked: false,
+              ciphertext: undefined,
+              iv: undefined,
+              salt: undefined,
+              blocks: parsedBlocks,
+            },
+            undefined,
+          )
+        }
       } else {
         onSelectFile(
           {
