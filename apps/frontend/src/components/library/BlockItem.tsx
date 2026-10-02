@@ -1075,11 +1075,13 @@ export function BlockItem({
           <div className="flex-1 min-w-0">
             {canEditPayload ? (
               <Textarea
-                autosize
-                minRows={2}
-                maxRows={16}
-                className="qrbit-richtext-textarea"
-                classNames={{ input: 'qrbit-richtext-textarea' }}
+                minRows={3}
+                resize="vertical"
+                classNames={{
+                  root: 'w-full',
+                  wrapper: 'w-full',
+                  input: 'qrbit-richtext-textarea',
+                }}
                 value={block.content || ''}
                 onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
                 placeholder="Rich Text"

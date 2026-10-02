@@ -2638,35 +2638,42 @@ input.qrbit-shorttext-input::placeholder {
 }
 
 /* ----------------------------------------- library rich text block (edit) -- */
-.qrbit-richtext-textarea,
-.qrbit-richtext-textarea textarea,
+.qrbit-richtext-block .mantine-InputWrapper-root,
+.qrbit-richtext-block .mantine-Input-wrapper,
+.qrbit-richtext-block .mantine-Textarea-wrapper {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  width: 100% !important;
+}
+
 textarea.qrbit-richtext-textarea {
   font-family: var(--qrbit-font-ui) !important;
   font-size: 14px !important;
   font-weight: 400 !important;
-  line-height: 1.4 !important;
+  line-height: 1.45 !important;
   color: var(--qrbit-ink) !important;
   background-color: transparent !important;
   border: 1px solid var(--qrbit-border) !important;
   border-radius: var(--qrbit-radius-sm, 6px) !important;
   padding: 8px 12px !important;
+  width: 100% !important;
+  min-height: 72px !important;
+  resize: vertical !important;
+  overflow-y: auto !important;
   transition: border-color 150ms ease !important;
 }
 
-.qrbit-richtext-textarea:focus,
-.qrbit-richtext-textarea textarea:focus,
 textarea.qrbit-richtext-textarea:focus {
   border-color: var(--qrbit-border-strong) !important;
   outline: none !important;
 }
 
-.qrbit-richtext-textarea::placeholder,
-.qrbit-richtext-textarea textarea::placeholder,
 textarea.qrbit-richtext-textarea::placeholder {
   font-family: var(--qrbit-font-ui) !important;
   font-size: 14px !important;
   font-weight: 400 !important;
-  line-height: 1.4 !important;
+  line-height: 1.45 !important;
   color: var(--qrbit-ink-muted) !important;
   opacity: 0.45 !important;
 }
