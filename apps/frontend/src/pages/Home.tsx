@@ -74,6 +74,8 @@ export function Home() {
   const [scanning, setScanning] = useState(false)
   /** The dossier currently open in the editor; `null` means the shell is on screen. */
   const [editingFile, setEditingFile] = useState<LibraryFile | null>(null)
+  /** Password for the currently open locked dossier, if unlocked. */
+  const [editingPassword, setEditingPassword] = useState<string | undefined>(undefined)
   /** The dossier handed to a session by the editor's Send. */
   const [selectedFileForTransfer, setSelectedFileForTransfer] = useState<LibraryFile | null>(null)
   /**
@@ -261,7 +263,11 @@ export function Home() {
             ) : null}
             <FileEditView
               file={editingFile}
-              onBack={() => setEditingFile(null)}
+              initialPassword={editingPassword}
+              onBack={() => {
+                setEditingFile(null)
+                setEditingPassword(undefined)
+              }}
               onSaveFile={handleSaveFile}
               onSendFile={async (fileToSend) => {
                 // Only open the scanner once the dossier is actually on its way: a refused Send must
@@ -276,8 +282,14 @@ export function Home() {
       library={
         <LibraryPanel
           activeFileId={editingFile?.id}
-          onSelectFile={(file) => setEditingFile(file)}
-          onCreateFile={(folderId) => handleCreateNewFile(folderId)}
+          onSelectFile={(file, password) => {
+            setEditingFile(file)
+            setEditingPassword(password)
+          }}
+          onCreateFile={(folderId) => {
+            setEditingPassword(undefined)
+            handleCreateNewFile(folderId)
+          }}
         />
       }
     />

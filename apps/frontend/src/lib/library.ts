@@ -139,6 +139,9 @@ export interface LibraryFile {
   sortOrder?: number
   /** Whole-dossier encryption / lock flag */
   isLocked?: boolean
+  ciphertext?: Uint8Array
+  iv?: Uint8Array
+  salt?: Uint8Array
 }
 
 export type LibraryItemType = 'text' | 'richtext' | 'image' | 'file' | 'locked'
@@ -1406,6 +1409,15 @@ export function parseFile(value: unknown): LibraryFile {
 
   if (typeof value['isLocked'] === 'boolean') {
     file.isLocked = value['isLocked']
+  }
+  if (value['ciphertext'] instanceof Uint8Array) {
+    file.ciphertext = value['ciphertext']
+  }
+  if (value['iv'] instanceof Uint8Array) {
+    file.iv = value['iv']
+  }
+  if (value['salt'] instanceof Uint8Array) {
+    file.salt = value['salt']
   }
 
   return file

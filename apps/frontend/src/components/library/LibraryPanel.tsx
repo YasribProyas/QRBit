@@ -83,6 +83,9 @@ import {
   Group,
   Loader,
   Menu,
+  Modal,
+  PasswordInput,
+  Stack,
   Text,
   TextInput,
   Title,
@@ -117,11 +120,12 @@ import type { DeleteImpact, PendingDelete } from '../../lib/folders'
 import { ROOT_FOLDER_ID, siblingFolders } from '../../lib/library'
 import type { LibraryFile, LibraryFolder } from '../../lib/library'
 import { DEFAULT_ITEM_HEIGHT } from '../../lib/reorder'
+import { decryptItem, encryptItem } from '../../lib/crypto'
 import { useLibraryStore } from '../../store/libraryStore'
 
 export interface LibraryPanelProps {
   /** A dossier row was opened: the page hands it to the editor. */
-  onSelectFile(file: LibraryFile): void
+  onSelectFile(file: LibraryFile, unlockPassword?: string): void
   /**
    * `+ New file` in the list of `folderId`. The page owns the create, because it owns
    * what a new dossier contains and opens the result; `ROOT_FOLDER_ID` is the unfiled
@@ -295,6 +299,111 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
   /** The dossier whose "Move to folder" dialog is open; `null` means none. */
   const [moveRequest, setMoveRequest] = useState<LibraryFile | null>(null)
 
+  // Whole-dossier encryption modals
+  const [lockTarget, setLockTarget] = useState<LibraryFile | null>(null)
+  const [lockPassword, setLockPassword] = useState('')
+  const [lockConfirmPassword, setLockConfirmPassword] = useState('')
+  const [lockError, setLockError] = useState<string | null>(null)
+  const [isEncrypting, setIsEncrypting] = useState(false)
+
+  const [unlockTarget, setUnlockTarget] = useState<{
+    file: LibraryFile
+    forAction: 'open' | 'decrypt'
+  } | null>(null)
+  const [unlockPassword, setUnlockPassword] = useState('')
+  const [unlockError, setUnlockError] = useState<string | null>(null)
+  const [isDecrypting, setIsDecrypting] = useState(false)
+
+  const handleConfirmLock = async (): Promise<void> => {
+    if (!lockTarget) return
+    if (!lockPassword) {
+      setLockError('Enter a password to encrypt this dossier.')
+      return
+    }
+    if (lockPassword !== lockConfirmPassword) {
+      setLockError('Passwords do not match.')
+      return
+    }
+    setIsEncrypting(true)
+    setLockError(null)
+    try {
+      const plaintext = new TextEncoder().encode(JSON.stringify(lockTarget.blocks || []))
+      const { ciphertext, iv, salt } = await encryptItem(lockPassword, plaintext)
+      reportToStore(
+        updateFile(lockTarget.id, {
+          isLocked: true,
+          ciphertext,
+          iv,
+          salt,
+          blocks: [],
+        }),
+      )
+      setLockTarget(null)
+      setLockPassword('')
+      setLockConfirmPassword('')
+    } catch (err: unknown) {
+      setLockError(err instanceof Error ? err.message : 'Encryption failed')
+    } finally {
+      setIsEncrypting(false)
+    }
+  }
+
+  const handleConfirmUnlock = async (): Promise<void> => {
+    if (!unlockTarget) return
+    const { file, forAction } = unlockTarget
+    if (!file.ciphertext || !file.salt || !file.iv) {
+      if (forAction === 'decrypt') {
+        reportToStore(updateFile(file.id, { isLocked: false }))
+      } else {
+        onSelectFile(file)
+      }
+      setUnlockTarget(null)
+      return
+    }
+
+    if (!unlockPassword) {
+      setUnlockError('Enter the password to unlock this dossier.')
+      return
+    }
+
+    setIsDecrypting(true)
+    setUnlockError(null)
+    try {
+      const decryptedBytes = await decryptItem(
+        unlockPassword,
+        file.salt,
+        file.iv,
+        file.ciphertext,
+      )
+      const parsedBlocks = JSON.parse(new TextDecoder().decode(decryptedBytes))
+      if (forAction === 'decrypt') {
+        reportToStore(
+          updateFile(file.id, {
+            isLocked: false,
+            ciphertext: undefined,
+            iv: undefined,
+            salt: undefined,
+            blocks: parsedBlocks,
+          }),
+        )
+      } else {
+        onSelectFile(
+          {
+            ...file,
+            blocks: parsedBlocks,
+          },
+          unlockPassword,
+        )
+      }
+      setUnlockTarget(null)
+      setUnlockPassword('')
+    } catch {
+      setUnlockError('Incorrect password. Could not decrypt dossier.')
+    } finally {
+      setIsDecrypting(false)
+    }
+  }
+
   // One level, in the one order the library UI uses; a dossier in a folder this panel
   // does not list (the root, a subfolder, or a folder that went away) belongs to `Root`.
   const listedFolders = siblingFolders(folders, null)
@@ -308,13 +417,28 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
       onCreateFile(folderId)
     },
     openFile: (file) => {
+      if (file.isLocked && file.ciphertext) {
+        setUnlockTarget({ file, forAction: 'open' })
+        setUnlockPassword('')
+        setUnlockError(null)
+        return
+      }
       onSelectFile(file)
     },
     renameFile: (file, name) => {
       reportToStore(updateFile(file.id, { name }))
     },
     toggleLockFile: (file) => {
-      reportToStore(updateFile(file.id, { isLocked: !file.isLocked }))
+      if (file.isLocked) {
+        setUnlockTarget({ file, forAction: 'decrypt' })
+        setUnlockPassword('')
+        setUnlockError(null)
+      } else {
+        setLockTarget(file)
+        setLockPassword('')
+        setLockConfirmPassword('')
+        setLockError(null)
+      }
     },
     askMoveFile: (file) => {
       setMoveRequest(file)
@@ -598,6 +722,138 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
               setPendingDelete(null)
             }}
           />
+        ) : null}
+
+        {/* Lock Dossier Modal */}
+        {lockTarget !== null ? (
+          <Modal
+            opened
+            onClose={() => {
+              if (!isEncrypting) setLockTarget(null)
+            }}
+            title="Lock Dossier"
+            size="sm"
+            centered
+            padding="lg"
+          >
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                void handleConfirmLock()
+              }}
+            >
+              <Stack gap="md">
+                <Text className="qrbit-text-body-secondary">
+                  Set a password to encrypt “{lockTarget.name}”. The entire dossier will be encrypted with AES-256-GCM.
+                </Text>
+
+                <PasswordInput
+                  label="Password"
+                  placeholder="Enter a password"
+                  autoFocus
+                  required
+                  value={lockPassword}
+                  onChange={(e) => setLockPassword(e.currentTarget.value)}
+                />
+
+                <PasswordInput
+                  label="Confirm password"
+                  placeholder="Repeat the password"
+                  required
+                  value={lockConfirmPassword}
+                  onChange={(e) => setLockConfirmPassword(e.currentTarget.value)}
+                />
+
+                {lockError !== null ? (
+                  <Text size="xs" c="danger">
+                    {lockError}
+                  </Text>
+                ) : null}
+
+                <Group justify="flex-end" gap="sm" mt="xs">
+                  <Button
+                    type="button"
+                    variant="subtle"
+                    size="sm"
+                    disabled={isEncrypting}
+                    onClick={() => setLockTarget(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    color="signal"
+                    size="sm"
+                    loading={isEncrypting}
+                  >
+                    Lock dossier
+                  </Button>
+                </Group>
+              </Stack>
+            </form>
+          </Modal>
+        ) : null}
+
+        {/* Unlock Dossier Modal */}
+        {unlockTarget !== null ? (
+          <Modal
+            opened
+            onClose={() => {
+              if (!isDecrypting) setUnlockTarget(null)
+            }}
+            title={unlockTarget.forAction === 'decrypt' ? 'Unlock and Decrypt Dossier' : 'Open Locked Dossier'}
+            size="sm"
+            centered
+            padding="lg"
+          >
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                void handleConfirmUnlock()
+              }}
+            >
+              <Stack gap="md">
+                <Text className="qrbit-text-body-secondary">
+                  Enter the password to {unlockTarget.forAction === 'decrypt' ? 'permanently decrypt' : 'open'} “{unlockTarget.file.name}”.
+                </Text>
+
+                <PasswordInput
+                  label="Password"
+                  placeholder="Enter dossier password"
+                  autoFocus
+                  required
+                  value={unlockPassword}
+                  onChange={(e) => setUnlockPassword(e.currentTarget.value)}
+                />
+
+                {unlockError !== null ? (
+                  <Text size="xs" c="danger">
+                    {unlockError}
+                  </Text>
+                ) : null}
+
+                <Group justify="flex-end" gap="sm" mt="xs">
+                  <Button
+                    type="button"
+                    variant="subtle"
+                    size="sm"
+                    disabled={isDecrypting}
+                    onClick={() => setUnlockTarget(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    color="signal"
+                    size="sm"
+                    loading={isDecrypting}
+                  >
+                    {unlockTarget.forAction === 'decrypt' ? 'Unlock and Decrypt' : 'Open dossier'}
+                  </Button>
+                </Group>
+              </Stack>
+            </form>
+          </Modal>
         ) : null}
       </div>
     </WithMantine>

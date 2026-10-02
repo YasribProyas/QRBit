@@ -32,6 +32,7 @@ import {
   IconArrowLeft,
   IconCheck,
   IconFolderPlus,
+  IconFolderSymlink,
   IconLock,
   IconLockOpen,
   IconPencil,
@@ -40,7 +41,7 @@ import {
   IconStack,
   IconDeviceFloppy,
 } from '@tabler/icons-react'
-import { ActionIcon, Badge, Button, Group, Modal, Stack, Text, TextInput } from '@mantine/core'
+import { ActionIcon, Badge, Button, Group, Modal, PasswordInput, Stack, Text, TextInput } from '@mantine/core'
 import { BlockItem } from './BlockItem'
 import { AddBlockModal } from './AddBlockModal'
 import { FolderPickerModal } from './FolderPickerModal'
@@ -48,12 +49,14 @@ import type { FolderPickerChoice } from './FolderPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
 import { describeSendFailure, encryptBlockPayload, findUnsendableBlocks } from '../../lib/dossier'
+import { encryptItem } from '../../lib/crypto'
 import { ROOT_FOLDER_ID } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
 
 export interface FileEditViewProps {
   file: LibraryFile
+  initialPassword?: string
   onBack: () => void
   /** Persists the whole draft. Called by `Save`, by `Save & leave`, and once before `Send`. */
   onSaveFile: (file: LibraryFile) => void
@@ -97,6 +100,7 @@ function describeMoveFailure(cause: unknown): string {
 
 export function FileEditView({
   file,
+  initialPassword,
   onBack,
   onSaveFile,
   onSendFile,
@@ -155,6 +159,20 @@ export function FileEditView({
   const [isEncrypting, setIsEncrypting] = useState(false)
   const [draftIsLocked, setDraftIsLocked] = useState(Boolean(file.isLocked))
 
+  // Whole-dossier lock modal states
+  const [showDossierLockModal, setShowDossierLockModal] = useState(false)
+  const [dossierLockPassword, setDossierLockPassword] = useState('')
+  const [dossierLockConfirm, setDossierLockConfirm] = useState('')
+  const [dossierLockError, setDossierLockError] = useState<string | null>(null)
+  const [isDossierLocking, setIsDossierLocking] = useState(false)
+  const dossierPasswordRef = useRef<string>(initialPassword ?? '')
+
+  useEffect(() => {
+    if (initialPassword) {
+      dossierPasswordRef.current = initialPassword
+    }
+  }, [initialPassword])
+
   if (seededFromId !== file.id) {
     // React's "adjust state when a prop changes" during render: no effect, no frame drawn
     // against the previous dossier, and no chance for a stale draft to be saved over it.
@@ -167,6 +185,10 @@ export function FileEditView({
     setIsEditingTitle(false)
     setIsLeaveDialogOpen(false)
     setIsFolderPickerOpen(false)
+    setShowDossierLockModal(false)
+    setDossierLockPassword('')
+    setDossierLockConfirm('')
+    setDossierLockError(null)
     setEncryptPrompt(null)
     setEncryptPassword('')
     setEncryptConfirm('')
@@ -312,13 +334,51 @@ export function FileEditView({
   const canPersist = draftName.trim() !== ''
 
   /**
+   * Encrypts the entire dossier if locked before writing to IndexedDB.
+   */
+  const preparePersistFile = async (draft: LibraryFile): Promise<LibraryFile> => {
+    if (draft.isLocked) {
+      const password = dossierPasswordRef.current
+      if (password) {
+        const plaintext = new TextEncoder().encode(JSON.stringify(draft.blocks || []))
+        const { ciphertext, iv, salt } = await encryptItem(password, plaintext)
+        return {
+          ...draft,
+          isLocked: true,
+          ciphertext,
+          iv,
+          salt,
+          blocks: [],
+        }
+      } else if (file.ciphertext && draftBlocks.length === 0) {
+        return {
+          ...draft,
+          isLocked: true,
+          ciphertext: file.ciphertext,
+          iv: file.iv,
+          salt: file.salt,
+          blocks: [],
+        }
+      }
+    }
+    return {
+      ...draft,
+      isLocked: false,
+      ciphertext: undefined,
+      iv: undefined,
+      salt: undefined,
+    }
+  }
+
+  /**
    * Writes one draft to the library and marks it clean. Refuses a nameless dossier: `lib`
    * rejects an empty name, so offering to save one would only produce an error the user has
    * no way to fix from here.
    */
-  const persist = (draft: LibraryFile): boolean => {
+  const persist = async (draft: LibraryFile): Promise<boolean> => {
     if (draft.name.trim() === '') return false
-    onSaveFile(draft)
+    const fileToSave = await preparePersistFile(draft)
+    onSaveFile(fileToSave)
     setIsDirty(false)
     return true
   }
@@ -326,15 +386,16 @@ export function FileEditView({
   // Debounced autosave: automatically saves changes after 600ms of inactivity
   useEffect(() => {
     if (!isDirty || !canPersist) return
+    if (draftIsLocked && !dossierPasswordRef.current) return
 
     const timer = setTimeout(() => {
-      persist(draftFile())
+      void persist(draftFile())
     }, 600)
 
     return () => {
       clearTimeout(timer)
     }
-  }, [isDirty, canPersist, draftFile])
+  }, [isDirty, canPersist, draftFile, draftIsLocked])
 
   const closeEncryptPrompt = (): void => {
     setEncryptPrompt(null)
@@ -361,7 +422,7 @@ export function FileEditView({
         setSendError(describeSendFailure(first))
         return
       }
-      if (!persist(draft)) return
+      if (!(await persist(draft))) return
 
       // The host's send is allowed to be async (that is how `pages/Home.tsx` wires it, and the
       // conversion inside it can still reject). Awaiting it here is what keeps the failure visible
@@ -372,7 +433,7 @@ export function FileEditView({
       return
     }
 
-    if (!persist(draft)) return
+    if (!(await persist(draft))) return
     if (intent === 'leave') {
       setIsLeaveDialogOpen(false)
       onBack()
@@ -380,16 +441,28 @@ export function FileEditView({
   }
 
   const handleSave = (): void => {
+    if (draftIsLocked && !dossierPasswordRef.current) {
+      setShowDossierLockModal(true)
+      return
+    }
     void finishSave(draftFile(), 'save')
   }
 
   /** Send gives the channel what is on screen: the draft is persisted, then the same record goes out. */
   const handleSend = (): void => {
     setSendError(null)
+    if (draftIsLocked && !dossierPasswordRef.current) {
+      setShowDossierLockModal(true)
+      return
+    }
     void finishSave(draftFile(), 'send')
   }
 
   const handleSaveAndLeave = (): void => {
+    if (draftIsLocked && !dossierPasswordRef.current) {
+      setShowDossierLockModal(true)
+      return
+    }
     void finishSave(draftFile(), 'leave')
   }
 
@@ -430,8 +503,11 @@ export function FileEditView({
 
   const handleBackRequest = (): void => {
     if (isDirty && canPersist) {
-      persist(draftFile())
-      onBack()
+      if (draftIsLocked && !dossierPasswordRef.current) {
+        setShowDossierLockModal(true)
+        return
+      }
+      void persist(draftFile()).then(() => onBack())
       return
     }
     if (isDirty) {
@@ -450,8 +526,33 @@ export function FileEditView({
   // --- folder membership ---------------------------------------------------
   const folderDisplayName =
     folderId === ROOT_FOLDER_ID
-      ? 'ROOT'
-      : (folders.find((folder) => folder.id === folderId)?.name?.toUpperCase() ?? 'ROOT')
+      ? 'Root'
+      : (folders.find((folder) => folder.id === folderId)?.name ?? 'Root')
+
+  const handleConfirmDossierLock = async (): Promise<void> => {
+    if (!dossierLockPassword) {
+      setDossierLockError('Enter a password to encrypt this dossier.')
+      return
+    }
+    if (dossierLockPassword !== dossierLockConfirm) {
+      setDossierLockError('Passwords do not match.')
+      return
+    }
+    setIsDossierLocking(true)
+    setDossierLockError(null)
+    try {
+      dossierPasswordRef.current = dossierLockPassword
+      setDraftIsLocked(true)
+      setIsDirty(true)
+      setShowDossierLockModal(false)
+      setDossierLockPassword('')
+      setDossierLockConfirm('')
+    } catch (err: unknown) {
+      setDossierLockError(err instanceof Error ? err.message : 'Encryption failed')
+    } finally {
+      setIsDossierLocking(false)
+    }
+  }
 
   const handleFolderChoice = async (choice: FolderPickerChoice): Promise<void> => {
     setIsMoving(true)
@@ -832,6 +933,77 @@ export function FileEditView({
             void submitEncryptPrompt()
           }}
         />
+      ) : null}
+
+      {/* Whole-dossier lock modal */}
+      {showDossierLockModal ? (
+        <Modal
+          opened
+          onClose={() => {
+            if (!isDossierLocking) setShowDossierLockModal(false)
+          }}
+          title="Lock Dossier"
+          size="sm"
+          centered
+          padding="lg"
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void handleConfirmDossierLock()
+            }}
+          >
+            <Stack gap="md">
+              <Text className="qrbit-text-body-secondary" c="dimmed">
+                Set a password to encrypt “{draftName}”. The entire dossier will be encrypted with PBKDF2 + AES-256-GCM.
+              </Text>
+
+              <PasswordInput
+                label="Password"
+                placeholder="Enter a password"
+                autoFocus
+                required
+                value={dossierLockPassword}
+                onChange={(e) => setDossierLockPassword(e.currentTarget.value)}
+              />
+
+              <PasswordInput
+                label="Confirm password"
+                placeholder="Repeat the password"
+                required
+                value={dossierLockConfirm}
+                onChange={(e) => setDossierLockConfirm(e.currentTarget.value)}
+              />
+
+              {dossierLockError !== null ? (
+                <Text size="xs" c="danger">
+                  {dossierLockError}
+                </Text>
+              ) : null}
+
+              <Group justify="flex-end" gap="sm" mt="xs">
+                <Button
+                  type="button"
+                  variant="subtle"
+                  size="sm"
+                  c="dimmed"
+                  disabled={isDossierLocking}
+                  onClick={() => setShowDossierLockModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  color="locked"
+                  size="sm"
+                  loading={isDossierLocking}
+                >
+                  Lock dossier
+                </Button>
+              </Group>
+            </Stack>
+          </form>
+        </Modal>
       ) : null}
     </div>
   )

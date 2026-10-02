@@ -54,6 +54,24 @@ const SESSION_KEY_INFO = 'qrbit-session-v1'
 const PHRASE_INFO = 'qrbit-phrase-v1'
 
 /**
+ * Safe accessor for Web Crypto's SubtleCrypto.
+ * In modern browsers, `crypto.subtle` is only exposed in Secure Contexts (HTTPS or localhost).
+ * Accessing over plain HTTP on LAN IPs yields undefined, which this helper detects and explains.
+ */
+export function getSubtleCrypto(): SubtleCrypto {
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) {
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      throw new Error(
+        'Web Crypto API is restricted by the browser in insecure contexts. When testing across LAN, please access via HTTPS or http://localhost.'
+      )
+    }
+    throw new Error('Web Crypto API (crypto.subtle) is not available in this environment.')
+  }
+  return subtle
+}
+
+/**
  * Generates an ephemeral P-256 ECDH keypair (PLAN.md §11.1).
  *
  * `extractable: false` applies to the private key; Web Crypto always exposes the
@@ -62,7 +80,7 @@ const PHRASE_INFO = 'qrbit-phrase-v1'
  * it through `exportKey()`.
  */
 export async function generateKeypair(): Promise<CryptoKeyPair> {
-  return globalThis.crypto.subtle.generateKey(ECDH_CURVE, false, ['deriveBits'])
+  return getSubtleCrypto().generateKey(ECDH_CURVE, false, ['deriveBits'])
 }
 
 /**
@@ -70,7 +88,7 @@ export async function generateKeypair(): Promise<CryptoKeyPair> {
  * JSON-only signaling channel; wrap in `toBase64()` before sending.
  */
 export async function exportPublicKey(key: CryptoKey): Promise<ArrayBuffer> {
-  return globalThis.crypto.subtle.exportKey('spki', key)
+  return getSubtleCrypto().exportKey('spki', key)
 }
 
 /**
@@ -82,7 +100,7 @@ export async function exportPublicKey(key: CryptoKey): Promise<ArrayBuffer> {
  * `exportPublicKey()`.
  */
 export async function importPeerPublicKey(raw: ArrayBuffer): Promise<CryptoKey> {
-  return globalThis.crypto.subtle.importKey('spki', raw, ECDH_CURVE, true, [])
+  return getSubtleCrypto().importKey('spki', raw, ECDH_CURVE, true, [])
 }
 
 /**
@@ -96,7 +114,7 @@ export async function deriveSharedSecret(
   privateKey: CryptoKey,
   peerPublicKey: CryptoKey,
 ): Promise<ArrayBuffer> {
-  const secret = await globalThis.crypto.subtle.deriveBits(
+  const secret = await getSubtleCrypto().deriveBits(
     { name: 'ECDH', public: peerPublicKey },
     privateKey,
     SHARED_SECRET_BYTE_LENGTH * 8,
@@ -120,14 +138,14 @@ export async function deriveSessionKey(
   sharedSecret: ArrayBuffer,
   sessionId: string,
 ): Promise<CryptoKey> {
-  const keyMaterial = await globalThis.crypto.subtle.importKey(
+  const keyMaterial = await getSubtleCrypto().importKey(
     'raw',
     sharedSecret,
     'HKDF',
     false,
     ['deriveKey'],
   )
-  return globalThis.crypto.subtle.deriveKey(
+  return getSubtleCrypto().deriveKey(
     {
       name: 'HKDF',
       hash: 'SHA-256',
@@ -155,14 +173,14 @@ export async function deriveSafetyPhraseBytes(
   sharedSecret: ArrayBuffer,
   sessionId: string,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  const keyMaterial = await globalThis.crypto.subtle.importKey(
+  const keyMaterial = await getSubtleCrypto().importKey(
     'raw',
     sharedSecret,
     'HKDF',
     false,
     ['deriveBits'],
   )
-  const bits = await globalThis.crypto.subtle.deriveBits(
+  const bits = await getSubtleCrypto().deriveBits(
     {
       name: 'HKDF',
       hash: 'SHA-256',
@@ -200,7 +218,7 @@ function toBufferSourceView(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
  */
 export async function encrypt(key: CryptoKey, plaintext: Uint8Array): Promise<ArrayBuffer> {
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTE_LENGTH))
-  const ciphertext = await globalThis.crypto.subtle.encrypt(
+  const ciphertext = await getSubtleCrypto().encrypt(
     { name: 'AES-GCM', iv },
     key,
     toBufferSourceView(plaintext),
@@ -233,7 +251,7 @@ export async function decrypt(
   }
   const iv = envelope.slice(0, IV_BYTE_LENGTH)
   const ciphertext = envelope.slice(IV_BYTE_LENGTH)
-  const plaintext = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
+  const plaintext = await getSubtleCrypto().decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
   return new Uint8Array(plaintext)
 }
 
@@ -285,14 +303,14 @@ export const LOCKED_ITEM_MAX_PLAINTEXT_BYTES = 3 * 1024 * 1024
  * was stored with the ciphertext.
  */
 export async function deriveItemKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
-  const passwordMaterial = await globalThis.crypto.subtle.importKey(
+  const passwordMaterial = await getSubtleCrypto().importKey(
     'raw',
     new TextEncoder().encode(password),
     'PBKDF2',
     false,
     ['deriveKey'],
   )
-  return globalThis.crypto.subtle.deriveKey(
+  return getSubtleCrypto().deriveKey(
     {
       name: 'PBKDF2',
       hash: 'SHA-256',
@@ -328,7 +346,7 @@ export async function encryptItem(
   const salt = globalThis.crypto.getRandomValues(new Uint8Array(ITEM_SALT_BYTE_LENGTH))
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTE_LENGTH))
   const key = await deriveItemKey(password, salt)
-  const ciphertext = await globalThis.crypto.subtle.encrypt(
+  const ciphertext = await getSubtleCrypto().encrypt(
     { name: 'AES-GCM', iv },
     key,
     toBufferSourceView(plaintext),
@@ -355,7 +373,7 @@ export async function decryptItem(
   ciphertext: Uint8Array,
 ): Promise<Uint8Array> {
   const key = await deriveItemKey(password, salt)
-  const plaintext = await globalThis.crypto.subtle.decrypt(
+  const plaintext = await getSubtleCrypto().decrypt(
     { name: 'AES-GCM', iv: toBufferSourceView(iv) },
     key,
     toBufferSourceView(ciphertext),
@@ -386,7 +404,7 @@ export async function encryptExport(password: string, data: Uint8Array): Promise
   const salt = globalThis.crypto.getRandomValues(new Uint8Array(ITEM_SALT_BYTE_LENGTH))
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTE_LENGTH))
   const key = await deriveItemKey(password, salt)
-  const ciphertext = await globalThis.crypto.subtle.encrypt(
+  const ciphertext = await getSubtleCrypto().encrypt(
     { name: 'AES-GCM', iv },
     key,
     toBufferSourceView(data),
@@ -430,7 +448,7 @@ export async function decryptExport(
   const ciphertext = data.slice(headerByteLength)
 
   const key = await deriveItemKey(password, new Uint8Array(salt))
-  const plaintext = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
+  const plaintext = await getSubtleCrypto().decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
   return new Uint8Array(plaintext)
 }
 
