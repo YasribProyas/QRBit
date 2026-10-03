@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { HomeView } from '../components/HomeView'
 import { FileEditView } from '../components/library/FileEditView'
@@ -27,12 +27,12 @@ import { describeSendFailure, fileBlocksToLibraryItems } from '../lib/dossier'
 function newDossierBlocks(): FileBlock[] {
   const stamp = Date.now()
   return [
-    { id: `b-${stamp}-1`, type: 'heading', content: 'Section Heading' },
-    { id: `b-${stamp}-2`, type: 'shortText', label: 'Key', value: 'Value' },
+    { id: `b-${stamp}-1`, type: 'heading', content: '' },
+    { id: `b-${stamp}-2`, type: 'shortText', label: '', value: '' },
     {
       id: `b-${stamp}-3`,
       type: 'richText',
-      content: 'Add your structured notes, credentials, and attachments here.',
+      content: '',
     },
   ]
 }
@@ -62,6 +62,7 @@ function newDossierBlocks(): FileBlock[] {
  */
 export function Home() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   const folders = useLibraryStore((state) => state.folders)
   const refresh = useLibraryStore((state) => state.refresh)
@@ -86,8 +87,11 @@ export function Home() {
    */
   const [sendFailure, setSendFailure] = useState<string | null>(null)
 
-  // Home mounts the host session directly so the QR is visible and joinable immediately.
-  const session = useSession({ code: null })
+  const codeParam = searchParams.get('code')
+  const validCode = codeParam && isValidSessionCode(codeParam) ? codeParam : null
+
+  // Home mounts the guest session if ?code is provided, or host session (null) so the QR is visible immediately.
+  const session = useSession({ code: validCode })
 
   // The library lives in IndexedDB, so the first render has no data to show.
   useEffect(() => {
@@ -253,7 +257,11 @@ export function Home() {
                 if (session.phase === 'active' || session.phase === 'pairing') {
                   session.abort()
                 }
-                session.restart()
+                if (validCode) {
+                  navigate('/')
+                } else {
+                  session.restart()
+                }
               }}
               onSaveFile={(file) => {
                 saveFile(file).catch(() => undefined)

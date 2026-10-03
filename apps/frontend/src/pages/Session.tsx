@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { AppLayout } from '../components/layout/AppLayout'
 import { SessionView } from '../components/session/SessionView'
 import { FileEditView } from '../components/library/FileEditView'
+import { LibraryPanel } from '../components/library/LibraryPanel'
 import { useSession } from '../hooks/useSession'
 import { useLibraryStore } from '../store/libraryStore'
 import { ROOT_FOLDER_ID, type LibraryFile } from '../lib/library'
@@ -90,7 +91,14 @@ export function Session() {
   return (
     <AppLayout
       session={session}
-      showVault={false}
+      showVault={true}
+      vaultContent={
+        <LibraryPanel
+          activeFileId={sharedDossier?.id}
+          onSelectFile={() => {}}
+          onCreateFile={() => {}}
+        />
+      }
       mainContent={
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
           <header className="page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

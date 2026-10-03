@@ -267,12 +267,17 @@ export function FileEditView({
   // --- realtime session sync -----------------------------------------------
   const sessionItems = useSessionStore((state) => state.items)
   const localUpdatedIdsRef = useRef<Set<string>>(new Set())
+  const syncedBlockIdsRef = useRef<Set<string>>(new Set())
+  const initialBroadcastRef = useRef(false)
 
+  // Keep local draft blocks in sync with collaborative session items
   useEffect(() => {
     if (!isSharedSession) return
-    if (sessionItems.length === 0) return
 
     const incomingBlocks = sessionItemsToFileBlocks(sessionItems)
+    for (const b of incomingBlocks) {
+      syncedBlockIdsRef.current.add(b.id)
+    }
 
     setDraftBlocks((current) => {
       if (current.length === 0) {
@@ -293,32 +298,40 @@ export function FileEditView({
           changed = true
         } else {
           const isLocallyModified = localUpdatedIdsRef.current.has(inc.id)
-          if (
-            !isLocallyModified &&
-            (existing.content !== inc.content ||
+          if (!isLocallyModified) {
+            const hasChanged =
+              existing.content !== inc.content ||
               existing.value !== inc.value ||
               existing.label !== inc.label ||
-              existing.blob !== inc.blob ||
+              existing.type !== inc.type ||
+              (inc.blob !== undefined && existing.blob !== inc.blob) ||
               existing.fileSize !== inc.fileSize ||
-              existing.isUnlocked !== inc.isUnlocked)
-          ) {
-            nextBlocks.push({
-              ...existing,
-              ...inc,
-              content: existing.content ?? inc.content,
-              isUnlocked: existing.isUnlocked ?? inc.isUnlocked,
-            })
-            changed = true
+              existing.isUnlocked !== inc.isUnlocked
+
+            if (hasChanged) {
+              nextBlocks.push({
+                ...existing,
+                ...inc,
+                blob: inc.blob ?? existing.blob,
+                isUnlocked: existing.isUnlocked || inc.isUnlocked,
+              })
+              changed = true
+            } else {
+              nextBlocks.push(existing)
+            }
           } else {
             nextBlocks.push(existing)
           }
         }
       }
 
-      // 2. Keep any newly added local blocks not yet in sessionItems
+      // 2. Keep any newly added local blocks not yet in sessionItems AND not previously synced
       for (const b of current) {
-        if (!incomingIds.has(b.id) && !sessionItems.some((s) => s.id === b.id)) {
+        if (!incomingIds.has(b.id) && !syncedBlockIdsRef.current.has(b.id)) {
           nextBlocks.push(b)
+        } else if (!incomingIds.has(b.id) && syncedBlockIdsRef.current.has(b.id)) {
+          // Block was previously synced, but peer deleted it from sessionItems
+          changed = true
         }
       }
 
@@ -326,19 +339,87 @@ export function FileEditView({
     })
   }, [isSharedSession, sessionItems])
 
+  // Broadcast initial blocks if entering session with pre-existing draft blocks
+  useEffect(() => {
+    if (!isSharedSession || !session || session.phase !== 'active') return
+    if (initialBroadcastRef.current) return
+
+    if (sessionItems && sessionItems.length > 0) {
+      initialBroadcastRef.current = true
+      return
+    }
+
+    if (draftBlocks.length > 0) {
+      initialBroadcastRef.current = true
+      draftBlocks.forEach((block) => {
+        if (
+          block.type === 'heading' ||
+          block.type === 'shortText' ||
+          block.type === 'richText' ||
+          block.type === 'divider'
+        ) {
+          const content = JSON.stringify({
+            __blockType: block.type,
+            content: block.content ?? '',
+            label: block.label ?? '',
+            value: block.value ?? '',
+          })
+          const newId = session.addTextItem(content)
+          if (newId) {
+            syncedBlockIdsRef.current.add(newId)
+            setDraftBlocks((current) =>
+              current.map((b) => (b.id === block.id ? { ...b, id: newId } : b)),
+            )
+          }
+        } else if (
+          (block.type === 'image' || block.type === 'fileAttachment') &&
+          block.blob instanceof Blob
+        ) {
+          const file = new File([block.blob], block.fileName || 'file', {
+            type: block.mimeType || block.blob.type,
+          })
+          session.addFileItem(file)
+        }
+      })
+    }
+  }, [isSharedSession, session, session?.phase, sessionItems, draftBlocks])
+
   const handleAppendDossier = async (appendFile: LibraryFile): Promise<void> => {
     try {
-      const newBlocks = appendFile.blocks.map((b) => ({
-        ...b,
-        id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      }))
-      commitBlocks((current) => [...current, ...newBlocks])
-
       if (isSharedSession && session && session.phase === 'active') {
-        const items = await fileBlocksToLibraryItems(appendFile)
-        for (const item of items) {
-          session.sendLibraryItem(item)
+        for (const block of appendFile.blocks) {
+          if (
+            block.type === 'heading' ||
+            block.type === 'shortText' ||
+            block.type === 'richText' ||
+            block.type === 'divider'
+          ) {
+            const content = JSON.stringify({
+              __blockType: block.type,
+              content: block.content ?? '',
+              label: block.label ?? '',
+              value: block.value ?? '',
+            })
+            const newId = session.addTextItem(content)
+            if (newId) {
+              syncedBlockIdsRef.current.add(newId)
+            }
+          } else if (
+            (block.type === 'image' || block.type === 'fileAttachment') &&
+            block.blob instanceof Blob
+          ) {
+            const file = new File([block.blob], block.fileName || 'file', {
+              type: block.mimeType || block.blob.type,
+            })
+            session.addFileItem(file)
+          }
         }
+      } else {
+        const newBlocks = appendFile.blocks.map((b) => ({
+          ...b,
+          id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        }))
+        commitBlocks((current) => [...current, ...newBlocks])
       }
     } catch (err: unknown) {
       setSendError(describeSendFailure(err))
@@ -395,15 +476,21 @@ export function FileEditView({
 
       const target = draftBlocks.find((b) => b.id === blockId)
       const updated = { ...target, ...changes }
-      if (updated.type === 'heading') {
-        session.updateTextItem(blockId, `# ${updated.content || ''}`)
-      } else if (updated.type === 'shortText') {
+      if (
+        updated.type === 'heading' ||
+        updated.type === 'shortText' ||
+        updated.type === 'richText' ||
+        updated.type === 'divider'
+      ) {
         session.updateTextItem(
           blockId,
-          `${updated.label ? updated.label + ': ' : ''}${updated.value || ''}`,
+          JSON.stringify({
+            __blockType: updated.type,
+            content: updated.content ?? '',
+            label: updated.label ?? '',
+            value: updated.value ?? '',
+          }),
         )
-      } else if (updated.type === 'richText') {
-        session.updateTextItem(blockId, updated.content || '')
       }
 
       if (changes.blob instanceof Blob) {
@@ -416,6 +503,7 @@ export function FileEditView({
   }
 
   const handleDeleteBlock = (blockId: string): void => {
+    syncedBlockIdsRef.current.delete(blockId)
     commitBlocks((current) => current.filter((block) => block.id !== blockId))
     if (isSharedSession && session && session.phase === 'active') {
       session.deleteItem(blockId)
@@ -455,29 +543,38 @@ export function FileEditView({
     if (isSharedSession && session && session.phase === 'active') {
       let newId = ''
       if (type === 'heading') {
-        newId = session.addTextItem('# Section Heading')
+        newId = session.addTextItem(JSON.stringify({ __blockType: 'heading', content: '' }))
       } else if (type === 'shortText') {
-        newId = session.addTextItem('Key: Value')
+        newId = session.addTextItem(
+          JSON.stringify({ __blockType: 'shortText', label: '', value: '' }),
+        )
       } else if (type === 'richText') {
-        newId = session.addRichTextItem('')
+        newId = session.addTextItem(JSON.stringify({ __blockType: 'richText', content: '' }))
       } else if (type === 'divider') {
-        newId = session.addTextItem('---')
+        newId = session.addTextItem(JSON.stringify({ __blockType: 'divider' }))
       }
 
       if (newId) {
+        syncedBlockIdsRef.current.add(newId)
         const newBlock: FileBlock = {
           id: newId,
           type,
-          content: type === 'heading' ? 'Section Heading' : type === 'richText' ? '' : undefined,
-          label: type === 'shortText' ? 'Key' : undefined,
-          value: type === 'shortText' ? 'Value' : undefined,
+          content: '',
+          label: '',
+          value: '',
         }
         commitBlocks((current) => [...current, newBlock])
         return
       }
     }
 
-    const newBlock: FileBlock = { id: `b-${Date.now()}`, type }
+    const newBlock: FileBlock = {
+      id: `b-${Date.now()}`,
+      type,
+      content: '',
+      label: '',
+      value: '',
+    }
     if (type === 'locked') {
       newBlock.isLocked = true
       newBlock.isUnlocked = false

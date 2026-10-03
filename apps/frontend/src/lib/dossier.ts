@@ -527,6 +527,22 @@ export function sessionItemsToFileBlocks(sessionItems: SessionItem[]): FileBlock
   return sessionItems.map((item) => {
     switch (item.type) {
       case 'text': {
+        if (item.content.startsWith('{"__blockType":')) {
+          try {
+            const parsed = JSON.parse(item.content)
+            if (parsed && typeof parsed.__blockType === 'string') {
+              return {
+                id: item.id,
+                type: parsed.__blockType,
+                content: parsed.content ?? '',
+                label: parsed.label ?? '',
+                value: parsed.value ?? '',
+              }
+            }
+          } catch {
+            // fallback to plain text parsing below
+          }
+        }
         if (item.content === '---') {
           return {
             id: item.id,
@@ -556,6 +572,22 @@ export function sessionItemsToFileBlocks(sessionItems: SessionItem[]): FileBlock
         }
       }
       case 'richtext':
+        if (item.content.startsWith('{"__blockType":')) {
+          try {
+            const parsed = JSON.parse(item.content)
+            if (parsed && typeof parsed.__blockType === 'string') {
+              return {
+                id: item.id,
+                type: parsed.__blockType,
+                content: parsed.content ?? '',
+                label: parsed.label ?? '',
+                value: parsed.value ?? '',
+              }
+            }
+          } catch {
+            // fallback
+          }
+        }
         return {
           id: item.id,
           type: 'richText',

@@ -54,7 +54,7 @@ function ThemedApp() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/session" element={<Session />} />
+        <Route path="/session" element={<Home />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
