@@ -50,7 +50,15 @@ import type { FolderPickerChoice } from './FolderPickerModal'
 import { DossierPickerModal } from '../session/DossierPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
-import { describeSendFailure, encryptBlockPayload, fileBlocksToLibraryItems, findUnsendableBlocks, sessionItemsToFileBlocks } from '../../lib/dossier'
+import {
+  describeSendFailure,
+  deserializeDossierBlocks,
+  encryptBlockPayload,
+  fileBlocksToLibraryItems,
+  findUnsendableBlocks,
+  serializeDossierBlocks,
+  sessionItemsToFileBlocks,
+} from '../../lib/dossier'
 import { decryptItem, encryptItem, toBase64 } from '../../lib/crypto'
 import { ROOT_FOLDER_ID, unprotectedSecretBlocks } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
@@ -206,6 +214,7 @@ export function FileEditView({
   const [isDossierUnlocking, setIsDossierUnlocking] = useState(false)
 
   const dossierPasswordRef = useRef<string>(initialPassword ?? '')
+  const savedLibraryIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (initialPassword !== undefined) {
@@ -244,6 +253,14 @@ export function FileEditView({
     setEncryptError(null)
     setMoveError(null)
     setSendError(null)
+  } else if (
+    file.blocks &&
+    file.blocks.length > 0 &&
+    draftBlocks.length === 0 &&
+    !draftIsLocked &&
+    !file.isLocked
+  ) {
+    setDraftBlocks(file.blocks)
   }
 
   const onDirtyChangeRef = useRef(onDirtyChange)
@@ -500,6 +517,10 @@ export function FileEditView({
         const newId = session.addFileItem(file)
         if (newId) {
           syncedBlockIdsRef.current.add(newId)
+          if (sessionItems.some((s) => s.id === blockId)) {
+            session.deleteItem(blockId)
+            syncedBlockIdsRef.current.delete(blockId)
+          }
           commitBlocks((current) =>
             current.map((b) => (b.id === blockId ? { ...b, ...changes, id: newId } : b)),
           )
@@ -580,6 +601,10 @@ export function FileEditView({
         newId = session.addTextItem(JSON.stringify({ __blockType: 'richText', content: '' }))
       } else if (type === 'divider') {
         newId = session.addTextItem(JSON.stringify({ __blockType: 'divider' }))
+      } else if (type === 'image') {
+        newId = session.addTextItem(JSON.stringify({ __blockType: 'image' }))
+      } else if (type === 'fileAttachment') {
+        newId = session.addTextItem(JSON.stringify({ __blockType: 'fileAttachment' }))
       }
 
       if (newId) {
@@ -658,7 +683,8 @@ export function FileEditView({
     if (draft.isLocked) {
       const password = dossierPasswordRef.current
       if (password) {
-        const plaintext = new TextEncoder().encode(JSON.stringify(cleanedBlocks))
+        const serialized = await serializeDossierBlocks(cleanedBlocks)
+        const plaintext = new TextEncoder().encode(serialized)
         const { ciphertext, iv, salt } = await encryptItem(password, plaintext)
         return {
           ...draftWithCleanedBlocks,
@@ -695,8 +721,21 @@ export function FileEditView({
    */
   const persist = (draft: LibraryFile): boolean | Promise<boolean> => {
     if (draft.name.trim() === '') return false
-    if (!draft.isLocked) {
-      const cleanedBlocks = (draft.blocks || []).map((b) => {
+
+    let resolvedDraft = draft
+    if (isSharedSession || draft.id.startsWith('shared-')) {
+      if (!savedLibraryIdRef.current) {
+        savedLibraryIdRef.current = globalThis.crypto.randomUUID()
+      }
+      resolvedDraft = {
+        ...draft,
+        id: savedLibraryIdRef.current,
+      }
+      setSeededFromId(savedLibraryIdRef.current)
+    }
+
+    if (!resolvedDraft.isLocked) {
+      const cleanedBlocks = (resolvedDraft.blocks || []).map((b) => {
         if (b.lockedData) {
           const { content, value, blob, isUnlocked, ...rest } = b
           return rest as FileBlock
@@ -704,7 +743,7 @@ export function FileEditView({
         return b
       })
       const fileToSave: LibraryFile = {
-        ...draft,
+        ...resolvedDraft,
         blocks: cleanedBlocks,
         isLocked: false,
         ciphertext: undefined,
@@ -717,25 +756,25 @@ export function FileEditView({
     }
 
     return (async () => {
-      const fileToSave = await preparePersistFile(draft)
+      const fileToSave = await preparePersistFile(resolvedDraft)
       onSaveFile(fileToSave)
       setIsDirty(false)
       return true
     })()
   }
 
-  // Debounced autosave: automatically saves changes after 600ms of inactivity in local dossiers
+  // Debounced autosave: automatically saves changes after 1500ms of inactivity in local dossiers
   useEffect(() => {
-    if (isSharedSession || !isDirty || !canPersist) return
+    if (isSharedSession || !isDirty || !canPersist || isLeaveDialogOpen) return
 
     const timer = setTimeout(() => {
       persist(draftFile())
-    }, 600)
+    }, 1500)
 
     return () => {
       clearTimeout(timer)
     }
-  }, [isSharedSession, isDirty, canPersist, draftFile])
+  }, [isSharedSession, isDirty, canPersist, isLeaveDialogOpen, draftFile])
 
   const closeEncryptPrompt = (): void => {
     setEncryptPrompt(null)
@@ -928,17 +967,23 @@ export function FileEditView({
     setIsDossierUnlocking(true)
     setDossierUnlockError(null)
     try {
+      let decryptedBlocks: FileBlock[] = []
       if (file.ciphertext && file.salt && file.iv) {
-        await decryptItem(
+        const decryptedBytes = await decryptItem(
           dossierUnlockPassword,
           file.salt,
           file.iv,
           file.ciphertext,
         )
+        const json = new TextDecoder().decode(decryptedBytes)
+        decryptedBlocks = deserializeDossierBlocks(json)
       } else if (dossierPasswordRef.current && dossierPasswordRef.current !== dossierUnlockPassword) {
         throw new Error('Incorrect password')
+      } else {
+        decryptedBlocks = draftBlocks.length > 0 ? draftBlocks : (file.blocks ?? [])
       }
 
+      setDraftBlocks(decryptedBlocks)
       setDraftIsLocked(false)
       dossierPasswordRef.current = ''
       setShowDossierUnlockModal(false)
@@ -948,6 +993,7 @@ export function FileEditView({
 
       void persist({
         ...draftFile(),
+        blocks: decryptedBlocks,
         isLocked: false,
         ciphertext: undefined,
         iv: undefined,

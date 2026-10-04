@@ -22,6 +22,7 @@
 import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb'
 
 import type { FileItem, ImageItem, SessionItem } from '../store/sessionStore'
+import { fromBase64 } from './crypto'
 import { moveIndex, needsRenumber, nextSortOrder, SORT_ORDER_GAP } from './reorder'
 
 // ---------------------------------------------------------------------------
@@ -414,6 +415,27 @@ function toBytes(value: unknown, key: string, what: string): Uint8Array {
   if (value instanceof ArrayBuffer) return new Uint8Array(value)
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+  }
+  if (typeof value === 'string') {
+    try {
+      return fromBase64(value)
+    } catch {
+      // not base64
+    }
+  }
+  if (Array.isArray(value)) {
+    return new Uint8Array(value)
+  }
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>
+    const keys = Object.keys(obj)
+    if (keys.length > 0 && keys.every((k) => /^\d+$/.test(k))) {
+      const arr = new Uint8Array(keys.length)
+      for (let i = 0; i < keys.length; i++) {
+        arr[i] = Number(obj[i]) || 0
+      }
+      return arr
+    }
   }
   throw new Error(`library: ${what} needs "${key}" as Uint8Array bytes`)
 }
@@ -1322,7 +1344,17 @@ export function parseBlock(value: unknown): FileBlock {
   if (!encrypted) {
     if (typeof value['content'] === 'string') block.content = value['content']
     if (typeof value['value'] === 'string') block.value = value['value']
-    if (value['blob'] instanceof Blob) block.blob = value['blob']
+    if (value['blob'] instanceof Blob) {
+      block.blob = value['blob']
+    } else if (typeof value['blobBase64'] === 'string') {
+      try {
+        block.blob = new Blob([fromBase64(value['blobBase64'])], {
+          type: typeof value['mimeType'] === 'string' ? value['mimeType'] : 'application/octet-stream',
+        })
+      } catch {
+        // ignore
+      }
+    }
   }
 
   if (lockedData !== null) block.lockedData = lockedData
@@ -1410,14 +1442,26 @@ export function parseFile(value: unknown): LibraryFile {
   if (typeof value['isLocked'] === 'boolean') {
     file.isLocked = value['isLocked']
   }
-  if (value['ciphertext'] instanceof Uint8Array) {
-    file.ciphertext = value['ciphertext']
+  if (value['ciphertext'] !== undefined) {
+    try {
+      file.ciphertext = toBytes(value['ciphertext'], 'ciphertext', 'file')
+    } catch {
+      // ignore
+    }
   }
-  if (value['iv'] instanceof Uint8Array) {
-    file.iv = value['iv']
+  if (value['iv'] !== undefined) {
+    try {
+      file.iv = toBytes(value['iv'], 'iv', 'file')
+    } catch {
+      // ignore
+    }
   }
-  if (value['salt'] instanceof Uint8Array) {
-    file.salt = value['salt']
+  if (value['salt'] !== undefined) {
+    try {
+      file.salt = toBytes(value['salt'], 'salt', 'file')
+    } catch {
+      // ignore
+    }
   }
 
   return file

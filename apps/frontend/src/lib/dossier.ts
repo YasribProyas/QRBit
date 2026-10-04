@@ -11,8 +11,9 @@ import {
   isProtectedBlock,
   isUnprotectedSecretBlock,
   lockedTupleOf,
+  parseBlock,
 } from './library'
-import { encryptItem, fromBase64, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from './crypto'
+import { encryptItem, fromBase64, toBase64, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from './crypto'
 import { formatByteSize, fileSizeText } from './byteSize'
 import type { SessionItem } from '../store/sessionStore'
 
@@ -698,3 +699,125 @@ export function sessionItemsToLibraryFile(
     blocks: sessionItemsToFileBlocks(sessionItems),
   }
 }
+
+/**
+ * Serializes dossier blocks into a portable JSON string preserving blobs and encrypted payloads.
+ * Strips any in-memory revealed plaintexts from locked blocks.
+ */
+export async function serializeDossierBlocks(blocks: FileBlock[]): Promise<string> {
+  const serializableList = await Promise.all(
+    blocks.map(async (block) => {
+      let blobBase64: string | undefined
+      if (block.blob instanceof Blob) {
+        const buffer = await block.blob.arrayBuffer()
+        blobBase64 = toBase64(new Uint8Array(buffer))
+      }
+
+      let lockedData:
+        | { ciphertext: string; iv: string; salt: string; innerType?: BlockType }
+        | undefined
+      if (block.lockedData) {
+        lockedData = {
+          ciphertext: toBase64(block.lockedData.ciphertext),
+          iv: toBase64(block.lockedData.iv),
+          salt: toBase64(block.lockedData.salt),
+          innerType: block.lockedData.innerType,
+        }
+      }
+
+      // If block has lockedData (is encrypted), never serialize revealed plaintext!
+      const content = lockedData ? '' : (block.content ?? '')
+      const value = lockedData ? '' : (block.value ?? '')
+
+      return {
+        id: block.id,
+        type: block.type,
+        label: block.label,
+        content,
+        value,
+        fileName: block.fileName,
+        fileSize: block.fileSize,
+        fileExt: block.fileExt,
+        caption: block.caption,
+        mimeType: block.mimeType,
+        isLocked: block.isLocked ?? (lockedData !== undefined),
+        blobBase64,
+        lockedData,
+      }
+    }),
+  )
+
+  return JSON.stringify(serializableList)
+}
+
+/**
+ * Deserializes dossier blocks from a portable JSON string, reconstructing Blobs and Uint8Array tuples.
+ */
+export function deserializeDossierBlocks(json: string): FileBlock[] {
+  try {
+    const parsed = JSON.parse(json)
+    if (!Array.isArray(parsed)) return []
+
+    return parsed.map((item) => {
+      if (typeof item !== 'object' || item === null) {
+        return { id: globalThis.crypto.randomUUID(), type: 'shortText', content: '' }
+      }
+
+      let blob: Blob | undefined
+      if (typeof item.blobBase64 === 'string') {
+        try {
+          const bytes = fromBase64(item.blobBase64)
+          blob = new Blob([bytes], {
+            type: typeof item.mimeType === 'string' ? item.mimeType : 'application/octet-stream',
+          })
+        } catch {
+          // ignore corrupted base64
+        }
+      }
+
+      let lockedData: EncryptedBlockData | undefined
+      if (item.lockedData && typeof item.lockedData === 'object') {
+        try {
+          const ciphertext =
+            typeof item.lockedData.ciphertext === 'string'
+              ? fromBase64(item.lockedData.ciphertext)
+              : item.lockedData.ciphertext instanceof Uint8Array
+                ? item.lockedData.ciphertext
+                : undefined
+          const iv =
+            typeof item.lockedData.iv === 'string'
+              ? fromBase64(item.lockedData.iv)
+              : item.lockedData.iv instanceof Uint8Array
+                ? item.lockedData.iv
+                : undefined
+          const salt =
+            typeof item.lockedData.salt === 'string'
+              ? fromBase64(item.lockedData.salt)
+              : item.lockedData.salt instanceof Uint8Array
+                ? item.lockedData.salt
+                : undefined
+
+          if (ciphertext && iv && salt) {
+            lockedData = {
+              ciphertext,
+              iv,
+              salt,
+              innerType: item.lockedData.innerType,
+            }
+          }
+        } catch {
+          // ignore corrupted locked data
+        }
+      }
+
+      return parseBlock({
+        ...item,
+        blob,
+        lockedData,
+      })
+    })
+  } catch {
+    return []
+  }
+}
+

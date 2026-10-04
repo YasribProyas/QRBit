@@ -29,14 +29,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   describeSendFailure,
+  deserializeDossierBlocks,
   DossierSendError,
   encryptBlockPayload,
   fileBlocksToLibraryItems,
   findUnsendableBlocks,
   getFirstBlockPreview,
+  serializeDossierBlocks,
   sessionItemsToLibraryFile,
 } from './dossier'
-import { closeLibraryDatabase, getFile, ROOT_FOLDER_ID, saveFile } from './library'
+import {
+  closeLibraryDatabase,
+  getFile,
+  isProtectedBlock,
+  lockedTupleOf,
+  ROOT_FOLDER_ID,
+  saveFile,
+} from './library'
 import type { FileBlock, LibraryFile, LibraryImageItem, LibraryLockedItem } from './library'
 import { decryptItem, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from './crypto'
 import type { FileItem } from '../store/sessionStore'
@@ -588,3 +597,110 @@ describe('sessionItemsToLibraryFile — a received file keeps the bytes that arr
     expect(getFirstBlockPreview(file)).toContain('19.5 KiB')
   })
 })
+
+describe('serializeDossierBlocks and deserializeDossierBlocks — binary and locked data round-trip', () => {
+  it('preserves image and file attachment Blobs across serialize and deserialize', async () => {
+    const rawImageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4])
+    const imageBlob = new Blob([rawImageBytes], { type: 'image/png' })
+
+    const rawFileBytes = new Uint8Array([10, 20, 30, 40, 50])
+    const fileBlob = new Blob([rawFileBytes], { type: 'application/octet-stream' })
+
+    const blocks: FileBlock[] = [
+      {
+        id: 'b-img',
+        type: 'image',
+        fileName: 'photo.png',
+        fileSize: imageBlob.size,
+        mimeType: 'image/png',
+        blob: imageBlob,
+      },
+      {
+        id: 'b-doc',
+        type: 'fileAttachment',
+        fileName: 'report.bin',
+        fileSize: fileBlob.size,
+        mimeType: 'application/octet-stream',
+        blob: fileBlob,
+      },
+      {
+        id: 'b-txt',
+        type: 'shortText',
+        label: 'Subject',
+        value: 'Confidential Report',
+      },
+    ]
+
+    const json = await serializeDossierBlocks(blocks)
+    expect(typeof json).toBe('string')
+    expect(json).not.toContain('[object Object]')
+
+    const restored = deserializeDossierBlocks(json)
+    expect(restored).toHaveLength(3)
+
+    const restoredImg = restored[0]
+    expect(restoredImg?.type).toBe('image')
+    expect(restoredImg?.fileName).toBe('photo.png')
+    expect(restoredImg?.blob).toBeInstanceOf(Blob)
+    expect(restoredImg?.blob?.size).toBe(imageBlob.size)
+    expect(restoredImg?.blob?.type).toBe('image/png')
+    const imgBytes = new Uint8Array(await restoredImg!.blob!.arrayBuffer())
+    expect(imgBytes).toEqual(rawImageBytes)
+
+    const restoredDoc = restored[1]
+    expect(restoredDoc?.type).toBe('fileAttachment')
+    expect(restoredDoc?.fileName).toBe('report.bin')
+    expect(restoredDoc?.blob).toBeInstanceOf(Blob)
+    expect(restoredDoc?.blob?.size).toBe(fileBlob.size)
+    const docBytes = new Uint8Array(await restoredDoc!.blob!.arrayBuffer())
+    expect(docBytes).toEqual(rawFileBytes)
+
+    const restoredTxt = restored[2]
+    expect(restoredTxt?.type).toBe('shortText')
+    expect(restoredTxt?.value).toBe('Confidential Report')
+  })
+
+  it('preserves individually locked blocks without leaking in-memory revealed content', async () => {
+    const ciphertext = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+    const iv = new Uint8Array(12).fill(7)
+    const salt = new Uint8Array(16).fill(9)
+
+    const lockedBlock: FileBlock = {
+      id: 'b-locked',
+      type: 'locked',
+      label: 'API Key',
+      isLocked: true,
+      lockedData: {
+        ciphertext,
+        iv,
+        salt,
+        innerType: 'shortText',
+      },
+      // In-memory revealed content that should NOT be serialized
+      content: 'super-secret-api-key-12345',
+      value: 'super-secret-api-key-12345',
+      isUnlocked: true,
+    }
+
+    const json = await serializeDossierBlocks([lockedBlock])
+    // The revealed plaintext MUST NOT appear in the serialized JSON
+    expect(json).not.toContain('super-secret-api-key-12345')
+
+    const restored = deserializeDossierBlocks(json)
+    expect(restored).toHaveLength(1)
+
+    const restoredBlock = restored[0]!
+    expect(restoredBlock.id).toBe('b-locked')
+    expect(restoredBlock.isLocked).toBe(true)
+    expect(isProtectedBlock(restoredBlock)).toBe(true)
+    expect(restoredBlock.content).toBeFalsy()
+    expect(restoredBlock.isUnlocked).toBeFalsy()
+
+    const tuple = lockedTupleOf(restoredBlock)
+    expect(tuple).not.toBeNull()
+    expect(tuple?.ciphertext).toEqual(ciphertext)
+    expect(tuple?.iv).toEqual(iv)
+    expect(tuple?.salt).toEqual(salt)
+  })
+})
+

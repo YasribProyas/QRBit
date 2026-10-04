@@ -114,7 +114,7 @@ import type { FolderPickerChoice } from './FolderPickerModal'
 import { NewFolderModal } from './NewFolderModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import type { ReorderHandleProps } from '../../hooks/useReorderDrag'
-import { getFirstBlockPreview } from '../../lib/dossier'
+import { deserializeDossierBlocks, getFirstBlockPreview, serializeDossierBlocks } from '../../lib/dossier'
 import { describeDelete, folderDeleteImpact } from '../../lib/folders'
 import type { DeleteImpact, PendingDelete } from '../../lib/folders'
 import { ROOT_FOLDER_ID, siblingFolders } from '../../lib/library'
@@ -327,7 +327,8 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
     setIsEncrypting(true)
     setLockError(null)
     try {
-      const plaintext = new TextEncoder().encode(JSON.stringify(lockTarget.blocks || []))
+      const serialized = await serializeDossierBlocks(lockTarget.blocks || [])
+      const plaintext = new TextEncoder().encode(serialized)
       const { ciphertext, iv, salt } = await encryptItem(lockPassword, plaintext)
       reportToStore(
         updateFile(lockTarget.id, {
@@ -397,7 +398,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
         file.iv,
         file.ciphertext,
       )
-      const parsedBlocks = JSON.parse(new TextDecoder().decode(decryptedBytes))
+      const parsedBlocks = deserializeDossierBlocks(new TextDecoder().decode(decryptedBytes))
       if (forAction === 'decrypt') {
         reportToStore(
           updateFile(file.id, {

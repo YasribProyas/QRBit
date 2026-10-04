@@ -102,7 +102,7 @@ export function Home() {
     if (session.phase === 'active' && sharedDossier === null) {
       const initialBlocks: FileBlock[] = selectedFileForTransfer?.blocks ?? []
       setSharedDossier({
-        id: 'shared-live-dossier',
+        id: `shared-${globalThis.crypto.randomUUID()}`,
         name: selectedFileForTransfer?.name
           ? `${selectedFileForTransfer.name} (Shared)`
           : 'Shared Dossier',

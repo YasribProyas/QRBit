@@ -78,7 +78,7 @@ export function Session() {
   useEffect(() => {
     if (session.phase === 'active' && sharedDossier === null) {
       setSharedDossier({
-        id: 'shared-live-dossier',
+        id: `shared-${globalThis.crypto.randomUUID()}`,
         name: 'Shared Dossier',
         folderId: ROOT_FOLDER_ID,
         blocks: [],

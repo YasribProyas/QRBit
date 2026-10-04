@@ -232,6 +232,9 @@ export function BlockItem({
 
   // --- attachment display (the two blocks that carry bytes) ----------------
   const attachmentBlob = block.blob
+  const attachmentUrl = useObjectUrl(attachmentBlob instanceof Blob ? attachmentBlob : null)
+  const peekedUrl = useObjectUrl(peekedBlob instanceof Blob ? peekedBlob : null)
+  const activeBlobUrl = isPeeked ? (peekedUrl ?? attachmentUrl) : attachmentUrl
   const attachmentSizeLabel =
     attachmentBlob instanceof Blob
       ? formatByteSize(attachmentBlob.size)
@@ -925,6 +928,14 @@ export function BlockItem({
           <IconChevronDown size={16} aria-hidden="true" />
         </ActionIcon>
 
+        {/* Download file or image if bytes exist */}
+        {(attachmentBlob instanceof Blob || peekedBlob instanceof Blob) && (
+          <DownloadActionIcon
+            url={activeBlobUrl}
+            name={block.fileName ?? (block.type === 'image' ? 'image.png' : 'file')}
+          />
+        )}
+
         {/* Copy content to clipboard */}
         <ActionIcon
           variant="subtle"
@@ -983,22 +994,26 @@ export function BlockItem({
         }}
       >
         <ImagePreview
+          url={activeBlobUrl}
           blob={activeBlob}
           name={block.fileName ?? 'Chosen image'}
           fullSize
         />
-        {block.fileName ? (
-          <Group gap="xs" mt="xs" justify="center">
-            <Text size="xs" className="qrbit-text-body font-medium">
-              {block.fileName}
-            </Text>
-            {attachmentSizeLabel ? (
-              <Text size="xs" className="qrbit-text-data" c="dimmed">
-                ({attachmentSizeLabel})
+        <Group gap="sm" mt="xs" justify="center" wrap="wrap">
+          {block.fileName ? (
+            <Group gap="xs" justify="center">
+              <Text size="xs" className="qrbit-text-body font-medium">
+                {block.fileName}
               </Text>
-            ) : null}
-          </Group>
-        ) : null}
+              {attachmentSizeLabel ? (
+                <Text size="xs" className="qrbit-text-data" c="dimmed">
+                  ({attachmentSizeLabel})
+                </Text>
+              ) : null}
+            </Group>
+          ) : null}
+          <AttachmentDownload url={activeBlobUrl} blob={activeBlob} name={block.fileName ?? 'image.png'} />
+        </Group>
       </Modal>
     )
   }
@@ -1704,6 +1719,7 @@ export function BlockItem({
                   }}
                 >
                   <ImagePreview
+                    url={activeBlobUrl}
                     blob={peekedBlob ?? (attachmentBlob as Blob)}
                     name={block.fileName ?? 'Encrypted image'}
                     onClick={() => setIsImageViewerOpen(true)}
@@ -1713,6 +1729,12 @@ export function BlockItem({
                       <Text span className="qrbit-text-body-secondary text-xs" style={{ minWidth: 0 }} truncate>
                         {block.fileName ?? 'Encrypted image'}
                       </Text>
+                      {(attachmentBlob instanceof Blob || peekedBlob instanceof Blob) && (
+                        <DownloadActionIcon
+                          url={activeBlobUrl}
+                          name={block.fileName ?? 'image.png'}
+                        />
+                      )}
                       <Badge size="xs" variant="light" color="locked">
                         Peeked
                       </Badge>
@@ -1761,6 +1783,7 @@ export function BlockItem({
               >
                 {canPreviewImage && attachmentBlob instanceof Blob ? (
                   <ImagePreview
+                    url={activeBlobUrl}
                     blob={attachmentBlob}
                     name={block.fileName ?? 'Chosen image'}
                     onClick={() => setIsImageViewerOpen(true)}
@@ -1804,24 +1827,32 @@ export function BlockItem({
                     {attachmentSizeLabel ?? ''}
                   </Text>
                 </Group>
-                <ActionIcon
-                  variant="subtle"
-                  size="xs"
-                  c="dimmed"
-                  className="hover:text-[var(--qrbit-danger)] hover:bg-[color-mix(in_srgb,var(--qrbit-danger)_12%,transparent)] transition-colors"
-                  title="Remove image"
-                  aria-label="Remove image"
-                  onClick={() => {
-                    onUpdate?.(block.id, {
-                      blob: undefined,
-                      fileName: undefined,
-                      fileSize: undefined,
-                      mimeType: undefined,
-                    })
-                  }}
-                >
-                  <IconX size={14} aria-hidden="true" />
-                </ActionIcon>
+                <Group gap="xs" wrap="nowrap">
+                  {(attachmentBlob instanceof Blob || peekedBlob instanceof Blob) && (
+                    <DownloadActionIcon
+                      url={activeBlobUrl}
+                      name={block.fileName ?? 'image.png'}
+                    />
+                  )}
+                  <ActionIcon
+                    variant="subtle"
+                    size="xs"
+                    c="dimmed"
+                    className="hover:text-[var(--qrbit-danger)] hover:bg-[color-mix(in_srgb,var(--qrbit-danger)_12%,transparent)] transition-colors"
+                    title="Remove image"
+                    aria-label="Remove image"
+                    onClick={() => {
+                      onUpdate?.(block.id, {
+                        blob: undefined,
+                        fileName: undefined,
+                        fileSize: undefined,
+                        mimeType: undefined,
+                      })
+                    }}
+                  >
+                    <IconX size={14} aria-hidden="true" />
+                  </ActionIcon>
+                </Group>
               </div>
 
               <div style={{ display: 'none' }}>
@@ -1992,9 +2023,17 @@ export function BlockItem({
                       </Text>
                     </div>
                   </Group>
-                  <Badge size="xs" variant="light" color="locked">
-                    Peeked
-                  </Badge>
+                  <Group gap="xs" wrap="nowrap">
+                    {(attachmentBlob instanceof Blob || peekedBlob instanceof Blob) && (
+                      <DownloadActionIcon
+                        url={activeBlobUrl}
+                        name={block.fileName ?? 'file'}
+                      />
+                    )}
+                    <Badge size="xs" variant="light" color="locked">
+                      Peeked
+                    </Badge>
+                  </Group>
                 </div>
               ) : (
                 <div
@@ -2072,25 +2111,33 @@ export function BlockItem({
                   </div>
                 </Group>
 
-                {/* Cross at the end of the grey file item */}
-                <ActionIcon
-                  variant="subtle"
-                  size="sm"
-                  c="dimmed"
-                  className="hover:text-[var(--qrbit-danger)] hover:bg-[color-mix(in_srgb,var(--qrbit-danger)_12%,transparent)] transition-colors"
-                  title="Remove file"
-                  aria-label="Remove file"
-                  onClick={() => {
-                    onUpdate?.(block.id, {
-                      blob: undefined,
-                      fileName: undefined,
-                      fileSize: undefined,
-                      mimeType: undefined,
-                    })
-                  }}
-                >
-                  <IconX size={15} aria-hidden="true" />
-                </ActionIcon>
+                <Group gap="xs" wrap="nowrap">
+                  {(attachmentBlob instanceof Blob || peekedBlob instanceof Blob) && (
+                    <DownloadActionIcon
+                      url={activeBlobUrl}
+                      name={block.fileName ?? 'file'}
+                    />
+                  )}
+                  {/* Cross at the end of the grey file item */}
+                  <ActionIcon
+                    variant="subtle"
+                    size="sm"
+                    c="dimmed"
+                    className="hover:text-[var(--qrbit-danger)] hover:bg-[color-mix(in_srgb,var(--qrbit-danger)_12%,transparent)] transition-colors"
+                    title="Remove file"
+                    aria-label="Remove file"
+                    onClick={() => {
+                      onUpdate?.(block.id, {
+                        blob: undefined,
+                        fileName: undefined,
+                        fileSize: undefined,
+                        mimeType: undefined,
+                      })
+                    }}
+                  >
+                    <IconX size={15} aria-hidden="true" />
+                  </ActionIcon>
+                </Group>
               </div>
 
               <div style={{ display: 'none' }}>
@@ -2240,17 +2287,34 @@ export function BlockItem({
                   <Text span data-ciphertext-state="true" className="qrbit-text-body-secondary text-xs" c="dimmed">
                     Encrypted credential (PBKDF2 + AES-256-GCM)
                   </Text>
-                  <Button
-                    size="xs"
-                    color="locked"
-                    leftSection={<IconLockOpen size={12} aria-hidden="true" />}
-                    onClick={() => {
-                      setUnlockError(false)
-                      setShowUnlockModal(true)
-                    }}
-                  >
-                    Unlock
-                  </Button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button
+                      size="xs"
+                      color="locked"
+                      leftSection={isPeeked ? <IconEyeOff size={12} aria-hidden="true" /> : <IconEye size={12} aria-hidden="true" />}
+                      onClick={handleTogglePeek}
+                    >
+                      {isPeeked ? 'Hide' : 'Peek'}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="default"
+                      leftSection={<IconCopy size={12} aria-hidden="true" />}
+                      onClick={handleCopyContent}
+                    >
+                      Copy
+                    </Button>
+                    <button
+                      type="button"
+                      style={{ display: 'none' }}
+                      onClick={() => {
+                        setUnlockError(false)
+                        setShowUnlockModal(true)
+                      }}
+                    >
+                      Unlock
+                    </button>
+                  </div>
                 </div>
               )
             ) : (
@@ -2578,6 +2642,7 @@ export function BlockItem({
             >
               {canPreviewImage && attachmentBlob instanceof Blob ? (
                 <ImagePreview
+                  url={activeBlobUrl}
                   blob={attachmentBlob}
                   name={block.fileName ?? 'Chosen image'}
                   onClick={() => setIsImageViewerOpen(true)}
@@ -2675,7 +2740,7 @@ export function BlockItem({
                  * (a "Save" for a file that does not exist was the same lie in a smaller hat).
                  */
                 attachmentBlob instanceof Blob ? (
-                  <AttachmentDownload blob={attachmentBlob} name={block.fileName ?? 'download'} />
+                  <AttachmentDownload url={activeBlobUrl} blob={attachmentBlob} name={block.fileName ?? 'download'} />
                 ) : (
                   <Text span className="qrbit-text-body-secondary" c="dimmed" data-attachment-no-bytes="true">
                     No bytes to save
@@ -2773,18 +2838,34 @@ export function BlockItem({
                   <Text span className="qrbit-text-body-secondary" c="dimmed" data-ciphertext-state="true">
                     Encrypted with PBKDF2 + AES-256-GCM. No plaintext is stored for this block.
                   </Text>
-                  <Button
-                    size="sm"
-                    color="locked"
-                    leftSection={<IconLockOpen size={14} aria-hidden="true" />}
-                    style={{ flex: 'none' }}
-                    onClick={() => {
-                      setUnlockError(false)
-                      setShowUnlockModal(true)
-                    }}
-                  >
-                    Unlock
-                  </Button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button
+                      size="xs"
+                      color="locked"
+                      leftSection={isPeeked ? <IconEyeOff size={12} aria-hidden="true" /> : <IconEye size={12} aria-hidden="true" />}
+                      onClick={handleTogglePeek}
+                    >
+                      {isPeeked ? 'Hide' : 'Peek'}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="default"
+                      leftSection={<IconCopy size={12} aria-hidden="true" />}
+                      onClick={handleCopyContent}
+                    >
+                      Copy
+                    </Button>
+                    <button
+                      type="button"
+                      style={{ display: 'none' }}
+                      onClick={() => {
+                        setUnlockError(false)
+                        setShowUnlockModal(true)
+                      }}
+                    >
+                      Unlock
+                    </button>
+                  </div>
                 </Group>
               )
             ) : (
@@ -2939,9 +3020,18 @@ function describeLockFailure(cause: unknown): string {
  * It is an `<a>` rather than a `<Button>` because it is a link to a resource — the browser's
  * download chrome is its confirmation, and DESIGN.md's Button table is for actions.
  */
-function AttachmentDownload({ blob, name }: { blob: Blob; name: string }) {
-  const url = useObjectUrl(blob)
-  if (url === null) return null
+function AttachmentDownload({
+  url,
+  blob,
+  name,
+}: {
+  url?: string | null
+  blob?: Blob | null
+  name: string
+}) {
+  const fallbackUrl = useObjectUrl(url !== undefined ? null : (blob ?? null))
+  const activeUrl = url !== undefined ? url : fallbackUrl
+  if (activeUrl === null) return null
 
   return (
     <a
@@ -2959,13 +3049,44 @@ function AttachmentDownload({ blob, name }: { blob: Blob; name: string }) {
         borderRadius: 'var(--qrbit-radius-sm)',
         textDecoration: 'none',
       }}
-      href={url}
+      href={activeUrl}
       download={name}
       data-attachment-download="true"
     >
       <IconDownload size={16} aria-hidden="true" />
       <span>Save file</span>
     </a>
+  )
+}
+
+function DownloadActionIcon({
+  url,
+  blob,
+  name,
+}: {
+  url?: string | null
+  blob?: Blob | null
+  name: string
+}) {
+  const fallbackUrl = useObjectUrl(url !== undefined ? null : (blob ?? null))
+  const activeUrl = url !== undefined ? url : fallbackUrl
+  if (activeUrl === null) return null
+
+  return (
+    <ActionIcon
+      component="a"
+      href={activeUrl}
+      download={name}
+      variant="subtle"
+      size="sm"
+      c="dimmed"
+      title={`Download ${name}`}
+      aria-label={`Download ${name}`}
+      className="hover:text-[var(--qrbit-ink)] transition-colors"
+      data-attachment-download="true"
+    >
+      <IconDownload size={15} aria-hidden="true" />
+    </ActionIcon>
   )
 }
 
@@ -3079,18 +3200,21 @@ function AttachmentControls({ block, maxBytes, onUpdate }: AttachmentControlsPro
  * as the user's picture and it was decoration. A row now draws a picture only when it has one.
  */
 function ImagePreview({
+  url,
   blob,
   name,
   onClick,
   fullSize = false,
 }: {
-  blob: Blob
+  url?: string | null
+  blob?: Blob | null
   name: string
   onClick?: () => void
   fullSize?: boolean
 }) {
-  const url = useObjectUrl(blob)
-  if (url === null) return null
+  const fallbackUrl = useObjectUrl(url !== undefined ? null : (blob ?? null))
+  const activeUrl = url !== undefined ? url : fallbackUrl
+  if (activeUrl === null) return null
 
   if (fullSize) {
     return (
@@ -3104,7 +3228,7 @@ function ImagePreview({
           borderRadius: 'var(--qrbit-radius-sm)',
           display: 'block',
         }}
-        src={url}
+        src={activeUrl}
         alt={name}
         data-attachment-preview="true"
       />
@@ -3118,7 +3242,7 @@ function ImagePreview({
         display: 'block',
         borderRadius: 'calc(var(--qrbit-radius-sm) - 2px)',
       }}
-      src={url}
+      src={activeUrl}
       alt={name}
       data-attachment-preview="true"
       onClick={onClick}
@@ -3139,11 +3263,14 @@ function ImagePreview({
  * An environment without `createObjectURL` (jsdom unless a test stubs it, as
  * `LibraryItemRow.test.tsx` does) gets `null` and renders no `<img>`, never a crash.
  */
-function useObjectUrl(blob: Blob): string | null {
+function useObjectUrl(blob: Blob | null | undefined): string | null {
   const [url, setUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    if (typeof URL.createObjectURL !== 'function') return undefined
+    if (!blob || typeof URL.createObjectURL !== 'function') {
+      setUrl(null)
+      return undefined
+    }
 
     const created = URL.createObjectURL(blob)
     setUrl(created)
