@@ -1175,5 +1175,140 @@ describe('BlockItem — the row\'s controls are sized to their own words', () =>
     expect(cancel.getAttribute('data-variant')).toBe('subtle')
     expect(cancel.style.color).toContain('mantine-color-dimmed')
   })
-
 })
+
+describe('BlockItem — peek and clipboard actions on encrypted blocks', () => {
+  it('copies unencrypted block content to clipboard directly', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: writeTextMock },
+      configurable: true,
+      writable: true,
+    })
+    mount({ blocks: [heading('b-1', 'My Heading Title')] })
+    const copyBtn = element().querySelector<HTMLElement>('button[aria-label="Copy content to clipboard"]')
+    if (!copyBtn) throw new Error('no copy button found')
+    click(copyBtn)
+    expect(writeTextMock).toHaveBeenCalledWith('My Heading Title')
+  })
+
+  it('locks a heading block and peeking with password reveals the content locally in RAM', async () => {
+    const onUpdate = vi.fn()
+    mount({ blocks: [heading('b-1', 'Secret Mission Plan')], onUpdate })
+
+    openLockModal()
+    typeInto(await lockPasswordField(), 'shield-pass')
+    await submitLock(onUpdate)
+
+    expect(onUpdate).toHaveBeenCalledWith(
+      'b-1',
+      expect.objectContaining({
+        isLocked: true,
+        lockedData: expect.objectContaining({
+          ciphertext: expect.any(Uint8Array),
+          iv: expect.any(Uint8Array),
+          salt: expect.any(Uint8Array),
+        }),
+        content: '',
+      }),
+    )
+
+    const updateCall = onUpdate.mock.calls[0]
+    if (!updateCall || !updateCall[1]) throw new Error('onUpdate not called')
+    const encryptedTuple = updateCall[1].lockedData
+    unmountNow()
+
+    const encryptedBlock: FileBlock = {
+      id: 'b-1',
+      type: 'heading',
+      content: '',
+      isLocked: true,
+      lockedData: encryptedTuple,
+    }
+    mount({ blocks: [encryptedBlock] })
+
+    expect(screenText()).not.toContain('Secret Mission Plan')
+    expect(screenText()).toContain('••••••••••••')
+
+    const peekBtn = element().querySelector<HTMLElement>('button[aria-label="Peek encrypted content"]')
+    if (!peekBtn) throw new Error('no peek button')
+    click(peekBtn)
+
+    const dialog = await openDialog()
+    const passwordInput = dialog.querySelector<HTMLInputElement>('input[type="password"]')
+    if (!passwordInput) throw new Error('no password input in peek modal')
+    typeInto(passwordInput, 'shield-pass')
+
+    const form = dialog.querySelector('form')
+    if (!form) throw new Error('no form in peek modal')
+    act(() => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+
+    const settledPeek = (): boolean => screenText().includes('Secret Mission Plan')
+    for (let attempt = 0; attempt < 600 && !settledPeek(); attempt += 1) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10))
+      })
+    }
+
+    expect(screenText()).toContain('Secret Mission Plan')
+    expect(screenText()).toContain('Peeked')
+  })
+
+  it('copies encrypted block content to clipboard upon entering correct password', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: writeTextMock },
+      configurable: true,
+      writable: true,
+    })
+
+    const onUpdate = vi.fn()
+    mount({ blocks: [heading('b-1', 'Top Secret Payload')], onUpdate })
+
+    openLockModal()
+    typeInto(await lockPasswordField(), 'vault-pass')
+    await submitLock(onUpdate)
+
+    const updateCall = onUpdate.mock.calls[0]
+    if (!updateCall || !updateCall[1]) throw new Error('onUpdate not called')
+    const encryptedTuple = updateCall[1].lockedData
+    unmountNow()
+
+    const encryptedBlock: FileBlock = {
+      id: 'b-1',
+      type: 'heading',
+      content: '',
+      isLocked: true,
+      lockedData: encryptedTuple,
+    }
+    mount({ blocks: [encryptedBlock] })
+
+    const copyBtn = element().querySelector<HTMLElement>('button[aria-label="Copy content to clipboard"]')
+    if (!copyBtn) throw new Error('no copy button')
+    click(copyBtn)
+
+    const dialog = await openDialog()
+    const passwordInput = dialog.querySelector<HTMLInputElement>('input[type="password"]')
+    if (!passwordInput) throw new Error('no password input in copy modal')
+    typeInto(passwordInput, 'vault-pass')
+
+    const form = dialog.querySelector('form')
+    if (!form) throw new Error('no form in copy modal')
+    act(() => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+
+    const settledCopy = (): boolean => writeTextMock.mock.calls.length > 0
+    for (let attempt = 0; attempt < 600 && !settledCopy(); attempt += 1) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10))
+      })
+    }
+
+    expect(writeTextMock).toHaveBeenCalledWith('Top Secret Payload')
+    expect(screenText()).not.toContain('Top Secret Payload')
+  })
+})
+

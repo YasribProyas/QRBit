@@ -12,7 +12,7 @@ import {
   isUnprotectedSecretBlock,
   lockedTupleOf,
 } from './library'
-import { encryptItem, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from './crypto'
+import { encryptItem, fromBase64, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from './crypto'
 import { formatByteSize, fileSizeText } from './byteSize'
 import type { SessionItem } from '../store/sessionStore'
 
@@ -143,8 +143,22 @@ function lockedPlaintext(
     }
   }
 
-  const text = block.content ?? block.value
-  if (typeof text !== 'string' || text === '') return null
+  let text: string | null = null
+  if (block.type === 'shortText') {
+    if (typeof block.value === 'string' && block.value.trim() !== '') {
+      text = block.value
+    } else if (typeof block.content === 'string' && block.content.trim() !== '') {
+      text = block.content
+    }
+  } else {
+    if (typeof block.content === 'string' && block.content.trim() !== '') {
+      text = block.content
+    } else if (typeof block.value === 'string' && block.value.trim() !== '') {
+      text = block.value
+    }
+  }
+
+  if (text === null || text === '') return null
   const encoded = new TextEncoder().encode(text)
   return {
     bytes: async () => encoded,
@@ -531,12 +545,27 @@ export function sessionItemsToFileBlocks(sessionItems: SessionItem[]): FileBlock
           try {
             const parsed = JSON.parse(item.content)
             if (parsed && typeof parsed.__blockType === 'string') {
+              const lockedData = parsed.lockedData
+                ? {
+                    ciphertext: fromBase64(parsed.lockedData.ciphertext),
+                    iv: fromBase64(parsed.lockedData.iv),
+                    salt: fromBase64(parsed.lockedData.salt),
+                    innerType: parsed.lockedData.innerType,
+                  }
+                : undefined
+
+              const isLocked = parsed.isLocked ?? (lockedData !== undefined)
               return {
                 id: item.id,
                 type: parsed.__blockType,
-                content: parsed.content ?? '',
+                content: isLocked ? '' : (parsed.content ?? ''),
                 label: parsed.label ?? '',
-                value: parsed.value ?? '',
+                value: isLocked ? '' : (parsed.value ?? ''),
+                fileName: parsed.fileName,
+                fileSize: parsed.fileSize,
+                mimeType: parsed.mimeType,
+                isLocked,
+                lockedData,
               }
             }
           } catch {
@@ -576,12 +605,27 @@ export function sessionItemsToFileBlocks(sessionItems: SessionItem[]): FileBlock
           try {
             const parsed = JSON.parse(item.content)
             if (parsed && typeof parsed.__blockType === 'string') {
+              const lockedData = parsed.lockedData
+                ? {
+                    ciphertext: fromBase64(parsed.lockedData.ciphertext),
+                    iv: fromBase64(parsed.lockedData.iv),
+                    salt: fromBase64(parsed.lockedData.salt),
+                    innerType: parsed.lockedData.innerType,
+                  }
+                : undefined
+
+              const isLocked = parsed.isLocked ?? (lockedData !== undefined)
               return {
                 id: item.id,
                 type: parsed.__blockType,
-                content: parsed.content ?? '',
+                content: isLocked ? '' : (parsed.content ?? ''),
                 label: parsed.label ?? '',
-                value: parsed.value ?? '',
+                value: isLocked ? '' : (parsed.value ?? ''),
+                fileName: parsed.fileName,
+                fileSize: parsed.fileSize,
+                mimeType: parsed.mimeType,
+                isLocked,
+                lockedData,
               }
             }
           } catch {

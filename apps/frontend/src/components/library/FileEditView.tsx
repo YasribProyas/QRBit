@@ -51,12 +51,33 @@ import { DossierPickerModal } from '../session/DossierPickerModal'
 import { REORDER_ITEM_ATTRIBUTE, useReorderDrag } from '../../hooks/useReorderDrag'
 import { DEFAULT_ITEM_HEIGHT, moveIndex } from '../../lib/reorder'
 import { describeSendFailure, encryptBlockPayload, fileBlocksToLibraryItems, findUnsendableBlocks, sessionItemsToFileBlocks } from '../../lib/dossier'
-import { decryptItem, encryptItem } from '../../lib/crypto'
+import { decryptItem, encryptItem, toBase64 } from '../../lib/crypto'
 import { ROOT_FOLDER_ID, unprotectedSecretBlocks } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
 import { useSessionStore } from '../../store/sessionStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
 import type { UseSessionResult } from '../../hooks/useSession'
+
+function serializeBlock(block: FileBlock): string {
+  return JSON.stringify({
+    __blockType: block.type,
+    content: block.isLocked ? '' : (block.content ?? ''),
+    label: block.label ?? '',
+    value: block.isLocked ? '' : (block.value ?? ''),
+    fileName: block.fileName,
+    fileSize: block.fileSize,
+    mimeType: block.mimeType,
+    isLocked: block.isLocked ?? false,
+    lockedData: block.lockedData
+      ? {
+          ciphertext: toBase64(block.lockedData.ciphertext),
+          iv: toBase64(block.lockedData.iv),
+          salt: toBase64(block.lockedData.salt),
+          innerType: block.lockedData.innerType,
+        }
+      : undefined,
+  })
+}
 
 export interface FileEditViewProps {
   file: LibraryFile
@@ -306,7 +327,9 @@ export function FileEditView({
               existing.type !== inc.type ||
               (inc.blob !== undefined && existing.blob !== inc.blob) ||
               existing.fileSize !== inc.fileSize ||
-              existing.isUnlocked !== inc.isUnlocked
+              existing.isUnlocked !== inc.isUnlocked ||
+              existing.isLocked !== inc.isLocked ||
+              Boolean(existing.lockedData) !== Boolean(inc.lockedData)
 
             if (hasChanged) {
               nextBlocks.push({
@@ -314,6 +337,8 @@ export function FileEditView({
                 ...inc,
                 blob: inc.blob ?? existing.blob,
                 isUnlocked: existing.isUnlocked || inc.isUnlocked,
+                isLocked: inc.isLocked,
+                lockedData: inc.lockedData,
               })
               changed = true
             } else {
@@ -353,17 +378,14 @@ export function FileEditView({
       initialBroadcastRef.current = true
       draftBlocks.forEach((block) => {
         if (
+          block.lockedData ||
           block.type === 'heading' ||
           block.type === 'shortText' ||
           block.type === 'richText' ||
-          block.type === 'divider'
+          block.type === 'divider' ||
+          block.type === 'locked'
         ) {
-          const content = JSON.stringify({
-            __blockType: block.type,
-            content: block.content ?? '',
-            label: block.label ?? '',
-            value: block.value ?? '',
-          })
+          const content = serializeBlock(block)
           const newId = session.addTextItem(content)
           if (newId) {
             syncedBlockIdsRef.current.add(newId)
@@ -389,17 +411,14 @@ export function FileEditView({
       if (isSharedSession && session && session.phase === 'active') {
         for (const block of appendFile.blocks) {
           if (
+            block.lockedData ||
             block.type === 'heading' ||
             block.type === 'shortText' ||
             block.type === 'richText' ||
-            block.type === 'divider'
+            block.type === 'divider' ||
+            block.type === 'locked'
           ) {
-            const content = JSON.stringify({
-              __blockType: block.type,
-              content: block.content ?? '',
-              label: block.label ?? '',
-              value: block.value ?? '',
-            })
+            const content = serializeBlock(block)
             const newId = session.addTextItem(content)
             if (newId) {
               syncedBlockIdsRef.current.add(newId)
@@ -474,30 +493,39 @@ export function FileEditView({
         localUpdatedIdsRef.current.delete(blockId)
       }, 500)
 
-      const target = draftBlocks.find((b) => b.id === blockId)
-      const updated = { ...target, ...changes }
-      if (
-        updated.type === 'heading' ||
-        updated.type === 'shortText' ||
-        updated.type === 'richText' ||
-        updated.type === 'divider'
-      ) {
-        session.updateTextItem(
-          blockId,
-          JSON.stringify({
-            __blockType: updated.type,
-            content: updated.content ?? '',
-            label: updated.label ?? '',
-            value: updated.value ?? '',
-          }),
-        )
-      }
-
       if (changes.blob instanceof Blob) {
         const file = new File([changes.blob], changes.fileName || 'file', {
           type: changes.mimeType || changes.blob.type,
         })
-        session.addFileItem(file)
+        const newId = session.addFileItem(file)
+        if (newId) {
+          syncedBlockIdsRef.current.add(newId)
+          commitBlocks((current) =>
+            current.map((b) => (b.id === blockId ? { ...b, ...changes, id: newId } : b)),
+          )
+          return
+        }
+      }
+
+      const target = draftBlocks.find((b) => b.id === blockId)
+      const updated: FileBlock = { ...(target ?? { id: blockId, type: 'shortText' }), ...changes }
+
+      // Encrypted block: don't sync when added/unencrypted, only sync the moment it's encrypted
+      if (updated.type === 'locked' && !updated.lockedData) {
+        return
+      }
+
+      const isAlreadySynced = sessionItems.some((s) => s.id === blockId)
+      if (isAlreadySynced) {
+        session.updateTextItem(blockId, serializeBlock(updated))
+      } else {
+        const newId = session.addTextItem(serializeBlock(updated))
+        if (newId) {
+          syncedBlockIdsRef.current.add(newId)
+          commitBlocks((current) =>
+            current.map((b) => (b.id === blockId ? { ...b, ...changes, id: newId } : b)),
+          )
+        }
       }
     }
   }
@@ -695,6 +723,19 @@ export function FileEditView({
       return true
     })()
   }
+
+  // Debounced autosave: automatically saves changes after 600ms of inactivity in local dossiers
+  useEffect(() => {
+    if (isSharedSession || !isDirty || !canPersist) return
+
+    const timer = setTimeout(() => {
+      persist(draftFile())
+    }, 600)
+
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [isSharedSession, isDirty, canPersist, draftFile])
 
   const closeEncryptPrompt = (): void => {
     setEncryptPrompt(null)

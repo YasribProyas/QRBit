@@ -34,12 +34,15 @@ import {
   Textarea,
 } from '@mantine/core'
 import {
+  IconCheck,
   IconChevronDown,
   IconChevronUp,
   IconCircleCheck,
   IconClock,
   IconCopy,
   IconDownload,
+  IconEye,
+  IconEyeOff,
   IconFile,
   IconGripVertical,
   IconKey,
@@ -168,8 +171,29 @@ export function BlockItem({
   const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null)
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false)
 
+  // Peek states (in-memory RAM only, never synced or persisted)
+  const [isPeeked, setIsPeeked] = useState(false)
+  const [peekedContent, setPeekedContent] = useState<string | null>(null)
+  const [peekedBlob, setPeekedBlob] = useState<Blob | null>(null)
+  const [showPeekModal, setShowPeekModal] = useState(false)
+  const [peekPassword, setPeekPassword] = useState('')
+  const [peekError, setPeekError] = useState(false)
+  const [isPeeking, setIsPeeking] = useState(false)
+
+  // Copy states
+  const [copied, setCopied] = useState(false)
+  const [showCopyModal, setShowCopyModal] = useState(false)
+  const [copyPassword, setCopyPassword] = useState('')
+  const [copyError, setCopyError] = useState(false)
+  const [isCopying, setIsCopying] = useState(false)
+
   const hasLabel = Boolean(block.label && block.label.trim() !== '')
-  const isBlockActive = isReorderDragging || showLockConfigModal || showUnlockModal
+  const isBlockActive =
+    isReorderDragging ||
+    showLockConfigModal ||
+    showUnlockModal ||
+    showPeekModal ||
+    showCopyModal
 
   // Every edit-mode row is a measured reorder item, grip or no grip: the hook counts those
   // markers to index a drag, so the set of them has to be the whole list.
@@ -205,6 +229,20 @@ export function BlockItem({
           : block.type === 'richText'
             ? 'note'
             : 'block'
+
+  // --- attachment display (the two blocks that carry bytes) ----------------
+  const attachmentBlob = block.blob
+  const attachmentSizeLabel =
+    attachmentBlob instanceof Blob
+      ? formatByteSize(attachmentBlob.size)
+      : fileSizeText(block.fileSize)
+  const canPreviewImage =
+    attachmentBlob instanceof Blob &&
+    (attachmentBlob.type === '' || attachmentBlob.type.startsWith('image/'))
+  const attachmentMaxBytes =
+    block.type === 'locked' || block.isLocked === true
+      ? LOCKED_ITEM_MAX_PLAINTEXT_BYTES
+      : LIBRARY_ATTACHMENT_MAX_BYTES
 
   /**
    * The grabbed row is painted at the pointer, above its neighbours, and nothing else moves. It
@@ -371,6 +409,9 @@ export function BlockItem({
         isLocked: true,
         lockedData,
         isUnlocked: false,
+        content: '',
+        value: '',
+        blob: undefined,
       })
 
       setShowLockConfigModal(false)
@@ -401,7 +442,7 @@ export function BlockItem({
     <Modal
       opened={showLockConfigModal}
       onClose={() => setShowLockConfigModal(false)}
-      title={isProtected ? 'Encrypted block' : 'Encrypt this block with a password'}
+      title={isProtected ? 'Permanently unlock block' : 'Encrypt this block with a password'}
       size="sm"
       centered
       padding="lg"
@@ -465,9 +506,11 @@ export function BlockItem({
         ) : (
           <form onSubmit={handleRemoveLock}>
             <Stack gap="sm">
+              <Text className="qrbit-text-body font-semibold" style={{ color: 'var(--qrbit-warning, #d97706)' }}>
+                ⚠️ Warning: Permanently unlocking will decrypt this block and expose its contents to connected devices.
+              </Text>
               <Text className="qrbit-text-body-secondary" style={{ color: 'var(--qrbit-ink-secondary)' }}>
-                To reveal this block, use Unlock. To stop encrypting it, open it here first:
-                the password has to be right, or the payload would be discarded with the lock.
+                To temporarily reveal this block on this device without decrypting or syncing to other devices, use the Peek (eye) icon instead.
               </Text>
               <TextInput
                 size="sm"
@@ -520,8 +563,397 @@ export function BlockItem({
     </Modal>
   )
 
+  const getUnencryptedText = (): string => {
+    if (block.type === 'shortText') {
+      return block.value ?? block.content ?? ''
+    }
+    if (block.type === 'heading' || block.type === 'richText') {
+      return block.content ?? ''
+    }
+    if (block.type === 'locked') {
+      return block.content ?? block.value ?? ''
+    }
+    if (block.type === 'image' || block.type === 'fileAttachment') {
+      return block.fileName ?? ''
+    }
+    return block.content ?? block.value ?? ''
+  }
+
+  const handleCopyContent = async (): Promise<void> => {
+    if (!isProtected) {
+      const text = getUnencryptedText()
+      if (text) {
+        try {
+          await navigator.clipboard.writeText(text)
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        } catch {
+          // ignore
+        }
+      }
+      return
+    }
+
+    setCopyPassword('')
+    setCopyError(false)
+    setShowCopyModal(true)
+  }
+
+  const handleSubmitCopyPassword = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    const tuple = lockedTupleOf(block)
+    if (tuple === null) {
+      setCopyError(true)
+      return
+    }
+
+    setIsCopying(true)
+    setCopyError(false)
+    let decrypted: Uint8Array
+    try {
+      decrypted = await decryptItem(copyPassword, tuple.salt, tuple.iv, tuple.ciphertext)
+    } catch {
+      setCopyError(true)
+      setIsCopying(false)
+      return
+    }
+
+    try {
+      const isFile =
+        tuple.innerType === 'fileAttachment' ||
+        block.type === 'image' ||
+        block.type === 'fileAttachment'
+
+      if (isFile) {
+        await navigator.clipboard.writeText(block.fileName || 'file')
+      } else {
+        const text = new TextDecoder().decode(decrypted)
+        await navigator.clipboard.writeText(text)
+      }
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+      setShowCopyModal(false)
+      setCopyPassword('')
+    } catch {
+      setCopyError(true)
+    } finally {
+      decrypted.fill(0)
+      setIsCopying(false)
+    }
+  }
+
+  const handleTogglePeek = (): void => {
+    if (isPeeked) {
+      setIsPeeked(false)
+      setPeekedContent(null)
+      setPeekedBlob(null)
+      return
+    }
+    setPeekPassword('')
+    setPeekError(false)
+    setShowPeekModal(true)
+  }
+
+  const handleSubmitPeekPassword = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    const tuple = lockedTupleOf(block)
+    if (tuple === null) {
+      setPeekError(true)
+      return
+    }
+
+    setIsPeeking(true)
+    setPeekError(false)
+    let decrypted: Uint8Array
+    try {
+      decrypted = await decryptItem(peekPassword, tuple.salt, tuple.iv, tuple.ciphertext)
+    } catch {
+      setPeekError(true)
+      setIsPeeking(false)
+      return
+    }
+
+    try {
+      const isFile =
+        tuple.innerType === 'fileAttachment' ||
+        block.type === 'image' ||
+        block.type === 'fileAttachment'
+
+      if (isFile) {
+        const blob = new Blob([new Uint8Array(decrypted)], { type: block.mimeType ?? '' })
+        setPeekedBlob(blob)
+      } else {
+        const text = new TextDecoder().decode(decrypted)
+        setPeekedContent(text)
+      }
+      setIsPeeked(true)
+      setShowPeekModal(false)
+      setPeekPassword('')
+    } catch {
+      setPeekError(true)
+    } finally {
+      decrypted.fill(0)
+      setIsPeeking(false)
+    }
+  }
+
+  const renderPeekModal = (): ReactNode => (
+    <Modal
+      opened={showPeekModal}
+      onClose={() => {
+        if (!isPeeking) {
+          setShowPeekModal(false)
+          setPeekPassword('')
+          setPeekError(false)
+        }
+      }}
+      title={`Peek ${block.label || blockWord}`}
+      size="sm"
+      centered
+      padding="lg"
+      withCloseButton={!isPeeking}
+    >
+      <form onSubmit={handleSubmitPeekPassword}>
+        <Stack gap="sm">
+          <Text className="qrbit-text-body-secondary" c="dimmed">
+            Enter the password to reveal this block’s contents on this device. Contents will stay in RAM only and will not be synced to connected peers.
+          </Text>
+          <PasswordInput
+            size="sm"
+            label="Password for this block"
+            styles={{ label: { fontWeight: 600 } }}
+            autoFocus
+            required
+            placeholder="Enter password..."
+            value={peekPassword}
+            onChange={(e) => {
+              setPeekPassword(e.target.value)
+              setPeekError(false)
+            }}
+            error={peekError ? 'Incorrect password' : false}
+          />
+          {peekError ? (
+            <p
+              className="qrbit-text-body-secondary text-xs"
+              style={{ color: 'var(--qrbit-danger)' }}
+              role="alert"
+            >
+              Incorrect password. Please try again.
+            </p>
+          ) : null}
+          <Group justify="flex-end" gap="sm" wrap="wrap" mt="xs">
+            <Button
+              type="button"
+              variant="subtle"
+              c="dimmed"
+              size="sm"
+              disabled={isPeeking}
+              onClick={() => {
+                setShowPeekModal(false)
+                setPeekPassword('')
+                setPeekError(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              color="locked"
+              loading={isPeeking}
+            >
+              {isPeeking ? 'Decrypting...' : 'Peek content'}
+            </Button>
+          </Group>
+        </Stack>
+      </form>
+    </Modal>
+  )
+
+  const renderCopyModal = (): ReactNode => (
+    <Modal
+      opened={showCopyModal}
+      onClose={() => {
+        if (!isCopying) {
+          setShowCopyModal(false)
+          setCopyPassword('')
+          setCopyError(false)
+        }
+      }}
+      title={`Copy encrypted ${blockWord}`}
+      size="sm"
+      centered
+      padding="lg"
+      withCloseButton={!isCopying}
+    >
+      <form onSubmit={handleSubmitCopyPassword}>
+        <Stack gap="sm">
+          <Text className="qrbit-text-body-secondary" c="dimmed">
+            Enter the password to decrypt and copy this block’s content directly to your clipboard without revealing it on screen or syncing it.
+          </Text>
+          <PasswordInput
+            size="sm"
+            label="Password for this block"
+            styles={{ label: { fontWeight: 600 } }}
+            autoFocus
+            required
+            placeholder="Enter password..."
+            value={copyPassword}
+            onChange={(e) => {
+              setCopyPassword(e.target.value)
+              setCopyError(false)
+            }}
+            error={copyError ? 'Incorrect password' : false}
+          />
+          {copyError ? (
+            <p
+              className="qrbit-text-body-secondary text-xs"
+              style={{ color: 'var(--qrbit-danger)' }}
+              role="alert"
+            >
+              Incorrect password. Please try again.
+            </p>
+          ) : null}
+          <Group justify="flex-end" gap="sm" wrap="wrap" mt="xs">
+            <Button
+              type="button"
+              variant="subtle"
+              c="dimmed"
+              size="sm"
+              disabled={isCopying}
+              onClick={() => {
+                setShowCopyModal(false)
+                setCopyPassword('')
+                setCopyError(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              color="locked"
+              loading={isCopying}
+            >
+              {isCopying ? 'Copying...' : 'Copy to clipboard'}
+            </Button>
+          </Group>
+        </Stack>
+      </form>
+    </Modal>
+  )
+
+  const renderActionIcons = (blockDesc: string): ReactNode => {
+    let word = blockDesc
+    if (word === 'fileAttachment' || word === 'file attachment') word = 'attachment'
+    const normalizedDesc = word.endsWith(' block') ? word : `${word} block`
+
+    return (
+      <Group
+        gap={0}
+        wrap="nowrap"
+        className={`transition-opacity duration-150 ${
+          isBlockActive
+            ? 'opacity-100 pointer-events-auto'
+            : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
+        }`}
+        style={{ flex: 'none' }}
+      >
+        {/* Peek (eye) icon - visible when block is encrypted */}
+        {isProtected && (
+          <ActionIcon
+            variant="subtle"
+            size="md"
+            c={isPeeked ? 'locked' : 'dimmed'}
+            aria-label={isPeeked ? 'Hide encrypted content' : 'Peek encrypted content'}
+            title={isPeeked ? 'Hide encrypted content' : 'Peek encrypted content'}
+            onClick={handleTogglePeek}
+          >
+            {isPeeked ? <IconEyeOff size={16} aria-hidden="true" /> : <IconEye size={16} aria-hidden="true" />}
+          </ActionIcon>
+        )}
+
+        {/* Lock / Unlock Toggle Button */}
+        <ActionIcon
+          variant="subtle"
+          size="md"
+          data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
+          c={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
+          aria-label={
+            isProtected
+              ? 'Manage encryption for this block'
+              : 'Encrypt this block with a password'
+          }
+          title={
+            isProtected
+              ? 'Manage encryption for this block'
+              : 'Encrypt this block with a password'
+          }
+          onClick={() => {
+            setLockError(null)
+            setShowLockConfigModal(true)
+          }}
+        >
+          {isProtected ? (
+            <IconLock size={16} aria-hidden="true" />
+          ) : isUnprotected ? (
+            <IconShieldOff size={16} aria-hidden="true" />
+          ) : (
+            <IconShieldLock size={16} aria-hidden="true" />
+          )}
+        </ActionIcon>
+
+        <ActionIcon
+          variant="subtle"
+          size="md"
+          onClick={() => onMoveUp?.(index)}
+          disabled={index === 0}
+          title={`Move ${normalizedDesc} up`}
+          aria-label={`Move ${normalizedDesc} up`}
+        >
+          <IconChevronUp size={16} aria-hidden="true" />
+        </ActionIcon>
+
+        <ActionIcon
+          variant="subtle"
+          size="md"
+          onClick={() => onMoveDown?.(index)}
+          disabled={index === totalBlocks - 1}
+          title={`Move ${normalizedDesc} down`}
+          aria-label={`Move ${normalizedDesc} down`}
+        >
+          <IconChevronDown size={16} aria-hidden="true" />
+        </ActionIcon>
+
+        {/* Copy content to clipboard */}
+        <ActionIcon
+          variant="subtle"
+          size="md"
+          onClick={handleCopyContent}
+          title={copied ? 'Copied to clipboard' : 'Copy content to clipboard'}
+          aria-label={copied ? 'Copied to clipboard' : 'Copy content to clipboard'}
+          c={copied ? 'success' : undefined}
+        >
+          {copied ? <IconCheck size={16} aria-hidden="true" /> : <IconCopy size={16} aria-hidden="true" />}
+        </ActionIcon>
+
+        <ActionIcon
+          variant="subtle"
+          size="md"
+          onClick={() => onDelete?.(block.id)}
+          title={`Delete ${normalizedDesc}`}
+          aria-label={`Delete ${normalizedDesc}`}
+          className="hover:text-[var(--qrbit-danger)] hover:bg-[color-mix(in_srgb,var(--qrbit-danger)_12%,transparent)] transition-colors"
+        >
+          <IconTrash size={16} aria-hidden="true" />
+        </ActionIcon>
+      </Group>
+    )
+  }
+
   const renderImageViewerModal = (): ReactNode => {
-    if (block.type !== 'image' || !attachmentBlob || !(attachmentBlob instanceof Blob)) return null
+    const activeBlob = peekedBlob ?? attachmentBlob
+    if (block.type !== 'image' || !activeBlob || !(activeBlob instanceof Blob)) return null
 
     return (
       <Modal
@@ -551,7 +983,7 @@ export function BlockItem({
         }}
       >
         <ImagePreview
-          blob={attachmentBlob}
+          blob={activeBlob}
           name={block.fileName ?? 'Chosen image'}
           fullSize
         />
@@ -570,6 +1002,15 @@ export function BlockItem({
       </Modal>
     )
   }
+
+  const renderAllModals = (): ReactNode => (
+    <>
+      {renderLockModal()}
+      {renderPeekModal()}
+      {renderCopyModal()}
+      {renderImageViewerModal()}
+    </>
+  )
 
   /**
    * Transfer status for the two session screens. A badge carries an icon *and* a word
@@ -745,87 +1186,7 @@ export function BlockItem({
             )}
           </div>
 
-          <Group
-            gap={0}
-            wrap="nowrap"
-            className={`transition-opacity duration-150 ${
-              isBlockActive
-                ? 'opacity-100 pointer-events-auto'
-                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
-            }`}
-            style={{ flex: 'none' }}
-          >
-            {/* Lock / Unlock Toggle Button */}
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
-              aria-label={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              title={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              onClick={() => {
-                setLockError(null)
-                setShowLockConfigModal(true)
-              }}
-            >
-              {isProtected ? (
-                <IconLock size={16} aria-hidden="true" />
-              ) : isUnprotected ? (
-                <IconShieldOff size={16} aria-hidden="true" />
-              ) : (
-                <IconShieldLock size={16} aria-hidden="true" />
-              )}
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveUp?.(index)}
-              disabled={index === 0}
-              title={`Move ${block.type} block up`}
-              aria-label={`Move ${block.type} block up`}
-            >
-              <IconChevronUp size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveDown?.(index)}
-              disabled={index === totalBlocks - 1}
-              title={`Move ${block.type} block down`}
-              aria-label={`Move ${block.type} block down`}
-            >
-              <IconChevronDown size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDuplicate?.(block.id)}
-              title="Duplicate block"
-              aria-label="Duplicate block"
-            >
-              <IconCopy size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDelete?.(block.id)}
-              title="Delete block"
-              aria-label="Delete block"
-            >
-              <IconTrash size={16} aria-hidden="true" />
-            </ActionIcon>
-          </Group>
+          {renderActionIcons('heading')}
         </div>
 
         {/* Row 2: Grip on left, Heading text / input on right */}
@@ -846,37 +1207,87 @@ export function BlockItem({
             </span>
           ) : null}
           <div className="flex-1 min-w-0">
-            <TextInput
-              variant="unstyled"
-              type="text"
-              className="qrbit-heading-input"
-              classNames={{ input: 'qrbit-heading-input' }}
-              value={block.content || ''}
-              onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
-              placeholder="Enter section heading..."
-              aria-label="Section heading"
-              styles={{
-                input: {
-                  fontFamily: 'var(--qrbit-font-ui)',
-                  fontSize: '28px',
-                  fontWeight: 800,
-                  lineHeight: '1.15',
-                  letterSpacing: '-0.03em',
-                  color: 'var(--qrbit-ink)',
-                  padding: 0,
-                  margin: 0,
-                  height: 'auto',
-                  border: 'none',
-                  outline: 'none',
-                  boxShadow: 'none',
-                  background: 'transparent',
-                },
-              }}
-            />
+            {isProtected ? (
+              isPeeked ? (
+                <div className="flex items-center gap-2">
+                  <Text
+                    className="qrbit-heading-input"
+                    style={{
+                      fontFamily: 'var(--qrbit-font-ui)',
+                      fontSize: '28px',
+                      fontWeight: 800,
+                      lineHeight: '1.15',
+                      letterSpacing: '-0.03em',
+                      color: 'var(--qrbit-ink)',
+                    }}
+                  >
+                    {peekedContent || block.content}
+                  </Text>
+                  <Badge variant="light" color="locked" size="xs">
+                    Peeked
+                  </Badge>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center justify-between gap-3 py-1 px-3 rounded"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    border: '1px solid color-mix(in srgb, var(--qrbit-locked) 35%, var(--qrbit-border))',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
+                >
+                  <Group gap="xs">
+                    <IconLock size={18} style={{ color: 'var(--qrbit-locked)', flex: 'none' }} />
+                    <Text
+                      span
+                      style={{
+                        letterSpacing: '0.25em',
+                        color: 'var(--qrbit-ink-muted)',
+                        fontWeight: 700,
+                        fontSize: '18px',
+                      }}
+                    >
+                      ••••••••••••
+                    </Text>
+                  </Group>
+                  <Text span className="qrbit-text-body-secondary text-xs" c="dimmed">
+                    Encrypted heading
+                  </Text>
+                </div>
+              )
+            ) : (
+              <TextInput
+                variant="unstyled"
+                type="text"
+                className="qrbit-heading-input"
+                classNames={{ input: 'qrbit-heading-input' }}
+                value={block.content || ''}
+                onChange={(e) => onUpdate?.(block.id, { content: e.target.value })}
+                placeholder="Enter section heading..."
+                aria-label="Section heading"
+                styles={{
+                  input: {
+                    fontFamily: 'var(--qrbit-font-ui)',
+                    fontSize: '28px',
+                    fontWeight: 800,
+                    lineHeight: '1.15',
+                    letterSpacing: '-0.03em',
+                    color: 'var(--qrbit-ink)',
+                    padding: 0,
+                    margin: 0,
+                    height: 'auto',
+                    border: 'none',
+                    outline: 'none',
+                    boxShadow: 'none',
+                    background: 'transparent',
+                  },
+                }}
+              />
+            )}
           </div>
         </div>
 
-        {renderLockModal()}
+        {renderAllModals()}
       </div>
     )
   }
@@ -941,87 +1352,7 @@ export function BlockItem({
             )}
           </div>
 
-          <Group
-            gap={0}
-            wrap="nowrap"
-            className={`transition-opacity duration-150 ${
-              isBlockActive
-                ? 'opacity-100 pointer-events-auto'
-                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
-            }`}
-            style={{ flex: 'none' }}
-          >
-            {/* Lock / Unlock Toggle Button */}
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
-              aria-label={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              title={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              onClick={() => {
-                setLockError(null)
-                setShowLockConfigModal(true)
-              }}
-            >
-              {isProtected ? (
-                <IconLock size={16} aria-hidden="true" />
-              ) : isUnprotected ? (
-                <IconShieldOff size={16} aria-hidden="true" />
-              ) : (
-                <IconShieldLock size={16} aria-hidden="true" />
-              )}
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveUp?.(index)}
-              disabled={index === 0}
-              title={`Move ${block.type} block up`}
-              aria-label={`Move ${block.type} block up`}
-            >
-              <IconChevronUp size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveDown?.(index)}
-              disabled={index === totalBlocks - 1}
-              title={`Move ${block.type} block down`}
-              aria-label={`Move ${block.type} block down`}
-            >
-              <IconChevronDown size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDuplicate?.(block.id)}
-              title="Duplicate block"
-              aria-label="Duplicate block"
-            >
-              <IconCopy size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDelete?.(block.id)}
-              title="Delete block"
-              aria-label="Delete block"
-            >
-              <IconTrash size={16} aria-hidden="true" />
-            </ActionIcon>
-          </Group>
+          {renderActionIcons('shortText')}
         </div>
 
         {/* Row 2: Grip on left, Normal text / input on right */}
@@ -1042,7 +1373,56 @@ export function BlockItem({
             </span>
           ) : null}
           <div className="flex-1 min-w-0">
-            {canEditPayload ? (
+            {isProtected ? (
+              isPeeked ? (
+                <div
+                  className="flex items-center justify-between gap-3 p-2 rounded"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    border: '1px solid color-mix(in srgb, var(--qrbit-locked) 40%, var(--qrbit-border))',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
+                >
+                  <Text
+                    span
+                    className="qrbit-text-body font-mono text-sm"
+                    style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+                  >
+                    {peekedContent || block.value || block.content}
+                  </Text>
+                  <Badge variant="light" color="locked" size="xs">
+                    Peeked
+                  </Badge>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center justify-between gap-3 p-2 rounded"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    border: '1px solid color-mix(in srgb, var(--qrbit-locked) 35%, var(--qrbit-border))',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
+                >
+                  <Group gap="xs">
+                    <IconLock size={15} style={{ color: 'var(--qrbit-locked)', flex: 'none' }} />
+                    <Text
+                      span
+                      style={{
+                        letterSpacing: '0.2em',
+                        color: 'var(--qrbit-ink-muted)',
+                        fontWeight: 600,
+                        fontSize: '14px',
+                      }}
+                    >
+                      ••••••••••••••••
+                    </Text>
+                  </Group>
+                  <Text span className="qrbit-text-body-secondary text-xs" c="dimmed">
+                    Encrypted value (PBKDF2 + AES-256-GCM)
+                  </Text>
+                </div>
+              )
+            ) : (
               <TextInput
                 variant="unstyled"
                 type="text"
@@ -1069,15 +1449,11 @@ export function BlockItem({
                   },
                 }}
               />
-            ) : (
-              <Text span className="qrbit-text-body-secondary" c="dimmed">
-                Encrypted value — unlock to reveal it
-              </Text>
             )}
           </div>
         </div>
 
-        {renderLockModal()}
+        {renderAllModals()}
       </div>
     )
   }
@@ -1142,87 +1518,7 @@ export function BlockItem({
             )}
           </div>
 
-          <Group
-            gap={0}
-            wrap="nowrap"
-            className={`transition-opacity duration-150 ${
-              isBlockActive
-                ? 'opacity-100 pointer-events-auto'
-                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
-            }`}
-            style={{ flex: 'none' }}
-          >
-            {/* Lock / Unlock Toggle Button */}
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
-              aria-label={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              title={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              onClick={() => {
-                setLockError(null)
-                setShowLockConfigModal(true)
-              }}
-            >
-              {isProtected ? (
-                <IconLock size={16} aria-hidden="true" />
-              ) : isUnprotected ? (
-                <IconShieldOff size={16} aria-hidden="true" />
-              ) : (
-                <IconShieldLock size={16} aria-hidden="true" />
-              )}
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveUp?.(index)}
-              disabled={index === 0}
-              title={`Move ${block.type} block up`}
-              aria-label={`Move ${block.type} block up`}
-            >
-              <IconChevronUp size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveDown?.(index)}
-              disabled={index === totalBlocks - 1}
-              title={`Move ${block.type} block down`}
-              aria-label={`Move ${block.type} block down`}
-            >
-              <IconChevronDown size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDuplicate?.(block.id)}
-              title="Duplicate block"
-              aria-label="Duplicate block"
-            >
-              <IconCopy size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDelete?.(block.id)}
-              title="Delete block"
-              aria-label="Delete block"
-            >
-              <IconTrash size={16} aria-hidden="true" />
-            </ActionIcon>
-          </Group>
+          {renderActionIcons('richText')}
         </div>
 
         {/* Row 2: Grip on left, Textarea on right */}
@@ -1243,7 +1539,55 @@ export function BlockItem({
             </span>
           ) : null}
           <div className="flex-1 min-w-0">
-            {canEditPayload ? (
+            {isProtected ? (
+              isPeeked ? (
+                <div
+                  className="p-2.5 rounded space-y-1.5"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    border: '1px solid color-mix(in srgb, var(--qrbit-locked) 40%, var(--qrbit-border))',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
+                >
+                  <Group justify="space-between">
+                    <Badge variant="light" color="locked" size="xs">
+                      Peeked note
+                    </Badge>
+                  </Group>
+                  <Text className="qrbit-text-body text-sm whitespace-pre-wrap">
+                    {peekedContent || block.content}
+                  </Text>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center justify-between gap-3 p-3 rounded"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    border: '1px solid color-mix(in srgb, var(--qrbit-locked) 35%, var(--qrbit-border))',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                    minHeight: '64px',
+                  }}
+                >
+                  <Group gap="xs">
+                    <IconLock size={16} style={{ color: 'var(--qrbit-locked)', flex: 'none' }} />
+                    <Text
+                      span
+                      style={{
+                        letterSpacing: '0.2em',
+                        color: 'var(--qrbit-ink-muted)',
+                        fontWeight: 600,
+                        fontSize: '14px',
+                      }}
+                    >
+                      ••••••••••••••••••••••••
+                    </Text>
+                  </Group>
+                  <Text span className="qrbit-text-body-secondary text-xs" c="dimmed">
+                    Encrypted note (PBKDF2 + AES-256-GCM)
+                  </Text>
+                </div>
+              )
+            ) : (
               <Textarea
                 minRows={3}
                 resize="vertical"
@@ -1257,51 +1601,14 @@ export function BlockItem({
                 placeholder="Rich Text"
                 aria-label="Rich text content"
               />
-            ) : (
-              <Text span className="qrbit-text-body-secondary" c="dimmed">
-                Encrypted note — unlock to reveal it
-              </Text>
             )}
           </div>
         </div>
 
-        {renderLockModal()}
+        {renderAllModals()}
       </div>
     )
   }
-
-  // --- attachment display (the two blocks that carry bytes) ----------------
-  const attachmentBlob = block.blob
-  /**
-   * The size shown on the row, measured from what is actually on the block.
-   *
-   * `blob.size` when a file is chosen — that number is the only honest size there is. A stored
-   * `fileSize` is read only for a record whose bytes are not in memory (a demo dossier, or
-   * anything written before the picker existed), and a missing one says so instead of falling
-   * back to a plausible-looking literal, which is exactly how `'2.4 MB'` got into this file.
-   */
-  const attachmentSizeLabel =
-    attachmentBlob instanceof Blob
-      ? formatByteSize(attachmentBlob.size)
-      : fileSizeText(block.fileSize)
-  /**
-   * Whether a preview can be drawn: an `image` row shows the bytes only if they announced
-   * themselves as an image (or announced nothing at all, which a `File` from an unknown
-   * extension does, and which the picker's type check already refused to write).
-   */
-  const canPreviewImage =
-    attachmentBlob instanceof Blob &&
-    (attachmentBlob.type === '' || attachmentBlob.type.startsWith('image/'))
-  /**
-   * The ceiling for this block. A locked attachment travels as one `locked-payload` frame, so
-   * it is capped by D6, not by the library cap; an unlocked one is a chunked file item and gets
-   * `LIBRARY_ATTACHMENT_MAX_BYTES`. `AttachmentPicker` refuses above the number, and the draft
-   * keeps whatever was on the block before.
-   */
-  const attachmentMaxBytes =
-    block.type === 'locked' || block.isLocked === true
-      ? LOCKED_ITEM_MAX_PLAINTEXT_BYTES
-      : LIBRARY_ATTACHMENT_MAX_BYTES
 
   // IMAGE BLOCK (edit mode custom layout matching prototype)
   if (mode === 'edit' && block.type === 'image') {
@@ -1363,86 +1670,7 @@ export function BlockItem({
             )}
           </div>
 
-          <Group
-            gap={0}
-            wrap="nowrap"
-            className={`transition-opacity duration-150 ${
-              isBlockActive
-                ? 'opacity-100 pointer-events-auto'
-                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
-            }`}
-            style={{ flex: 'none' }}
-          >
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
-              aria-label={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              title={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              onClick={() => {
-                setLockError(null)
-                setShowLockConfigModal(true)
-              }}
-            >
-              {isProtected ? (
-                <IconLock size={16} aria-hidden="true" />
-              ) : isUnprotected ? (
-                <IconShieldOff size={16} aria-hidden="true" />
-              ) : (
-                <IconShieldLock size={16} aria-hidden="true" />
-              )}
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveUp?.(index)}
-              disabled={index === 0}
-              title="Move image block up"
-              aria-label="Move image block up"
-            >
-              <IconChevronUp size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveDown?.(index)}
-              disabled={index === totalBlocks - 1}
-              title="Move image block down"
-              aria-label="Move image block down"
-            >
-              <IconChevronDown size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDuplicate?.(block.id)}
-              title="Duplicate block"
-              aria-label="Duplicate block"
-            >
-              <IconCopy size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDelete?.(block.id)}
-              title="Delete block"
-              aria-label="Delete block"
-            >
-              <IconTrash size={16} aria-hidden="true" />
-            </ActionIcon>
-          </Group>
+          {renderActionIcons('image block')}
         </div>
 
         {/* Row 2: Grip on left, Image preview & controls on right */}
@@ -1462,7 +1690,64 @@ export function BlockItem({
                 : grip}
             </span>
           ) : null}
-          {block.blob !== undefined || block.fileName !== undefined ? (
+          {isProtected ? (
+            <div className="flex-1 min-w-0 space-y-1.5">
+              {isPeeked && (peekedBlob || attachmentBlob) ? (
+                <div
+                  className="relative w-fit max-w-full flex flex-col items-center justify-center rounded border"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    borderColor: 'var(--qrbit-border)',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                    padding: '4px',
+                    minHeight: 56,
+                  }}
+                >
+                  <ImagePreview
+                    blob={peekedBlob ?? (attachmentBlob as Blob)}
+                    name={block.fileName ?? 'Encrypted image'}
+                    onClick={() => setIsImageViewerOpen(true)}
+                  />
+                  <div className="flex items-center justify-between gap-2 px-0.5 mt-1 w-full">
+                    <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                      <Text span className="qrbit-text-body-secondary text-xs" style={{ minWidth: 0 }} truncate>
+                        {block.fileName ?? 'Encrypted image'}
+                      </Text>
+                      <Badge size="xs" variant="light" color="locked">
+                        Peeked
+                      </Badge>
+                    </Group>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="relative w-full flex flex-col items-center justify-center rounded border p-4 text-center"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    borderColor: 'color-mix(in srgb, var(--qrbit-locked) 35%, transparent)',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                    minHeight: 80,
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5" style={{ color: 'var(--qrbit-locked)' }}>
+                    <IconLock size={18} aria-hidden="true" />
+                    <Text size="xs" fw={600} style={{ color: 'var(--qrbit-locked)' }}>
+                      Encrypted Image
+                    </Text>
+                  </div>
+                  <Text size="xs" c="dimmed" truncate style={{ maxWidth: '100%' }}>
+                    {block.fileName ?? 'image'}
+                  </Text>
+                  <Text size="xs" c="dimmed" mt={4} style={{ fontSize: '11px' }}>
+                    Encrypted with PBKDF2 + AES-256-GCM. Click the eye icon to peek.
+                  </Text>
+                </div>
+              )}
+              <p className="qrbit-text-body-secondary text-xs mt-1" style={{ color: 'var(--qrbit-ink-muted)' }} data-attachment-locked="true">
+                This block is locked. Remove the lock to choose a different image.
+              </p>
+            </div>
+          ) : block.blob !== undefined || block.fileName !== undefined ? (
             <div className="flex-1 min-w-0 space-y-1.5">
               <div
                 className="relative w-fit max-w-full flex flex-col items-center justify-center rounded border"
@@ -1539,29 +1824,23 @@ export function BlockItem({
                 </ActionIcon>
               </div>
 
-              {!isProtected ? (
-                <div style={{ display: 'none' }}>
-                  <AttachmentPicker
-                    blockType="image"
-                    label="Choose image"
-                    maxBytes={attachmentMaxBytes}
-                    onSelect={(attachment) => {
-                      setAttachmentPickerError(null)
-                      onUpdate?.(block.id, {
-                        blob: attachment.blob,
-                        fileName: attachment.fileName,
-                        mimeType: attachment.mimeType,
-                        fileSize: attachment.sizeInBytes,
-                      })
-                    }}
-                    onReject={(msg) => setAttachmentPickerError(msg)}
-                  />
-                </div>
-              ) : (
-                <p className="qrbit-text-body-secondary text-xs" style={{ color: 'var(--qrbit-ink-muted)' }} data-attachment-locked="true">
-                  This block is locked. Remove the lock to choose a different image.
-                </p>
-              )}
+              <div style={{ display: 'none' }}>
+                <AttachmentPicker
+                  blockType="image"
+                  label="Choose image"
+                  maxBytes={attachmentMaxBytes}
+                  onSelect={(attachment) => {
+                    setAttachmentPickerError(null)
+                    onUpdate?.(block.id, {
+                      blob: attachment.blob,
+                      fileName: attachment.fileName,
+                      mimeType: attachment.mimeType,
+                      fileSize: attachment.sizeInBytes,
+                    })
+                  }}
+                  onReject={(msg) => setAttachmentPickerError(msg)}
+                />
+              </div>
             </div>
           ) : (
             <div className="flex-1 min-w-0">
@@ -1591,8 +1870,7 @@ export function BlockItem({
           )}
         </div>
 
-        {renderImageViewerModal()}
-        {renderLockModal()}
+        {renderAllModals()}
       </div>
     )
   }
@@ -1657,86 +1935,7 @@ export function BlockItem({
             )}
           </div>
 
-          <Group
-            gap={0}
-            wrap="nowrap"
-            className={`transition-opacity duration-150 ${
-              isBlockActive
-                ? 'opacity-100 pointer-events-auto'
-                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
-            }`}
-            style={{ flex: 'none' }}
-          >
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
-              aria-label={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              title={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              onClick={() => {
-                setLockError(null)
-                setShowLockConfigModal(true)
-              }}
-            >
-              {isProtected ? (
-                <IconLock size={16} aria-hidden="true" />
-              ) : isUnprotected ? (
-                <IconShieldOff size={16} aria-hidden="true" />
-              ) : (
-                <IconShieldLock size={16} aria-hidden="true" />
-              )}
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveUp?.(index)}
-              disabled={index === 0}
-              title="Move attachment block up"
-              aria-label="Move attachment block up"
-            >
-              <IconChevronUp size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveDown?.(index)}
-              disabled={index === totalBlocks - 1}
-              title="Move attachment block down"
-              aria-label="Move attachment block down"
-            >
-              <IconChevronDown size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDuplicate?.(block.id)}
-              title="Duplicate block"
-              aria-label="Duplicate block"
-            >
-              <IconCopy size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDelete?.(block.id)}
-              title="Delete block"
-              aria-label="Delete block"
-            >
-              <IconTrash size={16} aria-hidden="true" />
-            </ActionIcon>
-          </Group>
+          {renderActionIcons('file attachment')}
         </div>
 
         {/* Row 2: Grip on left, Attachment card & controls on right */}
@@ -1756,7 +1955,87 @@ export function BlockItem({
                 : grip}
             </span>
           ) : null}
-          {block.blob !== undefined || block.fileName !== undefined ? (
+          {isProtected ? (
+            <div className="flex-1 min-w-0">
+              {isPeeked && (peekedBlob || attachmentBlob) ? (
+                <div
+                  className="flex items-center justify-between p-1.5 px-2.5 rounded border gap-2 w-full sm:w-1/3 min-w-[200px]"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    borderColor: 'color-mix(in srgb, var(--qrbit-locked) 35%, transparent)',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
+                >
+                  <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        flex: 'none',
+                        width: 28,
+                        height: 28,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'var(--qrbit-locked)',
+                        backgroundColor: 'var(--qrbit-raised)',
+                        borderRadius: 'var(--qrbit-radius-sm)',
+                      }}
+                    >
+                      <IconFile size={16} />
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <Text span className="qrbit-text-body block truncate text-[13px] leading-tight" truncate>
+                        {block.fileName ?? 'Selected file'}
+                      </Text>
+                      <Text span className="qrbit-text-data block text-[11px] leading-tight" c="dimmed">
+                        {attachmentSizeLabel ?? ''}
+                      </Text>
+                    </div>
+                  </Group>
+                  <Badge size="xs" variant="light" color="locked">
+                    Peeked
+                  </Badge>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center gap-2.5 p-2 px-3 rounded border w-full sm:w-1/2 min-w-[220px]"
+                  style={{
+                    backgroundColor: 'var(--qrbit-sunken)',
+                    borderColor: 'color-mix(in srgb, var(--qrbit-locked) 35%, transparent)',
+                    borderRadius: 'var(--qrbit-radius-sm)',
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      flex: 'none',
+                      width: 28,
+                      height: 28,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--qrbit-locked)',
+                      backgroundColor: 'var(--qrbit-raised)',
+                      borderRadius: 'var(--qrbit-radius-sm)',
+                    }}
+                  >
+                    <IconLock size={16} />
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <Text span className="qrbit-text-body block truncate text-[13px] leading-tight font-medium" truncate>
+                      {block.fileName ?? 'Encrypted file'}
+                    </Text>
+                    <Text span className="qrbit-text-data block text-[11px] leading-tight" c="dimmed">
+                      {attachmentSizeLabel ? `${attachmentSizeLabel} • ` : ''}PBKDF2 + AES-256-GCM
+                    </Text>
+                  </div>
+                </div>
+              )}
+              <p className="qrbit-text-body-secondary text-xs mt-1" style={{ color: 'var(--qrbit-ink-muted)' }} data-attachment-locked="true">
+                This block is locked. Remove the lock to choose a different file.
+              </p>
+            </div>
+          ) : block.blob !== undefined || block.fileName !== undefined ? (
             <div className="flex-1 min-w-0">
               <div
                 className="flex items-center justify-between p-1.5 px-2.5 rounded border gap-2 w-full sm:w-1/3 min-w-[200px]"
@@ -1814,29 +2093,23 @@ export function BlockItem({
                 </ActionIcon>
               </div>
 
-              {!isProtected ? (
-                <div style={{ display: 'none' }}>
-                  <AttachmentPicker
-                    blockType="fileAttachment"
-                    label="Choose file"
-                    maxBytes={attachmentMaxBytes}
-                    onSelect={(attachment) => {
-                      setAttachmentPickerError(null)
-                      onUpdate?.(block.id, {
-                        blob: attachment.blob,
-                        fileName: attachment.fileName,
-                        mimeType: attachment.mimeType,
-                        fileSize: attachment.sizeInBytes,
-                      })
-                    }}
-                    onReject={(msg) => setAttachmentPickerError(msg)}
-                  />
-                </div>
-              ) : (
-                <p className="qrbit-text-body-secondary text-xs mt-1" style={{ color: 'var(--qrbit-ink-muted)' }} data-attachment-locked="true">
-                  This block is locked. Remove the lock to choose a different file.
-                </p>
-              )}
+              <div style={{ display: 'none' }}>
+                <AttachmentPicker
+                  blockType="fileAttachment"
+                  label="Choose file"
+                  maxBytes={attachmentMaxBytes}
+                  onSelect={(attachment) => {
+                    setAttachmentPickerError(null)
+                    onUpdate?.(block.id, {
+                      blob: attachment.blob,
+                      fileName: attachment.fileName,
+                      mimeType: attachment.mimeType,
+                      fileSize: attachment.sizeInBytes,
+                    })
+                  }}
+                  onReject={(msg) => setAttachmentPickerError(msg)}
+                />
+              </div>
             </div>
           ) : (
             <div className="flex-1 min-w-0">
@@ -1866,7 +2139,7 @@ export function BlockItem({
           )}
         </div>
 
-        {renderLockModal()}
+        {renderAllModals()}
       </div>
     )
   }
@@ -1931,86 +2204,7 @@ export function BlockItem({
             )}
           </div>
 
-          <Group
-            gap={0}
-            wrap="nowrap"
-            style={{ flex: 'none' }}
-            className={`transition-opacity duration-150 ${
-              isBlockActive
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
-            }`}
-          >
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              data-status={isProtected ? 'locked' : isUnprotected ? 'danger' : undefined}
-              aria-label={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              title={
-                isProtected
-                  ? 'Manage encryption for this block'
-                  : 'Encrypt this block with a password'
-              }
-              onClick={() => {
-                setLockError(null)
-                setShowLockConfigModal(true)
-              }}
-            >
-              {isProtected ? (
-                <IconLock size={16} aria-hidden="true" />
-              ) : isUnprotected ? (
-                <IconShieldOff size={16} aria-hidden="true" />
-              ) : (
-                <IconShieldLock size={16} aria-hidden="true" />
-              )}
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveUp?.(index)}
-              disabled={index === 0}
-              title="Move locked block up"
-              aria-label="Move locked block up"
-            >
-              <IconChevronUp size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onMoveDown?.(index)}
-              disabled={index === totalBlocks - 1}
-              title="Move locked block down"
-              aria-label="Move locked block down"
-            >
-              <IconChevronDown size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDuplicate?.(block.id)}
-              title="Duplicate block"
-              aria-label="Duplicate block"
-            >
-              <IconCopy size={16} aria-hidden="true" />
-            </ActionIcon>
-
-            <ActionIcon
-              variant="subtle"
-              size="md"
-              onClick={() => onDelete?.(block.id)}
-              title="Delete block"
-              aria-label="Delete block"
-            >
-              <IconTrash size={16} aria-hidden="true" />
-            </ActionIcon>
-          </Group>
+          {renderActionIcons('locked block')}
         </div>
 
         {/* Row 2: Grip on left, Secret content / unlock on right */}
@@ -2032,12 +2226,14 @@ export function BlockItem({
           ) : null}
           <div className="flex-1 min-w-0">
             {isProtected ? (
-              block.isUnlocked ? (
+              isPeeked || block.isUnlocked ? (
                 <div className="flex items-center justify-between gap-3 p-2 rounded" style={{ backgroundColor: 'var(--qrbit-sunken)' }}>
                   <Text span data-revealed="true" className="qrbit-text-body font-mono text-sm" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                    {revealedPlaintext}
+                    {peekedContent ?? revealedPlaintext}
                   </Text>
-                  <Badge variant="light" color="success" size="xs">Revealed</Badge>
+                  <Badge variant="light" color={isPeeked ? 'locked' : 'success'} size="xs">
+                    {isPeeked ? 'Peeked' : 'Revealed'}
+                  </Badge>
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-3 p-2 rounded" style={{ backgroundColor: 'var(--qrbit-sunken)' }}>
@@ -2138,7 +2334,7 @@ export function BlockItem({
           </div>
         </div>
 
-        {renderLockModal()}
+        {renderAllModals()}
       </div>
     )
   }
@@ -2216,81 +2412,7 @@ export function BlockItem({
         <Group gap="xs" wrap="nowrap" style={{ flex: 'none' }}>
           {renderStatusPill()}
 
-          {mode === 'edit' && (
-            <Group gap={0} wrap="nowrap">
-              {/* Lock / Unlock Toggle Button */}
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                c={isProtected ? 'locked' : isUnprotected ? 'danger' : 'dimmed'}
-                aria-label={
-                  isProtected
-                    ? 'Manage encryption for this block'
-                    : 'Encrypt this block with a password'
-                }
-                title={
-                  isProtected
-                    ? 'Manage encryption for this block'
-                    : 'Encrypt this block with a password'
-                }
-                onClick={() => {
-                  setLockError(null)
-                  setShowLockConfigModal(true)
-                }}
-              >
-                {isProtected ? (
-                  <IconLock size={16} aria-hidden="true" />
-                ) : isUnprotected ? (
-                  <IconShieldOff size={16} aria-hidden="true" />
-                ) : (
-                  <IconShieldLock size={16} aria-hidden="true" />
-                )}
-              </ActionIcon>
-
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                c="dimmed"
-                onClick={() => onMoveUp?.(index)}
-                disabled={index === 0}
-                title={`Move ${block.type} block up`}
-                aria-label={`Move ${block.type} block up`}
-              >
-                <IconChevronUp size={16} aria-hidden="true" />
-              </ActionIcon>
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                c="dimmed"
-                onClick={() => onMoveDown?.(index)}
-                disabled={index === totalBlocks - 1}
-                title={`Move ${block.type} block down`}
-                aria-label={`Move ${block.type} block down`}
-              >
-                <IconChevronDown size={16} aria-hidden="true" />
-              </ActionIcon>
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                c="dimmed"
-                onClick={() => onDuplicate?.(block.id)}
-                title="Duplicate block"
-                aria-label="Duplicate block"
-              >
-                <IconCopy size={16} aria-hidden="true" />
-              </ActionIcon>
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                c="dimmed"
-                onClick={() => onDelete?.(block.id)}
-                title="Delete block"
-                aria-label="Delete block"
-              >
-                <IconTrash size={16} aria-hidden="true" />
-              </ActionIcon>
-            </Group>
-          )}
+          {mode === 'edit' && renderActionIcons(block.type)}
         </Group>
       </div>
 
@@ -2780,9 +2902,7 @@ export function BlockItem({
         )}
       </div>
 
-      {/* Lock dialog */}
-      {renderLockModal()}
-      {renderImageViewerModal()}
+      {renderAllModals()}
     </div>
   )
 }
