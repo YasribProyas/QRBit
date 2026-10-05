@@ -1,6 +1,6 @@
 {
-  "name": "QRBit",
-  "short_name": "QRBit",
+  "name": "QRward",
+  "short_name": "QRward",
   "description": "Scan a QR code. Files appear. No login. No cloud. No trace.",
   "start_url": "/",
   "scope": "/",

@@ -86,7 +86,7 @@
  * state in this file is which half of the shell the library is currently in.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
   Alert,
@@ -230,6 +230,16 @@ export function HomeView({
     getInitialValueInEffect: false,
   })
   const [libraryOpen, setLibraryOpen] = useState(false)
+  const prevEditorRef = useRef(editor)
+
+  useEffect(() => {
+    if (editor !== prevEditorRef.current) {
+      prevEditorRef.current = editor
+      if (editor) {
+        setLibraryOpen(false)
+      }
+    }
+  }, [editor])
 
   return (
     <WithMantine>
@@ -261,9 +271,9 @@ export function HomeView({
               />
             ) : null}
 
-            <img src="/favicon.svg" alt="QRBit" width={30} height={30} />
+            <img src="/favicon.svg" alt="QRward" width={30} height={30} />
             <Text className="qrbit-text-display font-bold tracking-tight" component="h1">
-              QRBit
+              QRward
             </Text>
             <Badge
               variant="outline"
@@ -434,11 +444,11 @@ export function HomeView({
             <button
               type="button"
               className="home__scan home__fab tactile-btn"
-              aria-label="Scan QRBit"
+              aria-label="Scan QRward"
               style={FAB_STYLE}
               onClick={onOpenScanner}
             >
-              <span className="home__scan-text">Scan QRBit</span>
+              <span className="home__scan-text">Scan QRward</span>
               <span className="home__scan-glyph">
                 <IconQrcode size={30} stroke={1.7} aria-hidden="true" />
               </span>

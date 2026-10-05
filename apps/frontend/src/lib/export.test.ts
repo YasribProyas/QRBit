@@ -442,11 +442,11 @@ describe('importLibrary', () => {
 
   it('refuses a file that is not an export, and a version it does not know', async () => {
     await expect(importLibrary(new File(['not json at all'], 'junk.qrbit'), {})).rejects.toThrow(
-      'This file is not a QRBit library export.',
+      'This file is not a QRward library export.',
     )
     await expect(
       importLibrary(new File([JSON.stringify({ nonsense: true })], 'other.json'), {}),
-    ).rejects.toThrow('This file is not a QRBit library export.')
+    ).rejects.toThrow('This file is not a QRward library export.')
 
     const future = new File(
       [JSON.stringify({ version: 2, exportedAt: NOW, encrypted: false, folders: [], items: [] })],

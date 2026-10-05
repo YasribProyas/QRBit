@@ -33,7 +33,7 @@ function createSuccessMockFetch(urls: string[] = [
 }
 
 describe('clampTurnTtl', () => {
-  it('returns DEFAULT_TURN_TTL_SECONDS (600) when undefined or not finite', () => {
+  it('returns DEFAULT_TURN_TTL_SECONDS (300) when undefined or not finite', () => {
     expect(clampTurnTtl(undefined)).toBe(DEFAULT_TURN_TTL_SECONDS)
     expect(clampTurnTtl(Number.NaN)).toBe(DEFAULT_TURN_TTL_SECONDS)
     expect(clampTurnTtl(Number.POSITIVE_INFINITY)).toBe(DEFAULT_TURN_TTL_SECONDS)
@@ -128,7 +128,7 @@ describe('generateTurnCredentials', () => {
 
     expect(body.ttl).toBe(300)
     expect(body.customIdentifier).toContain(SESSION_CODE)
-    expect(body.customIdentifier).toBe(`qrbit:${SESSION_CODE}`)
+    expect(body.customIdentifier).toBe(`qrward:${SESSION_CODE}`)
     expect(body.customIdentifier.length).toBeLessThanOrEqual(128)
   })
 

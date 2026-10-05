@@ -103,7 +103,7 @@ export function Session() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
           <header className="page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Link className="link" to="/" style={{ textDecoration: 'none', color: 'var(--accent)', fontWeight: 550 }}>
-              ← QRBit
+              ← QRward
             </Link>
             <span className="badge">{session.role ?? 'assigning'}</span>
           </header>

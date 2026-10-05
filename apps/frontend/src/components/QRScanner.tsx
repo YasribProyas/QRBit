@@ -72,7 +72,7 @@ interface ScannerFailureCopy {
 const FAILURE_COPY: Readonly<Record<ScannerFailureKind, ScannerFailureCopy>> = {
   'permission-denied': {
     title: 'Camera access is blocked',
-    message: 'QRBit needs the camera to read a code.',
+    message: 'QRward needs the camera to read a code.',
     hint:
       'Allow camera access for this site, then open the scanner again: tap the lock or ⓘ icon in the address bar → Permissions → Camera → Allow. On iOS, use Settings → Safari → Camera.',
   },
@@ -83,7 +83,7 @@ const FAILURE_COPY: Readonly<Record<ScannerFailureKind, ScannerFailureCopy>> = {
   },
   unavailable: {
     title: 'Scanning is not available here',
-    message: 'This browser has no QR scanner QRBit can use.',
+    message: 'This browser has no QR scanner QRward can use.',
     hint:
       'You can still pair: open the session link on the other device, or type the 8-character code by hand.',
   },
@@ -434,7 +434,7 @@ export function QRScanner({
       >
         <div className="qr-scanner__panel" style={PANEL_STYLE}>
           <Title order={2} id={titleId} className="qr-scanner__title">
-            Scan a QRBit code
+            Scan a QRward code
           </Title>
 
           {failure === null ? (

@@ -71,7 +71,7 @@ const ENCRYPTED_MIME_TYPE = 'application/octet-stream'
 /** The one message a failed decryption gets, whatever Web Crypto named the failure. */
 const WRONG_PASSWORD_MESSAGE = 'Wrong password or corrupted file'
 
-const NOT_EXPORT_MESSAGE = 'This file is not a QRBit library export.'
+const NOT_EXPORT_MESSAGE = 'This file is not a QRward library export.'
 
 // ---------------------------------------------------------------------------
 // Manifest types (PLAN.md §14)

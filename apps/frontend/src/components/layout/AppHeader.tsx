@@ -99,7 +99,7 @@ export function AppHeader({
             to="/"
             className="app-header__brand"
             style={{ textDecoration: 'none', color: 'inherit' }}
-            aria-label="QRBit — home"
+            aria-label="QRward — home"
           >
             <Group gap="sm" wrap="nowrap" align="center">
               <img src="/favicon.svg" alt="" width={30} height={30} style={{ display: 'block' }} />
@@ -108,7 +108,7 @@ export function AppHeader({
                 component="span"
                 style={{ whiteSpace: 'nowrap' }}
               >
-                QRBit
+                QRward
               </Text>
               <Badge
                 variant="outline"

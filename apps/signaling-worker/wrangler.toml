@@ -7,7 +7,7 @@ SESSION_TTL_SECONDS = "300"
 # TURN credential lifetime. QRBit sessions last minutes, not hours, so this is
 # deliberately short: a harvested credential's abuse window is bounded by this value.
 # Cloudflare's maximum is 172800 (48h); PLAN.md §13's 3600 was a coturn-style default.
-TURN_TTL_SECONDS = "600"
+TURN_TTL_SECONDS = "300"
 # Cloudflare Realtime TURN key identifier (NOT a secret — the secret is the
 # TURN_KEY_SECRET secure value, set with `wrangler secret put TURN_KEY_SECRET`).
 # Left blank until provisioned: an absent key makes the worker hand out no TURN

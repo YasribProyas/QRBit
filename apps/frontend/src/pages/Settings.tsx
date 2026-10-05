@@ -186,7 +186,7 @@ export function Settings(): ReactElement {
       setFile(null)
       setNeedsPassword(false)
       setHeaderReading(false)
-      setError(`That is not a ${EXPORT_FILE_EXTENSION} file. Choose a QRBit export.`)
+      setError(`That is not a ${EXPORT_FILE_EXTENSION} file. Choose a QRward export.`)
       return
     }
 

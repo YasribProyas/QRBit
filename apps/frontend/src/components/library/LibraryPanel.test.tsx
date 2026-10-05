@@ -1685,3 +1685,41 @@ describe('LibraryPanel — the dossier menu', () => {
     expect(sectionNamed('Vault').files).toEqual(['Alpha'])
   })
 })
+
+describe('LibraryPanel — instant search & filtering', () => {
+  it('filters dossiers by search query across folders and root', async () => {
+    const vault = await seedFolder('Vault')
+    await seedFile('API keys', vault.id, 1000)
+    await seedFile('Deployment runbook', vault.id, 2000)
+    await seedFile('Loose end', ROOT_FOLDER_ID, 1000)
+    await loadLibrary()
+
+    renderPanel()
+
+    const searchInput = inputIn(panel(), 'input[placeholder="Search dossiers..."]', 'search input')
+    typeInto(searchInput, 'API')
+
+    expect(panel().textContent).toContain('API keys')
+    expect(panel().textContent).not.toContain('Deployment runbook')
+    expect(panel().textContent).not.toContain('Loose end')
+
+    // Clear search
+    typeInto(searchInput, '')
+    expect(panel().textContent).toContain('API keys')
+    expect(panel().textContent).toContain('Deployment runbook')
+    expect(panel().textContent).toContain('Loose end')
+  })
+
+  it('shows empty search state when no dossiers match query', async () => {
+    const vault = await seedFolder('Vault')
+    await seedFile('API keys', vault.id, 1000)
+    await loadLibrary()
+
+    renderPanel()
+
+    const searchInput = inputIn(panel(), 'input[placeholder="Search dossiers..."]', 'search input')
+    typeInto(searchInput, 'NonExistentDossier999')
+
+    expect(panel().textContent).toContain('No dossiers found matching “NonExistentDossier999”')
+  })
+})

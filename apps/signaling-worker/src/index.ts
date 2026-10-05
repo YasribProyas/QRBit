@@ -1,6 +1,6 @@
 import { generateSessionCode, isValidSessionCode } from './codes'
 import { clampTurnTtl, generateTurnCredentials } from './turn'
-import type { SessionNewResponse, SessionTurnResponse } from './types'
+import type { SessionNewResponse, SessionTurnResponse, TurnCredentials } from './types'
 
 /**
  * wrangler resolves the Durable Object class from the main module, so the binding
@@ -24,20 +24,20 @@ export { SessionDurableObject } from './session'
 
 const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173'
 
-/** Rate limit caps per IP per 60s window (Change 2). */
-const RATE_LIMIT_NEW_SESSION_CAP = 20
-const RATE_LIMIT_TURN_CAP = 20
+/** Rate limit caps per IP per 60s window. */
+const RATE_LIMIT_NEW_SESSION_CAP = 10
+const RATE_LIMIT_TURN_CAP = 8
 const RATE_LIMIT_JOIN_CAP = 10
 const RATE_LIMIT_WINDOW_SECONDS = 60
 
+/** Maximum number of TURN credential requests per session code across all clients. */
+const MAX_TURN_REQUESTS_PER_SESSION = 4
+
 /**
  * How long a minted code counts as "issued" for the purposes of buying relay
- * credentials (D10). Comfortably longer than SESSION_TTL_SECONDS so it can never
- * expire while the session is still legitimately joinable, and short enough that an
- * abandoned code stops being able to mint credentials soon after it dies — the DO can
- * be revived by a request, but a lapsed marker cannot.
+ * credentials (D10). 360s (300s session + 60s grace).
  */
-const ISSUED_CODE_KV_TTL_SECONDS = 900
+const ISSUED_CODE_KV_TTL_SECONDS = 360
 
 const SESSION_SOCKET_PATH = /^\/session\/([^/]+)\/ws$/
 const SESSION_TURN_PATH = /^\/session\/([^/]+)\/turn$/
@@ -74,12 +74,17 @@ export default {
       securityHeaders({ connectSrc: cspConnectSrc(env) }),
     )
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: baseHeaders })
-    }
-
     if (url.pathname === '/healthz') {
       return new Response('ok', { status: 200, headers: baseHeaders })
+    }
+
+    const origin = request.headers.get('Origin')
+    if (origin !== null && !allowedOrigins(env).includes(origin)) {
+      return json({ error: 'Forbidden origin' }, 403, baseHeaders)
+    }
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: baseHeaders })
     }
 
     if (url.pathname === '/session/new') {
@@ -167,6 +172,25 @@ async function handleTurnCredentials(
     return json({ error: 'Rate limit exceeded' }, 429, baseHeaders)
   }
 
+  // Per-session quota: protect against botnet / distributed TURN credential harvesting.
+  // A session code only ever needs TURN for host and guest (max 4 fetches total).
+  if (await isSessionTurnQuotaExceeded(code, env)) {
+    return json({ error: 'Session TURN quota exceeded' }, 429, baseHeaders)
+  }
+
+  // Per-session KV credential caching: host and guest share credentials, cutting external
+  // Cloudflare API calls by 50%+ and preventing re-minting on network retries.
+  const cached = await getCachedTurnCredentials(code, env)
+  if (cached !== null) {
+    const body: SessionTurnResponse = {
+      iceServers: cached.iceServers,
+      urls: cached.urls,
+      username: cached.username,
+      credential: cached.credential,
+    }
+    return json(body, 200, baseHeaders)
+  }
+
   const keyId = env.TURN_KEY_ID
   const keySecret = env.TURN_KEY_SECRET
   const ttl = resolveTurnTtlSeconds(env)
@@ -177,6 +201,8 @@ async function handleTurnCredentials(
     // 503 when credentials unavailable (e.g. absent keys or Cloudflare API error)
     return json({ error: 'TURN unavailable' }, 503, baseHeaders)
   }
+
+  await setCachedTurnCredentials(code, credentials, ttl, env)
 
   const body: SessionTurnResponse = {
     iceServers: credentials.iceServers,
@@ -272,6 +298,80 @@ async function codeIssuedStatus(code: string, env: Env): Promise<'issued' | 'abs
     return (await kv.get(`issued:${code}`)) !== null ? 'issued' : 'absent'
   } catch {
     return 'unknown'
+  }
+}
+
+/**
+ * Per-session fetch quota for TURN credentials.
+ * Even if an attacker uses multiple IPs to request credentials for a valid session code,
+ * the total number of TURN fetches for that code is strictly capped.
+ */
+async function isSessionTurnQuotaExceeded(code: string, env: Env): Promise<boolean> {
+  const kv = rateLimitBinding(env)
+  if (kv === undefined) return false
+
+  const key = `turn_count:${code}`
+  try {
+    const stored = await kv.get(key)
+    const previous = stored === null ? 0 : Number(stored)
+    const count = (Number.isFinite(previous) ? previous : 0) + 1
+
+    if (count > MAX_TURN_REQUESTS_PER_SESSION) {
+      return true
+    }
+
+    await kv.put(key, String(count), { expirationTtl: ISSUED_CODE_KV_TTL_SECONDS })
+    return false
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Retrieves cached TURN credentials for a session from KV.
+ */
+async function getCachedTurnCredentials(code: string, env: Env): Promise<TurnCredentials | null> {
+  const kv = rateLimitBinding(env)
+  if (kv === undefined) return null
+
+  try {
+    const raw = await kv.get(`turn_cred:${code}`)
+    if (raw === null) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Array.isArray((parsed as Record<string, unknown>).iceServers) &&
+      Array.isArray((parsed as Record<string, unknown>).urls) &&
+      typeof (parsed as Record<string, unknown>).username === 'string' &&
+      typeof (parsed as Record<string, unknown>).credential === 'string'
+    ) {
+      return parsed as TurnCredentials
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Stores minted TURN credentials in KV for the lifetime of the session.
+ */
+async function setCachedTurnCredentials(
+  code: string,
+  credentials: TurnCredentials,
+  ttlSeconds: number,
+  env: Env,
+): Promise<void> {
+  const kv = rateLimitBinding(env)
+  if (kv === undefined) return
+
+  try {
+    await kv.put(`turn_cred:${code}`, JSON.stringify(credentials), {
+      expirationTtl: Math.max(60, ttlSeconds),
+    })
+  } catch {
+    // Fail open: failure to cache in KV must not fail the request
   }
 }
 

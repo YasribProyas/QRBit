@@ -104,7 +104,9 @@ import {
   IconLockOpen,
   IconPencil,
   IconPlus,
+  IconSearch,
   IconTrash,
+  IconX,
 } from '@tabler/icons-react'
 
 import { ConfirmDelete } from '../ConfirmDelete'
@@ -294,6 +296,7 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
 
   /** Collapsed folders only — see the module comment for why this is the inverted form. */
   const [collapsedFolders, setCollapsedFolders] = useState<string[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
   const [newFolderOpen, setNewFolderOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   /** The dossier whose "Move to folder" dialog is open; `null` means none. */
@@ -443,9 +446,30 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
   // One level, in the one order the library UI uses; a dossier in a folder this panel
   // does not list (the root, a subfolder, or a folder that went away) belongs to `Root`.
   const listedFolders = siblingFolders(folders, null)
-  const rootFiles = files.filter(
+  const normalizedQuery = searchQuery.trim().toLowerCase()
+
+  const matchesFile = (file: LibraryFile): boolean => {
+    if (file.name.toLowerCase().includes(normalizedQuery)) return true
+    for (const b of file.blocks || []) {
+      if (b.content?.toLowerCase().includes(normalizedQuery)) return true
+      if (b.value?.toLowerCase().includes(normalizedQuery)) return true
+      if (b.label?.toLowerCase().includes(normalizedQuery)) return true
+      if (b.fileName?.toLowerCase().includes(normalizedQuery)) return true
+      if (b.caption?.toLowerCase().includes(normalizedQuery)) return true
+    }
+    return false
+  }
+
+  const filteredFiles = normalizedQuery ? files.filter(matchesFile) : files
+  const rootFiles = filteredFiles.filter(
     (file) => !listedFolders.some((folder) => folder.id === file.folderId),
   )
+  const displayedFolders = normalizedQuery
+    ? listedFolders.filter((folder) => {
+        if (folder.name.toLowerCase().includes(normalizedQuery)) return true
+        return filteredFiles.some((f) => f.folderId === folder.id)
+      })
+    : listedFolders
 
   const actions: PanelActions = {
     activeFileId,
@@ -631,6 +655,35 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
           </Button>
         </Group>
 
+        <TextInput
+          placeholder="Search dossiers..."
+          size="sm"
+          leftSection={<IconSearch size={16} stroke={1.6} style={{ color: 'var(--qrbit-ink-muted)' }} aria-hidden="true" />}
+          rightSection={
+            searchQuery ? (
+              <ActionIcon
+                variant="subtle"
+                size="xs"
+                color="gray"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+              >
+                <IconX size={14} aria-hidden="true" />
+              </ActionIcon>
+            ) : null
+          }
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.currentTarget.value)}
+          styles={{
+            input: {
+              backgroundColor: 'var(--qrbit-sunken)',
+              borderColor: 'var(--qrbit-border)',
+              color: 'var(--qrbit-ink)',
+              fontSize: '13px',
+            },
+          }}
+        />
+
         {error !== null ? (
           <Alert
             className="library-panel__error"
@@ -667,46 +720,62 @@ export function LibraryPanel({ onSelectFile, onCreateFile, activeFileId }: Libra
             {/*
               `Root` first, always: it is where a dossier goes when it has no folder, and
               where a dossier in a folder this panel does not list still turns up.
-              Rendering it unconditionally is what keeps nothing unreachable.
+              Rendering it unconditionally when not searching, or when root has matching dossiers.
             */}
-            <FolderSection
-              first
-              folder={null}
-              files={rootFiles}
-              actions={actions}
-              collapsed={collapsedFolders.includes(ROOT_FOLDER_ID)}
-              onToggleCollapsed={() => {
-                toggleFolder(ROOT_FOLDER_ID)
-              }}
-              handleProps={null}
-              dragOffset={null}
-              // Root is the bucket, so its empty line has to be true about the whole library:
-              // with no folders at all, "every dossier is inside a folder you can see" would be
-              // a statement about nothing.
-              emptyHint={
-                folders.length === 0
-                  ? 'Nothing here yet — the plus on this row starts a dossier that is not in a folder.'
-                  : 'Nothing here — every dossier is inside a folder you can see.'
-              }
-            />
+            {(!normalizedQuery || rootFiles.length > 0) && (
+              <FolderSection
+                first
+                folder={null}
+                files={rootFiles}
+                actions={actions}
+                collapsed={normalizedQuery ? false : collapsedFolders.includes(ROOT_FOLDER_ID)}
+                onToggleCollapsed={() => {
+                  toggleFolder(ROOT_FOLDER_ID)
+                }}
+                handleProps={null}
+                dragOffset={null}
+                // Root is the bucket, so its empty line has to be true about the whole library:
+                // with no folders at all, "every dossier is inside a folder you can see" would be
+                // a statement about nothing.
+                emptyHint={
+                  folders.length === 0
+                    ? 'Nothing here yet — the plus on this row starts a dossier that is not in a folder.'
+                    : 'Nothing here — every dossier is inside a folder you can see.'
+                }
+              />
+            )}
 
-            {listedFolders.map((folder, index) => (
+            {displayedFolders.map((folder, index) => (
               <FolderSection
                 key={folder.id}
                 folder={folder}
-                files={files.filter((file) => file.folderId === folder.id)}
+                files={filteredFiles.filter((file) => file.folderId === folder.id)}
                 actions={actions}
-                collapsed={collapsedFolders.includes(folder.id)}
+                collapsed={normalizedQuery ? false : collapsedFolders.includes(folder.id)}
                 onToggleCollapsed={() => {
                   toggleFolder(folder.id)
                 }}
-                handleProps={getFolderHandleProps(index)}
+                handleProps={normalizedQuery ? null : getFolderHandleProps(index)}
                 dragOffset={folderDrag !== null && folderDrag.from === index ? folderDrag.offset : null}
                 emptyHint={`No dossiers in ${folder.name} yet.`}
               />
             ))}
 
-            {folders.length === 0 ? (
+            {normalizedQuery && displayedFolders.length === 0 && rootFiles.length === 0 ? (
+              <div className="p-8 text-center" style={{ color: 'var(--qrbit-ink-secondary)' }}>
+                <p className="text-sm font-medium">No dossiers found matching &ldquo;{searchQuery}&rdquo;</p>
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  mt="xs"
+                  onClick={() => setSearchQuery('')}
+                >
+                  Clear search
+                </Button>
+              </div>
+            ) : null}
+
+            {!normalizedQuery && folders.length === 0 ? (
               // `.empty` is the stylesheet's dashed empty state, which is token values and
               // radius sm — this is the one place in the panel that asks for it, because it is
               // the one place with nothing inside it at all. It names the two controls that

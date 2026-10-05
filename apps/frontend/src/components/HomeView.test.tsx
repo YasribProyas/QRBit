@@ -490,13 +490,13 @@ describe('HomeView — the link a peer opens (D17 items 2, 3)', () => {
 })
 
 describe('HomeView — the floating scan control (D17 item 4)', () => {
-  it('is labelled "Scan QRBit" on the left of the icon, and outside the panel it belongs to', () => {
+  it('is labelled "Scan QRward" on the left of the icon, and outside the panel it belongs to', () => {
     stubViewport(1280)
     const element = renderView()
 
     const scan = one(element, '.home__scan', 'the scan control')
-    expect(scan.getAttribute('aria-label')).toBe('Scan QRBit')
-    expect(scan.textContent).toContain('Scan QRBit')
+    expect(scan.getAttribute('aria-label')).toBe('Scan QRward')
+    expect(scan.textContent).toContain('Scan QRward')
     expect(scan.closest('.home__pairing-panel')).toBe(null)
     expect(scan.closest('.session-qr')).toBe(null)
     expect(scan.closest('.manual-code')).toBe(null)
@@ -613,7 +613,7 @@ describe('HomeView — the floating scan control (D17 item 4)', () => {
     const element = renderView()
 
     expect(element.textContent).not.toContain('selected')
-    expect(one(element, '.home__scan', 'the scan control').textContent).toContain('Scan QRBit')
+    expect(one(element, '.home__scan', 'the scan control').textContent).toContain('Scan QRward')
   })
 })
 

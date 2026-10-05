@@ -16,7 +16,7 @@ import type { TurnCredentials } from './types'
  */
 
 /** Default TURN credential lifetime in seconds (wrangler.toml TURN_TTL_SECONDS). */
-export const DEFAULT_TURN_TTL_SECONDS = 600
+export const DEFAULT_TURN_TTL_SECONDS = 300
 
 /** Cloudflare API bounds on TTL: 1 second minimum, 48 hours maximum (172800 seconds). */
 export const MIN_TURN_TTL_SECONDS = 1
@@ -67,7 +67,7 @@ export async function generateTurnCredentials(
   const trimmedSecret = keySecret.trim()
   const trimmedCode = sessionCode.trim()
 
-  const customIdentifier = `qrbit:${trimmedCode}`.slice(0, MAX_CUSTOM_IDENTIFIER_LENGTH)
+  const customIdentifier = `qrward:${trimmedCode}`.slice(0, MAX_CUSTOM_IDENTIFIER_LENGTH)
   const ttl = clampTurnTtl(ttlSeconds)
 
   const url = `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(trimmedKeyId)}/credentials/generate`

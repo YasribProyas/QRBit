@@ -97,7 +97,7 @@ describe('worker security hardening & routes', () => {
       expect(data['turnCredentials']).toBeUndefined()
     })
 
-    it('is rate-limited (cap 20 per 60s window) and records the issued marker', async () => {
+    it('is rate-limited (cap 10 per 60s window) and records the issued marker', async () => {
       const { kv, store } = createKvStore()
       const env = createMockEnv({ RATE_LIMIT: kv })
       const makeReq = () =>
@@ -106,31 +106,31 @@ describe('worker security hardening & routes', () => {
         })
 
       const codes: string[] = []
-      for (let i = 1; i <= 20; i++) {
+      for (let i = 1; i <= 10; i++) {
         const res = await worker.fetch(makeReq(), env)
         expect(res.status).toBe(200)
         const data = (await res.json()) as { code: string }
         codes.push(data.code)
       }
 
-      // 21st request hits 429
-      const res21 = await worker.fetch(makeReq(), env)
-      expect(res21.status).toBe(429)
-      const err = (await res21.json()) as { error: string }
+      // 11th request hits 429
+      const res11 = await worker.fetch(makeReq(), env)
+      expect(res11.status).toBe(429)
+      const err = (await res11.json()) as { error: string }
       expect(err.error).toBe('Rate limit exceeded')
 
       // D10: every minted code carries an issued marker, because that marker is what
       // lets /session/:code/turn tell a real session from a well-formed guess. Each
       // code must get its own key — one shared key would make the gate meaningless.
       const issuedKeys = [...store.keys()].filter((key) => key.startsWith('issued:'))
-      expect(issuedKeys).toHaveLength(20)
+      expect(issuedKeys).toHaveLength(10)
       for (const code of codes) {
         expect(store.get(`issued:${code}`)).toBe('1')
       }
-      // The rejected 21st attempt leaves the counter at 20, not 21: the limiter returns
+      // The rejected 11th attempt leaves the counter at 10, not 11: the limiter returns
       // early once the cap is passed without writing, so a hammering client cannot push
       // its own window forward and extend the lockout.
-      expect(store.get('new:198.51.100.1')).toBe('20')
+      expect(store.get('new:198.51.100.1')).toBe('10')
     })
 
     it('checks Sec-Fetch-Mode: navigate -> 403', async () => {
@@ -303,23 +303,103 @@ describe('worker security hardening & routes', () => {
       }
     })
 
-    it('is rate-limited (cap 20 per 60s window)', async () => {
-      const env = createMockEnv({ RATE_LIMIT: issuedKv() })
-      const makeReq = () =>
-        new Request(`https://worker.internal/session/${validCode}/turn`, {
+    it('is rate-limited (cap 8 per 60s window per IP)', async () => {
+      const initialSeeds: Record<string, string> = {}
+      const alphabet = '23456789ABC'
+      for (let i = 0; i < 9; i++) {
+        initialSeeds[`issued:2345678${alphabet[i]}`] = '1'
+      }
+      const env = createMockEnv({ RATE_LIMIT: createMemoryKv(initialSeeds) })
+      const makeReq = (code: string) =>
+        new Request(`https://worker.internal/session/${code}/turn`, {
           headers: { 'CF-Connecting-IP': '198.51.100.2' },
         })
 
-      for (let i = 1; i <= 20; i++) {
-        const res = await worker.fetch(makeReq(), env)
+      for (let i = 0; i < 8; i++) {
+        const res = await worker.fetch(makeReq(`2345678${alphabet[i]}`), env)
         expect(res.status).toBe(503) // keys not set -> 503, but not rate limited yet
       }
 
-      // 21st request hits 429
-      const res21 = await worker.fetch(makeReq(), env)
-      expect(res21.status).toBe(429)
-      const err = (await res21.json()) as { error: string }
+      // 9th request from same IP hits 429
+      const res9 = await worker.fetch(makeReq(`2345678${alphabet[8]}`), env)
+      expect(res9.status).toBe(429)
+      const err = (await res9.json()) as { error: string }
       expect(err.error).toBe('Rate limit exceeded')
+    })
+
+    it('enforces per-session quota (max 4 TURN credential requests per session code)', async () => {
+      const env = createMockEnv({ RATE_LIMIT: issuedKv() })
+      const makeReq = (ip: string) =>
+        new Request(`https://worker.internal/session/${validCode}/turn`, {
+          headers: { 'CF-Connecting-IP': ip },
+        })
+
+      // 4 different IPs query the same session code
+      for (let i = 1; i <= 4; i++) {
+        const res = await worker.fetch(makeReq(`198.51.100.${i + 10}`), env)
+        expect(res.status).toBe(503) // passed quota and rate limits (keys not set -> 503)
+      }
+
+      // 5th request for this session code fails with session quota exceeded
+      const res5 = await worker.fetch(makeReq('198.51.100.99'), env)
+      expect(res5.status).toBe(429)
+      const err = (await res5.json()) as { error: string }
+      expect(err.error).toBe('Session TURN quota exceeded')
+    })
+
+    it('caches TURN credentials in KV and serves cached credentials without calling Cloudflare API again', async () => {
+      const originalFetch = globalThis.fetch
+      const cfFetchMock = vi.fn(async () => {
+        const body = {
+          iceServers: {
+            urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+            username: 'cached-user',
+            credential: 'cached-cred',
+          },
+        }
+        return new Response(JSON.stringify(body), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      })
+
+      const { kv, store } = createKvStore({ [`issued:${validCode}`]: '1' })
+      const env = createMockEnv({
+        TURN_KEY_ID: 'test-key-id',
+        TURN_KEY_SECRET: 'test-key-secret',
+        RATE_LIMIT: kv,
+      })
+
+      globalThis.fetch = cfFetchMock as unknown as typeof fetch
+
+      try {
+        // Request 1: hits Cloudflare API and caches in KV
+        const res1 = await worker.fetch(
+          new Request(`https://worker.internal/session/${validCode}/turn`, {
+            headers: { 'CF-Connecting-IP': '10.0.0.1' },
+          }),
+          env,
+        )
+        expect(res1.status).toBe(200)
+        expect(cfFetchMock).toHaveBeenCalledTimes(1)
+        expect(store.has(`turn_cred:${validCode}`)).toBe(true)
+
+        // Request 2 (e.g. from peer guest device with different IP): served from KV cache
+        const res2 = await worker.fetch(
+          new Request(`https://worker.internal/session/${validCode}/turn`, {
+            headers: { 'CF-Connecting-IP': '10.0.0.2' },
+          }),
+          env,
+        )
+        expect(res2.status).toBe(200)
+        const data2 = (await res2.json()) as { username: string; credential: string }
+        expect(data2.username).toBe('cached-user')
+        expect(data2.credential).toBe('cached-cred')
+        // Cloudflare API was NOT called again
+        expect(cfFetchMock).toHaveBeenCalledTimes(1)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
     })
   })
 
@@ -475,6 +555,21 @@ describe('worker security hardening & routes', () => {
       expect(csp).not.toContain('*.workers.dev')
       // CORS still reflects only the allowlisted origin that asked.
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://qrbit.example.com')
+    })
+
+    it('rejects requests with unauthorized Origin header with 403 Forbidden origin', async () => {
+      const env = createMockEnv({
+        ALLOWED_ORIGINS: 'https://qrbit.example.com',
+      })
+      const res = await worker.fetch(
+        new Request('https://worker.internal/session/new', {
+          headers: { Origin: 'https://malicious-attacker.com' },
+        }),
+        env,
+      )
+      expect(res.status).toBe(403)
+      const data = (await res.json()) as { error: string }
+      expect(data.error).toBe('Forbidden origin')
     })
 
     it('WebSocket upgrade challenge (426) does NOT include Content-Security-Policy', async () => {
