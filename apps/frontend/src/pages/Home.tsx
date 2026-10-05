@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Button, Group, Modal, Stack, Text } from '@mantine/core'
 
 import { HomeView } from '../components/HomeView'
 import { FileEditView } from '../components/library/FileEditView'
@@ -80,6 +81,13 @@ export function Home() {
   const [selectedFileForTransfer, setSelectedFileForTransfer] = useState<LibraryFile | null>(null)
   /** The live collaborative dossier shared across peer session */
   const [sharedDossier, setSharedDossier] = useState<LibraryFile | null>(null)
+  const sharedDossierDraftRef = useRef<LibraryFile | null>(null)
+
+  type SwitchTarget =
+    | { type: 'select'; file: LibraryFile; password?: string }
+    | { type: 'create'; folderId: string }
+
+  const [pendingSwitchTarget, setPendingSwitchTarget] = useState<SwitchTarget | null>(null)
   /**
    * Why the last Send put nothing on the channel, in words. Home owns it because Home owns the
    * conversion that refused, and a rejection with no catcher is an unhandled rejection — a page
@@ -251,8 +259,12 @@ export function Home() {
           sharedDossier ? (
             <FileEditView
               file={sharedDossier}
+              onChange={(draft) => {
+                sharedDossierDraftRef.current = draft
+              }}
               onBack={() => {
                 setSharedDossier(null)
+                sharedDossierDraftRef.current = null
                 setSelectedFileForTransfer(null)
                 if (session.phase === 'active' || session.phase === 'pairing') {
                   session.abort()
@@ -309,16 +321,122 @@ export function Home() {
           <LibraryPanel
             activeFileId={editingFile?.id}
             onSelectFile={(file, password) => {
-              setEditingFile(file)
-              setEditingPassword(password)
+              if (sharedDossier) {
+                setPendingSwitchTarget({ type: 'select', file, password })
+              } else {
+                setEditingFile(file)
+                setEditingPassword(password)
+              }
             }}
             onCreateFile={(folderId) => {
-              setEditingPassword(undefined)
-              handleCreateNewFile(folderId)
+              if (sharedDossier) {
+                setPendingSwitchTarget({ type: 'create', folderId })
+              } else {
+                setEditingPassword(undefined)
+                handleCreateNewFile(folderId)
+              }
             }}
           />
         }
       />
+
+      {/* Confirmation modal before leaving a live shared session to open/create another dossier */}
+      {pendingSwitchTarget !== null && (
+        <Modal
+          opened={true}
+          onClose={() => setPendingSwitchTarget(null)}
+          title="Leave shared dossier?"
+          centered
+          padding="md"
+          styles={{
+            header: {
+              borderBottom: '1px solid var(--qrbit-border)',
+              paddingBottom: 'var(--qrbit-space-sm)',
+            },
+            content: {
+              backgroundColor: 'var(--qrbit-surface)',
+              border: '1px solid var(--qrbit-border)',
+              borderRadius: 'var(--qrbit-radius-md)',
+            },
+          }}
+        >
+          <Stack gap="md" mt="sm">
+            <Text size="sm" c="var(--qrbit-ink)">
+              You are currently collaborating on a temporary shared dossier. Would you like to save a snapshot to your library before switching?
+            </Text>
+            <Group justify="flex-end" gap="xs">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setPendingSwitchTarget(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                color="danger"
+                variant="light"
+                size="sm"
+                onClick={() => {
+                  const target = pendingSwitchTarget
+                  setPendingSwitchTarget(null)
+                  setSharedDossier(null)
+                  sharedDossierDraftRef.current = null
+                  setSelectedFileForTransfer(null)
+                  session.abort()
+                  if (validCode) {
+                    navigate('/')
+                  } else {
+                    session.restart()
+                  }
+                  if (target?.type === 'select') {
+                    setEditingFile(target.file)
+                    setEditingPassword(target.password)
+                  } else if (target?.type === 'create') {
+                    setEditingPassword(undefined)
+                    handleCreateNewFile(target.folderId)
+                  }
+                }}
+              >
+                Discard
+              </Button>
+              <Button
+                color="signal"
+                size="sm"
+                onClick={async () => {
+                  const target = pendingSwitchTarget
+                  const draft = sharedDossierDraftRef.current ?? sharedDossier
+                  if (draft) {
+                    const toSave: LibraryFile = {
+                      ...draft,
+                      id: globalThis.crypto.randomUUID(),
+                    }
+                    await saveFile(toSave).catch(() => undefined)
+                  }
+                  setPendingSwitchTarget(null)
+                  setSharedDossier(null)
+                  sharedDossierDraftRef.current = null
+                  setSelectedFileForTransfer(null)
+                  session.abort()
+                  if (validCode) {
+                    navigate('/')
+                  } else {
+                    session.restart()
+                  }
+                  if (target?.type === 'select') {
+                    setEditingFile(target.file)
+                    setEditingPassword(target.password)
+                  } else if (target?.type === 'create') {
+                    setEditingPassword(undefined)
+                    handleCreateNewFile(target.folderId)
+                  }
+                }}
+              >
+                Save to library
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
+      )}
     </>
   )
 }

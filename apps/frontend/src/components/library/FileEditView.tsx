@@ -56,13 +56,14 @@ import {
   encryptBlockPayload,
   fileBlocksToLibraryItems,
   findUnsendableBlocks,
+  orderBlocks,
   serializeDossierBlocks,
   sessionItemsToFileBlocks,
 } from '../../lib/dossier'
 import { decryptItem, encryptItem, toBase64 } from '../../lib/crypto'
 import { ROOT_FOLDER_ID, unprotectedSecretBlocks } from '../../lib/library'
 import { useLibraryStore } from '../../store/libraryStore'
-import { useSessionStore } from '../../store/sessionStore'
+import { useSessionStore, type TextItem } from '../../store/sessionStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
 import type { UseSessionResult } from '../../hooks/useSession'
 
@@ -106,6 +107,7 @@ export interface FileEditViewProps {
   session?: UseSessionResult
   isSharedSession?: boolean
   onEndSession?: () => void
+  onChange?: (file: LibraryFile) => void
 }
 
 /** The gap `space-y-3` puts between block rows, in px at the default root size. */
@@ -145,6 +147,7 @@ export function FileEditView({
   session,
   isSharedSession,
   onEndSession,
+  onChange,
 }: FileEditViewProps) {
   // --- the draft (D16.1) ---------------------------------------------------
   const [seededFromId, setSeededFromId] = useState(file.id)
@@ -215,6 +218,8 @@ export function FileEditView({
 
   const dossierPasswordRef = useRef<string>(initialPassword ?? '')
   const savedLibraryIdRef = useRef<string | null>(null)
+  const lastSavedNameRef = useRef<string>(file.name)
+  const orderItemIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (initialPassword !== undefined) {
@@ -302,15 +307,56 @@ export function FileEditView({
     setSendError(null)
   }, [])
 
+  useEffect(() => {
+    onChange?.(draftFile())
+  }, [draftFile, onChange])
+
   // --- realtime session sync -----------------------------------------------
   const sessionItems = useSessionStore((state) => state.items)
   const localUpdatedIdsRef = useRef<Set<string>>(new Set())
   const syncedBlockIdsRef = useRef<Set<string>>(new Set())
   const initialBroadcastRef = useRef(false)
 
+  const syncBlockOrder = useCallback(
+    (order: string[]): void => {
+      if (!isSharedSession || !session || session.phase !== 'active') return
+      const payload = JSON.stringify({ __dossierOrder: order })
+      const existing = sessionItems.find(
+        (s): s is TextItem => s.type === 'text' && s.content.includes('__dossierOrder'),
+      )
+      const orderId = orderItemIdRef.current ?? existing?.id
+      if (orderId && sessionItems.some((s) => s.id === orderId)) {
+        orderItemIdRef.current = orderId
+        session.updateTextItem(orderId, payload)
+      } else {
+        const newId = session.addTextItem(payload)
+        if (newId) {
+          orderItemIdRef.current = newId
+        }
+      }
+    },
+    [isSharedSession, session, sessionItems],
+  )
+
   // Keep local draft blocks in sync with collaborative session items
   useEffect(() => {
     if (!isSharedSession) return
+
+    const orderItem = sessionItems.find(
+      (s): s is TextItem => s.type === 'text' && s.content.includes('__dossierOrder'),
+    )
+    let remoteOrder: string[] | null = null
+    if (orderItem) {
+      try {
+        const parsed = JSON.parse(orderItem.content)
+        if (Array.isArray(parsed.__dossierOrder)) {
+          remoteOrder = parsed.__dossierOrder
+          orderItemIdRef.current = orderItem.id
+        }
+      } catch {
+        // ignore malformed JSON
+      }
+    }
 
     const incomingBlocks = sessionItemsToFileBlocks(sessionItems)
     for (const b of incomingBlocks) {
@@ -319,7 +365,7 @@ export function FileEditView({
 
     setDraftBlocks((current) => {
       if (current.length === 0) {
-        return incomingBlocks
+        return remoteOrder ? orderBlocks(incomingBlocks, remoteOrder) : incomingBlocks
       }
 
       const currentMap = new Map(current.map((b) => [b.id, b]))
@@ -377,7 +423,18 @@ export function FileEditView({
         }
       }
 
-      return changed ? nextBlocks : current
+      // 3. Order blocks deterministically
+      const baseOrder = remoteOrder ?? current.map((b) => b.id)
+      const orderedBlocks = orderBlocks(nextBlocks, baseOrder)
+
+      const orderChanged =
+        current.length !== orderedBlocks.length ||
+        current.some((b, i) => b.id !== orderedBlocks[i]?.id)
+
+      if (changed || orderChanged) {
+        return orderedBlocks
+      }
+      return current
     })
   }, [isSharedSession, sessionItems])
 
@@ -420,8 +477,9 @@ export function FileEditView({
           session.addFileItem(file)
         }
       })
+      syncBlockOrder(draftBlocks.map((b) => b.id))
     }
-  }, [isSharedSession, session, session?.phase, sessionItems, draftBlocks])
+  }, [isSharedSession, session, session?.phase, sessionItems, draftBlocks, syncBlockOrder])
 
   const handleAppendDossier = async (appendFile: LibraryFile): Promise<void> => {
     try {
@@ -450,6 +508,7 @@ export function FileEditView({
             session.addFileItem(file)
           }
         }
+        syncBlockOrder([...draftBlocks, ...appendFile.blocks].map((b) => b.id))
       } else {
         const newBlocks = appendFile.blocks.map((b) => ({
           ...b,
@@ -473,10 +532,14 @@ export function FileEditView({
       if (from === to) return
       commitBlocks((current) => {
         if (from < 0 || to < 0 || from >= current.length || to >= current.length) return current
-        return moveIndex(current, from, to)
+        const next = moveIndex(current, from, to)
+        if (isSharedSession && session && session.phase === 'active') {
+          syncBlockOrder(next.map((b) => b.id))
+        }
+        return next
       })
     },
-    [commitBlocks],
+    [commitBlocks, isSharedSession, session, syncBlockOrder],
   )
 
   const handleMoveUp = (index: number): void => {
@@ -553,7 +616,13 @@ export function FileEditView({
 
   const handleDeleteBlock = (blockId: string): void => {
     syncedBlockIdsRef.current.delete(blockId)
-    commitBlocks((current) => current.filter((block) => block.id !== blockId))
+    commitBlocks((current) => {
+      const next = current.filter((block) => block.id !== blockId)
+      if (isSharedSession && session && session.phase === 'active') {
+        syncBlockOrder(next.map((b) => b.id))
+      }
+      return next
+    })
     if (isSharedSession && session && session.phase === 'active') {
       session.deleteItem(blockId)
     }
@@ -616,7 +685,11 @@ export function FileEditView({
           label: '',
           value: '',
         }
-        commitBlocks((current) => [...current, newBlock])
+        commitBlocks((current) => {
+          const next = [...current, newBlock]
+          syncBlockOrder(next.map((b) => b.id))
+          return next
+        })
         return
       }
     }
@@ -724,14 +797,14 @@ export function FileEditView({
 
     let resolvedDraft = draft
     if (isSharedSession || draft.id.startsWith('shared-')) {
-      if (!savedLibraryIdRef.current) {
+      if (!savedLibraryIdRef.current || draft.name !== lastSavedNameRef.current) {
         savedLibraryIdRef.current = globalThis.crypto.randomUUID()
+        lastSavedNameRef.current = draft.name
       }
       resolvedDraft = {
         ...draft,
         id: savedLibraryIdRef.current,
       }
-      setSeededFromId(savedLibraryIdRef.current)
     }
 
     if (!resolvedDraft.isLocked) {
@@ -925,9 +998,11 @@ export function FileEditView({
 
   // --- folder membership ---------------------------------------------------
   const folderDisplayName =
-    folderId === ROOT_FOLDER_ID
-      ? 'Root'
-      : (folders.find((folder) => folder.id === folderId)?.name ?? 'Root')
+    isSharedSession || file.id.startsWith('shared-')
+      ? 'temp'
+      : folderId === ROOT_FOLDER_ID
+        ? 'Root'
+        : (folders.find((folder) => folder.id === folderId)?.name ?? 'Root')
 
   const handleConfirmDossierLock = async (): Promise<void> => {
     if (!dossierLockPassword) {
@@ -1132,21 +1207,23 @@ export function FileEditView({
                 >
                   <IconPencil size={14} aria-hidden="true" />
                 </ActionIcon>
-                <ActionIcon
-                  variant="subtle"
-                  size="md"
-                  c="dimmed"
-                  disabled={isMoving}
-                  onClick={() => {
-                    setMoveError(null)
-                    setIsFolderPickerOpen(true)
-                  }}
-                  title="Move to folder"
-                  aria-label="Move to folder"
-                  style={{ flex: 'none' }}
-                >
-                  <IconFolderSymlink size={15} aria-hidden="true" />
-                </ActionIcon>
+                {!isSharedSession && (
+                  <ActionIcon
+                    variant="subtle"
+                    size="md"
+                    c="dimmed"
+                    disabled={isMoving}
+                    onClick={() => {
+                      setMoveError(null)
+                      setIsFolderPickerOpen(true)
+                    }}
+                    title="Move to folder"
+                    aria-label="Move to folder"
+                    style={{ flex: 'none' }}
+                  >
+                    <IconFolderSymlink size={15} aria-hidden="true" />
+                  </ActionIcon>
+                )}
                 <ActionIcon
                   variant="subtle"
                   size="md"

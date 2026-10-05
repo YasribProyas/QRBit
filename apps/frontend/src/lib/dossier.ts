@@ -539,7 +539,9 @@ function lockedItemFromBlock(
  * Converts incoming SessionItems from a live session directly into FileBlocks.
  */
 export function sessionItemsToFileBlocks(sessionItems: SessionItem[]): FileBlock[] {
-  return sessionItems.map((item) => {
+  return sessionItems
+    .filter((item) => !(item.type === 'text' && item.content.includes('__dossierOrder')))
+    .map((item) => {
     switch (item.type) {
       case 'text': {
         if (item.content.startsWith('{"__blockType":')) {
@@ -819,5 +821,27 @@ export function deserializeDossierBlocks(json: string): FileBlock[] {
   } catch {
     return []
   }
+}
+
+/**
+ * Orders a list of FileBlocks by an ordered array of block IDs.
+ * Blocks whose IDs appear in `order` are sorted in that exact sequence;
+ * any blocks not present in `order` are placed at the end.
+ */
+export function orderBlocks(blocks: FileBlock[], order: string[]): FileBlock[] {
+  if (!order || order.length === 0) return blocks
+  const map = new Map(blocks.map((b) => [b.id, b]))
+  const result: FileBlock[] = []
+  for (const id of order) {
+    const block = map.get(id)
+    if (block) {
+      result.push(block)
+      map.delete(id)
+    }
+  }
+  for (const remaining of map.values()) {
+    result.push(remaining)
+  }
+  return result
 }
 

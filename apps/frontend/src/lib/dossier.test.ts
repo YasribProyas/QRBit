@@ -35,7 +35,9 @@ import {
   fileBlocksToLibraryItems,
   findUnsendableBlocks,
   getFirstBlockPreview,
+  orderBlocks,
   serializeDossierBlocks,
+  sessionItemsToFileBlocks,
   sessionItemsToLibraryFile,
 } from './dossier'
 import {
@@ -48,7 +50,7 @@ import {
 } from './library'
 import type { FileBlock, LibraryFile, LibraryImageItem, LibraryLockedItem } from './library'
 import { decryptItem, LOCKED_ITEM_MAX_PLAINTEXT_BYTES } from './crypto'
-import type { FileItem } from '../store/sessionStore'
+import type { FileItem, SessionItem } from '../store/sessionStore'
 
 /** The database name `lib/library.ts` opens. Pinned so a rename cannot hide a stale store. */
 const DB_NAME = 'qrbit-library'
@@ -701,6 +703,53 @@ describe('serializeDossierBlocks and deserializeDossierBlocks — binary and loc
     expect(tuple?.ciphertext).toEqual(ciphertext)
     expect(tuple?.iv).toEqual(iv)
     expect(tuple?.salt).toEqual(salt)
+  })
+})
+
+describe('orderBlocks — deterministic block ordering', () => {
+  it('orders blocks according to the given order array, and appends remaining blocks', () => {
+    const blocks: FileBlock[] = [
+      { id: 'b-1', type: 'heading', content: 'First' },
+      { id: 'b-2', type: 'shortText', content: 'Second' },
+      { id: 'b-3', type: 'richText', content: 'Third' },
+      { id: 'b-4', type: 'divider' },
+    ]
+
+    const ordered = orderBlocks(blocks, ['b-3', 'b-1'])
+    expect(ordered.map((b) => b.id)).toEqual(['b-3', 'b-1', 'b-2', 'b-4'])
+  })
+
+  it('skips IDs in order array that do not exist', () => {
+    const blocks: FileBlock[] = [
+      { id: 'b-1', type: 'heading', content: 'First' },
+      { id: 'b-2', type: 'shortText', content: 'Second' },
+    ]
+
+    const ordered = orderBlocks(blocks, ['b-nonexistent', 'b-2', 'b-1'])
+    expect(ordered.map((b) => b.id)).toEqual(['b-2', 'b-1'])
+  })
+
+  it('returns original blocks when order is empty', () => {
+    const blocks: FileBlock[] = [
+      { id: 'b-1', type: 'heading', content: 'First' },
+      { id: 'b-2', type: 'shortText', content: 'Second' },
+    ]
+
+    expect(orderBlocks(blocks, [])).toEqual(blocks)
+  })
+})
+
+describe('sessionItemsToFileBlocks — filters out __dossierOrder metadata', () => {
+  it('does not produce blocks for __dossierOrder text items', () => {
+    const items: SessionItem[] = [
+      { id: 's-1', type: 'text', status: 'complete', createdAt: 1, content: '# Header' },
+      { id: 's-order', type: 'text', status: 'complete', createdAt: 2, content: JSON.stringify({ __dossierOrder: ['s-1'] }) },
+    ]
+
+    const blocks = sessionItemsToFileBlocks(items)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]?.id).toBe('s-1')
+    expect(blocks[0]?.type).toBe('heading')
   })
 })
 
