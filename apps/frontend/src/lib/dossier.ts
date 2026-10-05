@@ -845,3 +845,28 @@ export function orderBlocks(blocks: FileBlock[], order: string[]): FileBlock[] {
   return result
 }
 
+/**
+ * Serializes a single FileBlock into a JSON string suitable for sending as a text session item.
+ */
+export function serializeBlock(block: FileBlock): string {
+  return JSON.stringify({
+    __blockType: block.type,
+    content: block.isLocked ? '' : (block.content ?? ''),
+    label: block.label ?? '',
+    value: block.isLocked ? '' : (block.value ?? ''),
+    fileName: block.fileName,
+    fileSize: block.fileSize,
+    mimeType: block.mimeType,
+    isLocked: block.isLocked ?? false,
+    lockedData: block.lockedData
+      ? {
+          ciphertext: toBase64(block.lockedData.ciphertext),
+          iv: toBase64(block.lockedData.iv),
+          salt: toBase64(block.lockedData.salt),
+          innerType: block.lockedData.innerType,
+        }
+      : undefined,
+  })
+}
+
+

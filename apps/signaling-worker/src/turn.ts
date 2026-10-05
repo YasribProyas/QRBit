@@ -101,16 +101,29 @@ function parseTurnResponse(payload: unknown): TurnCredentials | null {
   const rawIceServers = record['iceServers']
   if (typeof rawIceServers !== 'object' || rawIceServers === null) return null
 
-  let target: Record<string, unknown>
+  let target: Record<string, unknown> | null = null
   if (Array.isArray(rawIceServers)) {
-    if (
-      rawIceServers.length === 0 ||
-      typeof rawIceServers[0] !== 'object' ||
-      rawIceServers[0] === null
-    ) {
-      return null
+    for (const item of rawIceServers) {
+      if (
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as Record<string, unknown>)['username'] === 'string' &&
+        typeof (item as Record<string, unknown>)['credential'] === 'string'
+      ) {
+        target = item as Record<string, unknown>
+        break
+      }
     }
-    target = rawIceServers[0] as Record<string, unknown>
+    if (target === null) {
+      if (
+        rawIceServers.length === 0 ||
+        typeof rawIceServers[0] !== 'object' ||
+        rawIceServers[0] === null
+      ) {
+        return null
+      }
+      target = rawIceServers[0] as Record<string, unknown>
+    }
   } else {
     target = rawIceServers as Record<string, unknown>
   }

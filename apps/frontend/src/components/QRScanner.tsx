@@ -40,6 +40,7 @@ import {
   parseSessionCode,
 } from '../lib/barcode'
 import type { BarcodeDetectorLike, BarcodeSource } from '../lib/barcode'
+import { ManualCodeEntry } from './ManualCodeEntry'
 import { WithMantine } from './common/WithMantine'
 
 /**
@@ -252,6 +253,7 @@ export function QRScanner({
     (isNativeAvailable ?? isBarcodeDetectorAvailable)() ? 'native' : 'fallback',
   )
   const [failure, setFailure] = useState<ScannerFailureKind | null>(null)
+  const [showManualEntry, setShowManualEntry] = useState(false)
 
   const stopScanningRef = useRef<StopScanning | null>(null)
 
@@ -436,44 +438,92 @@ export function QRScanner({
           </Title>
 
           {failure === null ? (
-            <div className="qr-scanner__stage" style={STAGE_STYLE}>
-              {kind === 'native' ? (
-                // muted + playsinline: without them the browser refuses to autoplay the
-                // stream and shows a black rectangle instead (PLAN.md §16 Phase 6).
-                <video
-                  className="qr-scanner__video"
-                  ref={videoRef}
-                  style={SURFACE_STYLE}
-                  autoPlay
-                  muted
-                  playsInline
-                />
+            <>
+              <div className="qr-scanner__stage" style={STAGE_STYLE}>
+                {kind === 'native' ? (
+                  // muted + playsinline: without them the browser refuses to autoplay the
+                  // stream and shows a black rectangle instead (PLAN.md §16 Phase 6).
+                  <video
+                    className="qr-scanner__video"
+                    ref={videoRef}
+                    style={SURFACE_STYLE}
+                    autoPlay
+                    muted
+                    playsInline
+                  />
+                ) : (
+                  // The fallback's own container, and NOTHING else may live inside it:
+                  // html5-qrcode empties its container on start (`element.innerHTML = ""`),
+                  // so a React-managed node in there is deleted behind React's back and the
+                  // next commit fails to unmount it. The viewfinder stays outside.
+                  <div className="qr-scanner__surface" ref={surfaceRef} style={SURFACE_STYLE} />
+                )}
+                {/* Sweep and viewfinder are siblings of the camera surface, never children. */}
+                <div className="qr-scanner__sweep animate-scan-sweep" style={SWEEP_STYLE} aria-hidden="true" />
+                <div className="qr-scanner__viewfinder" style={VIEWFINDER_STYLE} aria-hidden="true" />
+              </div>
+
+              {showManualEntry ? (
+                <div
+                  className="qr-scanner__manual-entry"
+                  style={{
+                    borderTop: '1px solid var(--qrbit-border)',
+                    paddingTop: 'var(--qrbit-space-sm)',
+                  }}
+                >
+                  <ManualCodeEntry
+                    onSubmit={(code) => {
+                      stopScanningRef.current?.()
+                      onScanRef.current(code)
+                    }}
+                  />
+                </div>
               ) : (
-                // The fallback's own container, and NOTHING else may live inside it:
-                // html5-qrcode empties its container on start (`element.innerHTML = ""`),
-                // so a React-managed node in there is deleted behind React's back and the
-                // next commit fails to unmount it. The viewfinder stays outside.
-                <div className="qr-scanner__surface" ref={surfaceRef} style={SURFACE_STYLE} />
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  color="dimmed"
+                  onClick={() => setShowManualEntry(true)}
+                >
+                  Enter code manually instead
+                </Button>
               )}
-              {/* Sweep and viewfinder are siblings of the camera surface, never children. */}
-              <div className="qr-scanner__sweep animate-scan-sweep" style={SWEEP_STYLE} aria-hidden="true" />
-              <div className="qr-scanner__viewfinder" style={VIEWFINDER_STYLE} aria-hidden="true" />
-            </div>
+            </>
           ) : (
-            <div className="qr-scanner__error" role="alert">
-              <Stack gap="xs">
-                <Text className="qrbit-text-title" c="danger" component="p">
-                  {FAILURE_COPY[failure].title}
+            <>
+              <div className="qr-scanner__error" role="alert">
+                <Stack gap="xs">
+                  <Text className="qrbit-text-title" c="danger" component="p">
+                    {FAILURE_COPY[failure].title}
+                  </Text>
+                  <Text className="qrbit-text-body" component="p">
+                    {FAILURE_COPY[failure].message}
+                  </Text>
+                  {/* The recovery, named: every failure here has one, and they are not the same. */}
+                  <Text className="qrbit-text-body-secondary" c="dimmed" component="p">
+                    {FAILURE_COPY[failure].hint}
+                  </Text>
+                </Stack>
+              </div>
+
+              <div
+                className="qr-scanner__manual-fallback"
+                style={{
+                  borderTop: '1px solid var(--qrbit-border)',
+                  paddingTop: 'var(--qrbit-space-sm)',
+                }}
+              >
+                <Text size="sm" fw={500} c="var(--qrbit-ink)" mb="xs">
+                  Enter 8-character code manually:
                 </Text>
-                <Text className="qrbit-text-body" component="p">
-                  {FAILURE_COPY[failure].message}
-                </Text>
-                {/* The recovery, named: every failure here has one, and they are not the same. */}
-                <Text className="qrbit-text-body-secondary" c="dimmed" component="p">
-                  {FAILURE_COPY[failure].hint}
-                </Text>
-              </Stack>
-            </div>
+                <ManualCodeEntry
+                  onSubmit={(code) => {
+                    stopScanningRef.current?.()
+                    onScanRef.current(code)
+                  }}
+                />
+              </div>
+            </>
           )}
 
           <Button

@@ -165,6 +165,33 @@ describe('generateTurnCredentials', () => {
     expect(result?.urls).toEqual(['turns:turn.cloudflare.com:443?transport=tcp'])
   })
 
+  it('supports response where iceServers array has STUN first then TURN with credentials', async () => {
+    const mockFetch = vi.fn<typeof fetch>(async () => {
+      const body = {
+        iceServers: [
+          {
+            urls: ['stun:stun.cloudflare.com:3478'],
+          },
+          {
+            urls: ['turns:turn.cloudflare.com:443?transport=tcp'],
+            username: 'turn-user-from-array',
+            credential: 'turn-cred-from-array',
+          },
+        ],
+      }
+      return new Response(JSON.stringify(body), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+
+    const result = await generateTurnCredentials(KEY_ID, SECRET, SESSION_CODE, 600, mockFetch)
+    expect(result).not.toBeNull()
+    expect(result?.username).toBe('turn-user-from-array')
+    expect(result?.credential).toBe('turn-cred-from-array')
+    expect(result?.urls).toEqual(['turns:turn.cloudflare.com:443?transport=tcp'])
+  })
+
   it('returns null when key ID is missing or blank', async () => {
     const mockFetch = createSuccessMockFetch()
     expect(await generateTurnCredentials(undefined, SECRET, SESSION_CODE, 600, mockFetch)).toBeNull()

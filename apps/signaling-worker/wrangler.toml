@@ -12,7 +12,7 @@ TURN_TTL_SECONDS = "600"
 # TURN_KEY_SECRET secure value, set with `wrangler secret put TURN_KEY_SECRET`).
 # Left blank until provisioned: an absent key makes the worker hand out no TURN
 # credentials, and clients fall back to STUN-only rather than failing the session.
-TURN_KEY_ID = ""
+TURN_KEY_ID = "7b296cdec0b2dc91b50103b196738a8e"
 
 # Origins permitted to call this API. This one value drives THREE behaviours, which is
 # why it lives here rather than being duplicated:
@@ -22,7 +22,7 @@ TURN_KEY_ID = ""
 #   3. The pairing contract: the QR encodes the Pages origin, so it must be listed here or
 #      the browser blocks the fetch that creates the session.
 # Add the custom domain here (comma-separated) when it replaces pages.dev.
-ALLOWED_ORIGINS = "https://qrbit-app.proyas.workers.dev, http://localhost:5173"
+ALLOWED_ORIGINS = "https://qrbit-app.proyas.workers.dev, http://localhost:5173, http://192.168.0.22:5173"
 
 [[durable_objects.bindings]]
 name = "SESSION"

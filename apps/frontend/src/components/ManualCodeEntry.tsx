@@ -21,7 +21,7 @@
 
 import { useId, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useInRouterContext, useNavigate } from 'react-router-dom'
 import { Box, Button, Group, Text, TextInput } from '@mantine/core'
 import { IconArrowRight } from '@tabler/icons-react'
 
@@ -66,8 +66,7 @@ const CODE_INPUT_STYLE = {
   height: '48px',
 } as const satisfies CSSProperties
 
-function ManualCodeEntryForm({ onSubmit }: ManualCodeEntryProps) {
-  const navigate = useNavigate()
+function ManualCodeEntryInner({ onSubmit }: { onSubmit?: (code: string) => void }) {
   const inputId = useId()
 
   const [code, setCode] = useState('')
@@ -83,11 +82,7 @@ function ManualCodeEntryForm({ onSubmit }: ManualCodeEntryProps) {
     }
 
     setError(null)
-    if (onSubmit) {
-      onSubmit(code)
-      return
-    }
-    navigate(`/session?code=${encodeURIComponent(code)}`)
+    onSubmit?.(code)
   }
 
   return (
@@ -159,6 +154,33 @@ function ManualCodeEntryForm({ onSubmit }: ManualCodeEntryProps) {
       ) : null}
     </Box>
   )
+}
+
+function RouterNavigatingEntry({ onSubmit }: ManualCodeEntryProps) {
+  const navigate = useNavigate()
+  return (
+    <ManualCodeEntryInner
+      onSubmit={(code) => {
+        if (onSubmit) {
+          onSubmit(code)
+        } else {
+          navigate(`/session?code=${encodeURIComponent(code)}`)
+        }
+      }}
+    />
+  )
+}
+
+function StandaloneEntry({ onSubmit }: ManualCodeEntryProps) {
+  return <ManualCodeEntryInner onSubmit={onSubmit} />
+}
+
+function ManualCodeEntryForm(props: ManualCodeEntryProps) {
+  const inRouter = useInRouterContext()
+  if (inRouter) {
+    return <RouterNavigatingEntry {...props} />
+  }
+  return <StandaloneEntry {...props} />
 }
 
 export function ManualCodeEntry(props: ManualCodeEntryProps) {

@@ -18,7 +18,26 @@ import {
 import { useLibraryStore } from '../store/libraryStore'
 import { ROOT_FOLDER_ID } from '../lib/library'
 import type { FileBlock, LibraryFile, LibraryItem } from '../lib/library'
-import { describeSendFailure, fileBlocksToLibraryItems } from '../lib/dossier'
+import {
+  describeSendFailure,
+  fileBlocksToLibraryItems,
+  findUnsendableBlocks,
+  serializeBlock,
+} from '../lib/dossier'
+
+let pendingDossierToSend: LibraryFile | null = null
+
+export function setPendingDossierToSend(file: LibraryFile | null): void {
+  pendingDossierToSend = file
+}
+
+export function getPendingDossierToSend(): LibraryFile | null {
+  return pendingDossierToSend
+}
+
+export function clearPendingDossierToSend(): void {
+  pendingDossierToSend = null
+}
 
 /**
  * The blocks a brand-new dossier starts with, so the first thing a user sees in the
@@ -78,7 +97,9 @@ export function Home() {
   /** Password for the currently open locked dossier, if unlocked. */
   const [editingPassword, setEditingPassword] = useState<string | undefined>(undefined)
   /** The dossier handed to a session by the editor's Send. */
-  const [selectedFileForTransfer, setSelectedFileForTransfer] = useState<LibraryFile | null>(null)
+  const [selectedFileForTransfer, setSelectedFileForTransfer] = useState<LibraryFile | null>(
+    () => getPendingDossierToSend(),
+  )
   /** The live collaborative dossier shared across peer session */
   const [sharedDossier, setSharedDossier] = useState<LibraryFile | null>(null)
   const sharedDossierDraftRef = useRef<LibraryFile | null>(null)
@@ -108,17 +129,19 @@ export function Home() {
 
   useEffect(() => {
     if (session.phase === 'active' && sharedDossier === null) {
-      const initialBlocks: FileBlock[] = selectedFileForTransfer?.blocks ?? []
+      const fileToAttach = getPendingDossierToSend() ?? selectedFileForTransfer
+      const initialBlocks: FileBlock[] = fileToAttach?.blocks ? [...fileToAttach.blocks] : []
       setSharedDossier({
         id: `shared-${globalThis.crypto.randomUUID()}`,
-        name: selectedFileForTransfer?.name
-          ? `${selectedFileForTransfer.name} (Shared)`
+        name: fileToAttach?.name
+          ? `${fileToAttach.name} (Shared)`
           : 'Shared Dossier',
-        folderId: selectedFileForTransfer?.folderId ?? ROOT_FOLDER_ID,
+        folderId: fileToAttach?.folderId ?? ROOT_FOLDER_ID,
         blocks: initialBlocks,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })
+      clearPendingDossierToSend()
     }
   }, [session.phase, sharedDossier, selectedFileForTransfer])
 
@@ -169,22 +192,36 @@ export function Home() {
    */
   const handleSendFileDirectly = async (file: LibraryFile): Promise<boolean> => {
     setSelectedFileForTransfer(file)
+    setPendingDossierToSend(file)
 
-    let convertedItems: LibraryItem[]
-    try {
-      convertedItems = await fileBlocksToLibraryItems(file)
-    } catch (cause: unknown) {
-      setSendFailure(describeSendFailure(cause))
+    const unsendable = findUnsendableBlocks(file)
+    if (unsendable.length > 0) {
+      setSendFailure(describeSendFailure(unsendable[0]))
       return false
     }
 
     setSendFailure(null)
     if (session.phase === 'active') {
-      for (const item of convertedItems) {
-        session.sendLibraryItem(item)
+      for (const block of file.blocks) {
+        if (
+          block.lockedData ||
+          block.type === 'heading' ||
+          block.type === 'shortText' ||
+          block.type === 'richText' ||
+          block.type === 'divider' ||
+          block.type === 'locked'
+        ) {
+          session.addTextItem(serializeBlock(block))
+        } else if (
+          (block.type === 'image' || block.type === 'fileAttachment') &&
+          block.blob instanceof Blob
+        ) {
+          const fileObj = new File([block.blob], block.fileName || 'file', {
+            type: block.mimeType || block.blob.type,
+          })
+          session.addFileItem(fileObj)
+        }
       }
-    } else {
-      queueLibrarySends(convertedItems)
     }
     return true
   }
@@ -196,10 +233,11 @@ export function Home() {
     setScanning(false)
     if (!isValidSessionCode(code)) {
       clearLibrarySends()
+      clearPendingDossierToSend()
+      setSelectedFileForTransfer(null)
       return
     }
 
-    clearLibrarySends()
     navigate(`/session?code=${encodeURIComponent(code)}`)
   }
 
@@ -211,6 +249,8 @@ export function Home() {
         onScan={handleScan}
         onCancel={() => {
           clearLibrarySends()
+          clearPendingDossierToSend()
+          setSelectedFileForTransfer(null)
           setScanning(false)
         }}
       />
@@ -266,6 +306,7 @@ export function Home() {
                 setSharedDossier(null)
                 sharedDossierDraftRef.current = null
                 setSelectedFileForTransfer(null)
+                clearPendingDossierToSend()
                 if (session.phase === 'active' || session.phase === 'pairing') {
                   session.abort()
                 }
@@ -382,6 +423,7 @@ export function Home() {
                   setSharedDossier(null)
                   sharedDossierDraftRef.current = null
                   setSelectedFileForTransfer(null)
+                  clearPendingDossierToSend()
                   session.abort()
                   if (validCode) {
                     navigate('/')
@@ -416,6 +458,7 @@ export function Home() {
                   setSharedDossier(null)
                   sharedDossierDraftRef.current = null
                   setSelectedFileForTransfer(null)
+                  clearPendingDossierToSend()
                   session.abort()
                   if (validCode) {
                     navigate('/')

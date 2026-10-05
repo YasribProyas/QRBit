@@ -57,6 +57,7 @@ import {
   fileBlocksToLibraryItems,
   findUnsendableBlocks,
   orderBlocks,
+  serializeBlock,
   serializeDossierBlocks,
   sessionItemsToFileBlocks,
 } from '../../lib/dossier'
@@ -66,27 +67,6 @@ import { useLibraryStore } from '../../store/libraryStore'
 import { useSessionStore, type TextItem } from '../../store/sessionStore'
 import type { BlockType, FileBlock, LibraryFile, LibraryFolder } from '../../lib/library'
 import type { UseSessionResult } from '../../hooks/useSession'
-
-function serializeBlock(block: FileBlock): string {
-  return JSON.stringify({
-    __blockType: block.type,
-    content: block.isLocked ? '' : (block.content ?? ''),
-    label: block.label ?? '',
-    value: block.isLocked ? '' : (block.value ?? ''),
-    fileName: block.fileName,
-    fileSize: block.fileSize,
-    mimeType: block.mimeType,
-    isLocked: block.isLocked ?? false,
-    lockedData: block.lockedData
-      ? {
-          ciphertext: toBase64(block.lockedData.ciphertext),
-          iv: toBase64(block.lockedData.iv),
-          salt: toBase64(block.lockedData.salt),
-          innerType: block.lockedData.innerType,
-        }
-      : undefined,
-  })
-}
 
 export interface FileEditViewProps {
   file: LibraryFile
@@ -441,43 +421,52 @@ export function FileEditView({
   // Broadcast initial blocks if entering session with pre-existing draft blocks
   useEffect(() => {
     if (!isSharedSession || !session || session.phase !== 'active') return
-    if (initialBroadcastRef.current) return
 
-    if (sessionItems && sessionItems.length > 0) {
-      initialBroadcastRef.current = true
+    const unbroadcastBlocks = draftBlocks.filter(
+      (b) => !sessionItems.some((s) => s.id === b.id) && !syncedBlockIdsRef.current.has(b.id),
+    )
+
+    if (unbroadcastBlocks.length === 0) {
+      if (sessionItems.length > 0) {
+        initialBroadcastRef.current = true
+      }
       return
     }
 
-    if (draftBlocks.length > 0) {
-      initialBroadcastRef.current = true
-      draftBlocks.forEach((block) => {
-        if (
-          block.lockedData ||
-          block.type === 'heading' ||
-          block.type === 'shortText' ||
-          block.type === 'richText' ||
-          block.type === 'divider' ||
-          block.type === 'locked'
-        ) {
-          const content = serializeBlock(block)
-          const newId = session.addTextItem(content)
-          if (newId) {
-            syncedBlockIdsRef.current.add(newId)
-            setDraftBlocks((current) =>
-              current.map((b) => (b.id === block.id ? { ...b, id: newId } : b)),
-            )
-          }
-        } else if (
-          (block.type === 'image' || block.type === 'fileAttachment') &&
-          block.blob instanceof Blob
-        ) {
-          const file = new File([block.blob], block.fileName || 'file', {
-            type: block.mimeType || block.blob.type,
-          })
-          session.addFileItem(file)
-        }
-      })
-      syncBlockOrder(draftBlocks.map((b) => b.id))
+    initialBroadcastRef.current = true
+
+    const idMap = new Map<string, string>()
+
+    for (const block of unbroadcastBlocks) {
+      let newId = ''
+      if (
+        (block.type === 'image' || block.type === 'fileAttachment') &&
+        block.blob instanceof Blob
+      ) {
+        const file = new File([block.blob], block.fileName || 'file', {
+          type: block.mimeType || block.blob.type,
+        })
+        newId = session.addFileItem(file)
+      } else {
+        const content = serializeBlock(block)
+        newId = session.addTextItem(content)
+      }
+
+      if (newId) {
+        syncedBlockIdsRef.current.add(newId)
+        idMap.set(block.id, newId)
+      }
+    }
+
+    if (idMap.size > 0) {
+      const nextOrder = draftBlocks.map((b) => idMap.get(b.id) ?? b.id)
+      setDraftBlocks((current) =>
+        current.map((b) => {
+          const mappedId = idMap.get(b.id)
+          return mappedId ? { ...b, id: mappedId } : b
+        }),
+      )
+      syncBlockOrder(nextOrder)
     }
   }, [isSharedSession, session, session?.phase, sessionItems, draftBlocks, syncBlockOrder])
 
@@ -584,9 +573,11 @@ export function FileEditView({
             session.deleteItem(blockId)
             syncedBlockIdsRef.current.delete(blockId)
           }
-          commitBlocks((current) =>
-            current.map((b) => (b.id === blockId ? { ...b, ...changes, id: newId } : b)),
-          )
+          commitBlocks((current) => {
+            const next = current.map((b) => (b.id === blockId ? { ...b, ...changes, id: newId } : b))
+            syncBlockOrder(next.map((b) => b.id))
+            return next
+          })
           return
         }
       }
@@ -606,9 +597,11 @@ export function FileEditView({
         const newId = session.addTextItem(serializeBlock(updated))
         if (newId) {
           syncedBlockIdsRef.current.add(newId)
-          commitBlocks((current) =>
-            current.map((b) => (b.id === blockId ? { ...b, ...changes, id: newId } : b)),
-          )
+          commitBlocks((current) => {
+            const next = current.map((b) => (b.id === blockId ? { ...b, ...changes, id: newId } : b))
+            syncBlockOrder(next.map((b) => b.id))
+            return next
+          })
         }
       }
     }
