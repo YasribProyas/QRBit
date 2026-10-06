@@ -89,6 +89,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
+  Affix,
   Alert,
   Badge,
   Burger,
@@ -167,32 +168,6 @@ const THUMB_TARGET = 'max-md:min-h-11!'
 const QR_SIZE = 220
 
 
-/**
- * The band the floating scan control is pinned inside.
- *
- * `huge + lg` is 64px: the 44px control and the 20px that keeps it off the panels row. The
- * safe-area term is added here as well as to the control's own offset, so a notched phone lifts
- * the control out of the home-indicator strip *and* grows the space that is set aside for it —
- * the two cannot drift apart, which is the whole overlap argument.
- */
-const FAB_BAND_STYLE = {
-  flex: 'none',
-  position: 'relative',
-  height: 'calc(var(--qrbit-space-huge) + var(--qrbit-space-xl) + env(safe-area-inset-bottom, 0px))',
-} as const satisfies CSSProperties
-
-/**
- * The scan control, pinned inside its band's box at the bottom right with equal spacing.
- */
-const FAB_STYLE = {
-  position: 'absolute',
-  right: 'var(--qrbit-space-xl)',
-  bottom: 'calc(var(--qrbit-space-xl) + env(safe-area-inset-bottom, 0px))',
-  zIndex: 'var(--mantine-z-index-app)',
-  paddingLeft: '20px',
-  paddingRight: '12px',
-  height: '46px',
-} as const satisfies CSSProperties
 
 /**
  * DESIGN.md's Panel row: Raised fill, 1px Border, radius lg, no shadow at rest.
@@ -434,26 +409,44 @@ export function HomeView({
         </div>
 
         {/*
-          The band, and the control pinned inside it at the viewport's bottom-right.
-          `home__scan` is the action pill to scan and join/send. It features the text
-          "Scan QRBit" on the left of the QR icon, with equal, generous spacing.
-          When editing on a phone, hide the band so it does not obstruct the editor surface.
+          Mantine Affix: a genuine floating action button that floats freely above
+          the viewport without creating a sticky-footer band or blocking the view at
+          the bottom of the screen.
         */}
         {!activeSession && (!editor || !isMobileShell) ? (
-          <div className="home__fab-band" style={FAB_BAND_STYLE}>
-            <button
-              type="button"
+          <Affix
+            withinPortal={false}
+            position={{
+              bottom: 'calc(var(--qrbit-space-xl) + env(safe-area-inset-bottom, 0px))',
+              right: 'var(--qrbit-space-xl)',
+            }}
+            zIndex="var(--mantine-z-index-app)"
+          >
+            <Button
               className="home__scan home__fab tactile-btn"
               aria-label="Scan QRward"
-              style={FAB_STYLE}
               onClick={onOpenScanner}
+              size="md"
+              radius="xl"
+              color="signal"
+              rightSection={
+                <span className="home__scan-glyph" style={{ display: 'flex', alignItems: 'center' }}>
+                  <IconQrcode size={24} stroke={1.7} aria-hidden="true" />
+                </span>
+              }
+              styles={{
+                root: {
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.28)',
+                  height: '46px',
+                  paddingLeft: '20px',
+                  paddingRight: '16px',
+                  fontWeight: 600,
+                },
+              }}
             >
               <span className="home__scan-text">Scan QRward</span>
-              <span className="home__scan-glyph">
-                <IconQrcode size={30} stroke={1.7} aria-hidden="true" />
-              </span>
-            </button>
-          </div>
+            </Button>
+          </Affix>
         ) : null}
 
         {/*

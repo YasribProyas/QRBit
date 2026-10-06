@@ -505,55 +505,30 @@ describe('HomeView — the floating scan control (D17 item 4)', () => {
     expect(element.querySelectorAll('.home__scan')).toHaveLength(1)
   })
 
-  it('sits in a reserved band that is the shell’s last row, at every viewport width', () => {
+  it('floats via Mantine Affix without a sticky footer band, at every viewport width', () => {
     for (const width of [320, 768, 1024, 1280, 1600]) {
       stubViewport(width)
       const element = renderView()
 
       const scan = one(element, '.home__scan', 'the scan control')
-      const band = scan.parentElement
-      if (!(band instanceof HTMLElement)) throw new Error(`test bug: no band at ${width}px`)
-      expect(band.classList.contains('home__fab-band')).toBe(true)
+      // No sticky footer band taking up layout height or covering the screen bottom
+      expect(element.querySelector('.home__fab-band')).toBe(null)
 
-      // The overlap argument, as data rather than as intent: the band is a row of the shell
-      // that takes no share of the free height, and the panels row is the sibling before it.
-      // So the QR block, its reticle corners and the manual-code field are laid out ABOVE the
-      // space the control occupies — at any scroll offset, because the control never leaves it.
-      expect(band.style.flexGrow).toBe('0')
-      expect(band.style.flexShrink).toBe('0')
-      expect(band.parentElement?.lastElementChild).toBe(band)
-      const panels = band.previousElementSibling
+      // Contained inside Mantine Affix
+      const affix = scan.closest('.mantine-Affix-root')
+      if (!(affix instanceof HTMLElement)) throw new Error(`test bug: no affix at ${width}px`)
+      expect(affix.style.getPropertyValue('--affix-z-index')).toBe('var(--mantine-z-index-app)')
+      expect(affix.style.getPropertyValue('--affix-right')).toBe('var(--qrbit-space-xl)')
+      expect(affix.style.getPropertyValue('--affix-bottom')).toContain('env(safe-area-inset-bottom')
+
+      // The panels row takes the available flex height without being squeezed by a footer band
+      const panels = element.querySelector('.home__panels')
       if (!(panels instanceof HTMLElement)) throw new Error(`test bug: no panels row at ${width}px`)
       expect(panels.classList.contains('home__panels')).toBe(true)
-
-      // Pinned inside the height the band already claimed, at bottom-right with equal spacing.
-      expect(scan.style.position).toBe('absolute')
-      expect(scan.style.right).toBe('var(--qrbit-space-xl)')
-      expect(scan.style.bottom).toContain('env(safe-area-inset-bottom')
-      expect(band.style.height).toContain('env(safe-area-inset-bottom')
-      // Above the page, below the drawer and the modals (which are `modal`/`popover` level).
-      expect(scan.style.zIndex).toBe('var(--mantine-z-index-app)')
     }
   })
 
-  /*
-   * The defect this replaces: the control was `position: fixed`, so its box was resolved against
-   * the nearest ancestor that establishes a containing block and against the *viewport* when no
-   * such ancestor exists. Neither answer is the band's, which is the only place on the shell that
-   * promises the control a space nothing else is laid out in — at 1600px wide the shell is
-   * `max-width: 84rem` and centred, so the fixed control sat 123px left of the band's own edge,
-   * in the gutter outside the page.
-   *
-   * What jsdom can and cannot assert here, stated plainly: it runs no layout and resolves no
-   * `var()`, so the old failure was not observable in a test either way. What it CAN assert is
-   * the contract the fix is made of — the button is a child of a box that establishes its own
-   * containing block (`position: relative`), the chain from the band to the document holds no
-   * inline `transform`/`filter`/`backdrop-filter`/`perspective`/`will-change`/`contain` (those
-   * are the only such declarations in the shell: `styles.css` sets none), and the node the
-   * handler is bound to is the node the tests and the user reach. The geometry itself was
-   * measured in a headless browser, not here.
-   */
-  it('is pinned to a box of its own, not to the viewport', () => {
+  it('renders as a Mantine floating action button that triggers scan', () => {
     stubViewport(1600)
     let opened = 0
     const element = renderView({
@@ -563,31 +538,9 @@ describe('HomeView — the floating scan control (D17 item 4)', () => {
     })
 
     const scan = one(element, '.home__scan', 'the scan control')
-    const band = scan.parentElement
-    if (!(band instanceof HTMLElement)) throw new Error('test bug: no band')
-
-    // The band is the containing block: it is positioned, and the control is inside it.
-    expect(band.style.position).toBe('relative')
-    expect(scan.style.position).toBe('absolute')
-
-    // Nothing between the band and the document establishes one instead.
-    const CONTAINING_BLOCK_PROPERTIES = [
-      'transform',
-      'filter',
-      'backdropFilter',
-      'perspective',
-      'willChange',
-      'contain',
-    ] as const
-    const offenders: string[] = []
-    for (let node: HTMLElement | null = band; node !== null; node = node.parentElement) {
-      for (const property of CONTAINING_BLOCK_PROPERTIES) {
-        if (node.style.getPropertyValue(property) !== '') {
-          offenders.push(`${node.className || node.tagName}:${property}`)
-        }
-      }
-    }
-    expect(offenders).toEqual([])
+    const affix = scan.closest('.mantine-Affix-root')
+    if (!(affix instanceof HTMLElement)) throw new Error('test bug: no affix')
+    expect(affix.classList.contains('mantine-Affix-root')).toBe(true)
 
     // One node carries the class, and it is the node the handler is bound to.
     expect(element.querySelectorAll('.home__scan')).toHaveLength(1)
@@ -659,7 +612,7 @@ describe('HomeView — the hooks the pairing tests reach for', () => {
     expect(element.querySelector('.home__library')).not.toBe(null)
   })
 
-  it('hides the mobile FAB band when editing a dossier on a phone', () => {
+  it('hides the mobile FAB when editing a dossier on a phone', () => {
     stubViewport(320)
     const element = renderView({
       editor: <div className="test-file-editor">Dossier Editor Content</div>,

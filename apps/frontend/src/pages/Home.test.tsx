@@ -584,7 +584,8 @@ describe('Home — the top bar (ORCHESTRATION D16 behaviour change 1, D17)', () 
     // the panel it pairs with — and it is still not chrome in the header.
     expect(scan.closest('header')).toBe(null)
     expect(scan.closest('.home__pairing-panel')).toBe(null)
-    expect(scan.closest('.home__fab-band')).not.toBe(null)
+    expect(scan.closest('.mantine-Affix-root')).not.toBe(null)
+    expect(element.querySelector('.home__fab-band')).toBe(null)
 
     const settings = element.querySelector<HTMLElement>('.home__settings')
     if (!settings) throw new Error('test bug: no Settings control in the header')
